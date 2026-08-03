@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>selftest</title>
+    <style>
+      body { background: #111; color: #ddd; font: 13px ui-monospace, Consolas, monospace; padding: 16px; }
+      .ok { color: #7bd88f; }
+      .bad { color: #ff6b6b; }
+      pre { background: #191919; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="out">running…</div>
+    <script type="module">
+      import { loadRegion } from './js/text.js';
+      import { makeElement, PRESETS } from './js/model.js';
+      import { parseFormat } from './js/format.js';
+      import { serialize } from './js/serialize.js';
+      import { toHexDump, crc32 } from './js/util.js';
+
+      const lines = [];
+      const check = (name, actual, expected) => {
+        const ok = JSON.stringify(actual) === JSON.stringify(expected);
+        lines.push(
+          `<div class="${ok ? 'ok' : 'bad'}">${ok ? 'PASS' : 'FAIL'} ${name}` +
+            (ok ? '' : ` — got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`) +
+            '</div>',
+        );
+      };
+
+      try {
+        await loadRegion('US');
+
+        const pas = parseFormat(PRESETS.PAS.config.fmt, 'US');
+        check('PAS field ids', pas.fieldIds, [1, 2, 3, 4, 5, 6]);
+        check('PAS format', pas.format,
+          'X Pos %.0f\nY Pos %.0f\nZ Pos %.0f\nAngle %hu\nH Spd %.2f\nV Spd %.2f');
+        check('PAS preview line 1', pas.preview.split('\n')[0], 'X Pos 39');
+        check('percent escaping', parseFormat('100% <qf>', 'US').format, '100%% %u');
+        check('unknown field', parseFormat('<nope>', 'US').errors.length, 1);
+        check('spin is %s', parseFormat('<spin>', 'US').format, '%s');
+        check('hex spec', parseFormat('<angle|04X>', 'US').format, '%04hX');
+
+        const els = [makeElement('display', PRESETS.PAS.config), makeElement('qft')];
+        const bytes = serialize(els, 'US');
+        const dv = new DataView(bytes.buffer);
+
+        check('magic', dv.getUint32(0), 0x53475549);
+        check('version', dv.getUint16(4), 1);
+        check('count', dv.getUint16(6), 2);
+        check('size field == length', dv.getUint32(8), bytes.length);
+        check('crc', dv.getUint32(12), crc32(bytes.subarray(16)));
+
+        // element 0: display
+        check('el0 type', bytes[16], 0x01);
+        check('el0 enabled', bytes[17], 0x01);
+        const s0 = dv.getUint16(18);
+        check('el0 size 4-aligned', s0 % 4, 0);
+        check('el0 fontSize', bytes[16 + 4 + 4], 20);
+        check('el0 fieldCount', bytes[16 + 4 + 24], 6);
+        const fmtLen = bytes[16 + 4 + 25];
+        check('el0 fmtLen', fmtLen, pas.format.length + 1);
+        check('el0 field list', Array.from(bytes.subarray(16 + 4 + 26, 16 + 4 + 32)), [1, 2, 3, 4, 5, 6]);
+        const fmtOff = 16 + 4 + 32;
+        check('el0 fmt NUL-terminated', bytes[fmtOff + fmtLen - 1], 0);
+        check('el0 fmt bytes',
+          String.fromCharCode(...bytes.subarray(fmtOff, fmtOff + fmtLen - 1)), pas.format);
+        check('el0 size', s0, 4 + 24 + 2 + 6 + fmtLen + ((4 - ((4 + 24 + 2 + 6 + fmtLen) % 4)) % 4));
+
+        // element 1: qft
+        const o1 = 16 + s0;
+        check('el1 type', bytes[o1], 0x02);
+        check('el1 size', dv.getUint16(o1 + 2), 32);
+        check('el1 x', dv.getInt16(o1 + 4), 16);
+        check('el1 y', dv.getInt16(o1 + 6), 456);
+        check('el1 bg rgba', dv.getUint32(o1 + 4 + 20), 0x00000080);
+        check('el1 freezeDuration', dv.getUint16(o1 + 4 + 24), 30);
+        check('total length', bytes.length, 16 + s0 + 32);
+
+        lines.push(`<pre>${bytes.length} bytes\n${toHexDump(bytes)}</pre>`);
+      } catch (e) {
+        lines.push(`<div class="bad">THREW ${e && e.stack ? e.stack : e}</div>`);
+      }
+      document.getElementById('out').innerHTML = lines.join('');
+    </script>
+  </body>
+</html>

@@ -1,0 +1,569 @@
+:root {
+  --bg: #14161a;
+  --bg-panel: #1c1f25;
+  --bg-raised: #242830;
+  --line: #333944;
+  --text: #dfe3ea;
+  --muted: #8b93a1;
+  --accent: #ffd34d;
+  --accent-dim: #6b5a1f;
+  --danger: #ff6b6b;
+  --radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Column flex + a growing .layout is what keeps the footer disclaimer on the
+     bottom edge when the page is short, without it overlaying a tall sidebar
+     the way `position: fixed` would. */
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+.topbar h1 {
+  font-size: 16px;
+  letter-spacing: 0.01em;
+}
+.topbar h1 span {
+  color: var(--muted);
+  font-weight: 400;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---------- buttons & inputs ---------- */
+
+.btn {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17191d;
+  font-weight: 600;
+}
+.btn-quiet {
+  background: transparent;
+}
+.btn-small {
+  padding: 3px 9px;
+  font-size: 13px;
+}
+
+input,
+select,
+textarea {
+  background: #12141880;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  padding: 3px 6px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+input[type="number"] {
+  width: 60px;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+}
+input[type="color"] {
+  width: 34px;
+  height: 26px;
+  padding: 2px;
+  cursor: pointer;
+}
+input[type="range"] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+.field-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+/* ---------- layout ---------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 20px;
+  padding: 20px;
+  align-items: start;
+  flex: 1 0 auto; /* pushes the footer down */
+}
+@media (max-width: 1040px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.canvas-col {
+  min-width: 0;
+}
+.stage-wrap {
+  width: 600px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ---------- stage ---------- */
+
+.stage {
+  position: relative;
+  width: 600px;
+  height: 448px;
+  background: url(../img/background.png) center / cover no-repeat #000;
+  overflow: hidden;
+  border-radius: var(--radius);
+  cursor: default;
+  user-select: none;
+}
+.stage:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.elements,
+.selection {
+  position: absolute;
+  inset: 0;
+}
+.elements {
+  pointer-events: none;
+}
+
+.element {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+  cursor: grab;
+}
+.element.dragging {
+  cursor: grabbing;
+}
+.element-bg,
+.glyphs,
+.glyph,
+.glyph > div {
+  position: absolute;
+}
+.glyphs {
+  transform-origin: 0 0;
+}
+.glyph {
+  isolation: isolate;
+}
+.glyph > div {
+  width: 20px;
+  height: 20px;
+}
+.glyph-sheet {
+  background-repeat: no-repeat;
+}
+.glyph-mask {
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mix-blend-mode: multiply;
+}
+.pad {
+  display: block;
+}
+
+.selection {
+  pointer-events: none;
+}
+.selection-box {
+  position: absolute;
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 1px #0008;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 10px 0 0;
+  max-width: 600px;
+}
+/* Full page width on purpose: no max-width, so it wraps at the viewport rather
+   than at the 600px canvas it used to sit under. */
+.hint-vibe {
+  flex-shrink: 0;
+  padding: 14px 20px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+  font-size: 16px;
+  font-style: italic;
+}
+.hint-vibe a {
+  color: var(--accent);
+}
+.status {
+  margin-top: 8px;
+  min-height: 20px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* ---------- sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-head h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+  padding: 14px 12px;
+}
+
+/* add menu */
+.add-wrap {
+  position: relative;
+}
+.menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px #0009;
+}
+.menu-label {
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.menu button:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+.menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.menu hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 6px 4px;
+}
+
+/* layer list */
+.layers {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.layer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.layer:hover {
+  background: #ffffff0a;
+}
+.layer.selected {
+  background: var(--accent-dim);
+}
+.layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+.layer-remove {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.layer-remove:hover {
+  color: var(--danger);
+  background: #ff6b6b1a;
+}
+
+/* ---------- inspector ---------- */
+
+.inspector {
+  padding: 4px 12px 14px;
+}
+.group {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.group:last-child {
+  border-bottom: 0;
+}
+.group > h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.row:last-child {
+  margin-bottom: 0;
+}
+.row > label {
+  color: var(--muted);
+  min-width: 74px;
+}
+.row .sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.pad-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.pad-grid input {
+  width: 100%;
+}
+textarea {
+  width: 100%;
+  min-height: 132px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.chip {
+  padding: 2px 7px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.warn {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+/* ---------- boot failure ---------- */
+
+/* A class with `display` outranks the UA's `[hidden] { display: none }`, so the
+   hidden state has to be spelled out or the banner is permanently visible. */
+.boot-error[hidden] {
+  display: none;
+}
+.boot-error {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px min(10vw, 120px);
+  background: #14161af2;
+  backdrop-filter: blur(3px);
+}
+.boot-error h2 {
+  font-size: 20px;
+  color: var(--accent);
+}
+.boot-error p {
+  margin: 0;
+  max-width: 60ch;
+}
+.boot-error-sub {
+  color: var(--muted);
+}
+.boot-error pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: #101216;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: ui-monospace, Consolas, monospace;
+  align-self: flex-start;
+}
+.boot-error code {
+  color: var(--accent);
+}
+
+/* ---------- dialog ---------- */
+
+.dialog {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text);
+  padding: 20px;
+  max-width: 560px;
+  width: calc(100% - 40px);
+}
+.dialog::backdrop {
+  background: #000a;
+}
+.dialog h2 {
+  font-size: 16px;
+}
+.dialog-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 14px;
+}
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dump {
+  margin: 14px 0 0;
+  padding: 10px;
+  max-height: 240px;
+  overflow: auto;
+  background: #101216;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.dialog-note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+.dialog-note code {
+  color: var(--text);
+}

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Susamune GUI Configurator</title>
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Susamune <span>GUI Configurator</span></h1>
+      <div class="topbar-actions">
+        <label class="field-inline">
+          Font
+          <select id="region" title="Only affects preview text metrics — the output is region-independent">
+            <option value="US">US</option>
+            <option value="JP">JP</option>
+            <option value="EU">PAL</option>
+          </select>
+        </label>
+        <button id="reset" class="btn btn-quiet">Reset</button>
+        <button id="export" class="btn btn-primary">Download blob</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="canvas-col">
+        <div class="stage-wrap">
+          <div id="stage" class="stage" tabindex="0">
+            <div id="elements" class="elements"></div>
+            <div id="selection" class="selection" hidden></div>
+          </div>
+        </div>
+        <p class="hint">
+          Drag elements to place them. Arrow keys nudge the selection, Shift+arrows nudge by 10,
+          Delete removes it.
+        </p>
+        <div id="status" class="status"></div>
+      </section>
+
+      <aside class="sidebar">
+        <div class="panel panel-layers">
+          <div class="panel-head">
+            <h2>Elements</h2>
+            <div class="add-wrap">
+              <button id="add" class="btn btn-small">Add ▾</button>
+              <div id="add-menu" class="menu" hidden></div>
+            </div>
+          </div>
+          <ul id="layers" class="layers"></ul>
+          <p id="layers-empty" class="empty">Nothing on the canvas yet — use <b>Add</b>.</p>
+        </div>
+
+        <div class="panel panel-inspector">
+          <div class="panel-head"><h2 id="inspector-title">Inspector</h2></div>
+          <div id="inspector" class="inspector">
+            <p class="empty">Select an element to edit it.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="hint-vibe">
+      THIS IS A VIBECODED WEBSITE. USER PRECAUTION IS ADVISED. ALL CREDITS BELONG TO ORIGINAL
+      AUTHORS OF <a href="https://gct.zint.ch/">GCT GENERATOR</a>.
+    </footer>
+
+    <dialog id="export-dialog" class="dialog">
+      <h2>susamune_gui.bin</h2>
+      <p class="dialog-sub" id="export-summary"></p>
+      <div class="dialog-actions">
+        <button id="download-bin" class="btn btn-primary">Save file</button>
+        <button id="copy-b64" class="btn">Copy base64</button>
+        <button id="close-dialog" class="btn btn-quiet">Close</button>
+      </div>
+      <pre id="export-dump" class="dump"></pre>
+      <p class="dialog-note">
+        Save this to the root of your SD card, next to <code>susamune.ini</code>.
+      </p>
+    </dialog>
+
+    <div id="boot-error" class="boot-error" hidden>
+      <h2>This page has to be served over HTTP.</h2>
+      <p>
+        It is built from ES modules, and browsers refuse to load those from a
+        <code>file://</code> path — so the page renders but nothing is wired up. Run a server from
+        the <code>site/</code> directory and open the address it prints:
+      </p>
+      <pre>python -m http.server 8000</pre>
+      <p class="boot-error-sub">
+        Then browse to <code>http://localhost:8000</code>. Hosted over HTTPS (GitHub Pages) it works
+        as-is.
+      </p>
+    </div>
+
+    <!-- Classic script on purpose: it still runs when the module below cannot
+         load, which is the case it exists to report. Triggered by the actual
+         load failure rather than by a timeout -- a slow first load over HTTPS
+         must never flash this banner. -->
+    <script>
+      function susamuneBootError() {
+        if (window.__susamuneBooted) return;
+        document.getElementById('boot-error').hidden = false;
+      }
+      // Nested import failures surface here rather than on the script element.
+      window.addEventListener('error', function (e) {
+        if (e.target && e.target.tagName === 'SCRIPT') susamuneBootError();
+      }, true);
+    </script>
+    <script type="module" src="js/app.js" onerror="susamuneBootError()"></script>
+  </body>
+</html>
