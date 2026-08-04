@@ -28,9 +28,13 @@
 - [ ] sound fix (warspyking)
 - [ ] intermittent crash?? only happened once, with the 64KiB thing
 - [ ] move bss out of MEM1
-- [ ] fix icon (should not have jp flag anymore)
+    - On console: Find a place in MEM2 to put it, link the mod against it. At load, copy the code into MEM1, and the data into this spot in MEM2.
+    - On emulator, it is a bit more tricky. Pack everything into the DOL, except before the heap is initialized, copy the data into the Dolphin-exclusive memory (at 0x70000000). Then change OSGetArenaLo so that it is able to use the extra heap space taken up.
+    - claude brings up the point that the dolphin memory at 0x70000000 is kind of buggy and doesnt properly handle things like byte or half word level accesses, which is true from my recollection, so this could be a problem. 
+    - And he says it would only save 5KiB.
 - [ ] Fast text broken on US
     - Can't reproduce?
+- [ ] restore help text about configurable gui elements in site  
 
 ### Bindings
 
