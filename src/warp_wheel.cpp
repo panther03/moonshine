@@ -13,6 +13,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/binds.hxx"
 #include "susamune/glyphs.hxx"
+#include "susamune/gui_config.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/settings.hxx"
 
@@ -40,7 +41,11 @@ bool             sTailPending;
 
 u8 currentGameInt3() { return (u8)TFlagManager::smInstance->getFlag(0x40003); }
 
+// A wheel warp reaches the next stage through moveStage(), so it passes none
+// of the sites that would otherwise arm a restart. Arm it by hand, for both
+// the mod's own timer and a QFT gecko code the user may still be loading.
 void markQuickFreezeReset() {
+    gGuiBlock.qf.resetPending = 1;
     if (SUSAMUNE_ADDR_QF_TIMER_RESET != 0) {
         *(volatile u8 *)SUSAMUNE_ADDR_QF_TIMER_RESET = 1;
     }
@@ -307,19 +312,22 @@ const s16 kUnit[16][2] = {
 // kRadiusInner taken out of the middle; the ring between them is cut on the
 // eight boundary directions and each piece slid kGap out along its own centre
 // direction. kRadiusLabel is the mid-ring apothem, where the flat edges are.
-const int kCx = 320;
-const int kCy = 262;
+// Game 2D space; the visible band is y 16..464 (menu.hxx).
+const int kCx = kScreen2DWidth / 2;
+const int kCy = kScreen2DTop + 262;
 const int kRadiusOuter = 180;
 const int kRadiusInner = 78;
 const int kRadiusLabel = 125;
 const int kGap = 6;
 
-const int kTitleY   = 44;
+const int kTitleY   = kScreen2DTop + 44;
 const int kTitleSz  = 20;
 const int kLabelSz  = 12;
 const int kRootSz   = 16;
 const int kDigitSz  = 26;
-const int kFooterY  = 448;
+// Sat on the bottom edge of the framebuffer before the 2D space was
+// corrected, so the hint never rendered at all.
+const int kFooterY  = kScreen2DBottom - 16;
 const int kFooterSz = 12;
 
 const int kCentreSlot = 8;
@@ -553,7 +561,7 @@ void draw() {
 
     const int selected = stickSlot(gpApplication.mGamePads[0]);
 
-    gMenu->fillBox(0, 0, 640, 480, cBackdrop());
+    gMenu->fillBox(0, kScreen2DTop, kScreen2DWidth, kScreen2DHeight, cBackdrop());
     drawCentred(currentTitle(), kCx, kTitleY, kTitleSz, cSelected());
 
     for (int i = 0; i < 8; i++) {

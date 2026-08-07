@@ -72,6 +72,11 @@ def main():
     p.obj_dir = ""
     p.kuribo_compiler_home = args.kuribo_home
     p.base_addr = base
+    # `.guicfg` is pinned at base_addr and the code starts after it, so the
+    # Gecko codes the web configurator emits address a spot that never moves.
+    # See patches.gui_block_size / SUSAMUNE_ADDR_GUI_BLOCK.
+    p.code_base_addr = base + patches.gui_block_size
+    p.linker_flags.append("--section-start=.guicfg={:#x}".format(base))
     p.blob_max_size = patches.mod_blob_max_size
     p.add_linker_script_file(str(linker_script))
     p.add_obj_file(obj.name)

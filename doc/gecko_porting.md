@@ -202,8 +202,9 @@ in an existing category needs **no menu change** — just the settings row. A ne
 category means a new enum value + one `mTabs[…] = new (buf) CategorySettingsTab(
 "Title", SETTING_CAT_…)` line and a static buffer next to the others.
 
-Current tabs: `QoL`, `Cosmetic`, `Misc`, `Savestate`, `Binds`, plus the
-`Warps` and `Stages` debug tabs when `ENABLE_DEBUG_WARPS` is enabled.
+Current tabs: `QoL`, `Cosmetic`, `Misc`, `Savestate`, `UI`, `Timer`,
+`QF Freeze`, `Binds`, plus the `Warps` and `Stages` debug tabs when
+`ENABLE_DEBUG_WARPS` is enabled.
 
 ## Class B: asm hooks (`C2` codes)
 
@@ -372,6 +373,88 @@ find a mod global, so the alternative is patching the address into every
 `lis`/`ori` that references it at init -- more machinery than a fixed word in
 the scratch region is worth. See `addresses.hxx` for what else lives there.
 
+### Quarterframe Timer + Section Timer (`qftimer.cpp`)
+
+*The IL timer.* Ported from upstream `qft` 1.5 and `qfst` 0.1. It is the most
+literal port in the tree — runners submit these numbers, so the state words, the
+arithmetic and the hook sites are the originals'.
+
+Both timers count `TMarDirector::unk5C`, the director's logic-tick counter,
+which advances 120 times a second. The five state words are upstream's
+`0x817F00B2..BF`, one for one, and now live in the pinned block described below.
+`unk5C` is *not* `unk58` (the paused-aware frame counter) and not the `& 3`
+quarterframe field the Customized Display reads.
+
+**Four of upstream's hooks are not injections here**, because the mod already
+owns the same points in the frame:
+
+| upstream site | replaced by |
+|---|---|
+| `direct+0x88` (the `unk260 = 1` store) | `qfTimerOnStageLoad()`, called from `onSetup` — which *is* the `bl setupObjects` one instruction earlier |
+| `TApplication::proc+0x34` (section-timer reset) | the same call; the only app-state iterations that can be observed are the ones that build a stage |
+| `~TMarDirector` (bank the outgoing ticks) | `lastSeenQf` is cached every frame and folded in at the next load. Nothing reads the timer in between |
+| the tail of `TGCConsole2::perform` (draw) | `qfTimerDraw()`, from `afterDraw` |
+
+**Fourteen sites are left.** Eight are trailing `blr`s of a trigger function
+(`TCoin::taken`, `TCoinRed::taken`, `TItem::taken`, `TTalk2D2::openTalkWindow`,
+`fireStartDemoCamera`, `TBaseNPC::emitHappyEffect_`, `TBathtub::quake`,
+`TYoshi::ride`), so one `b` per site into a single seven-word cave that ends in
+`blr` covers all of them — upstream's own trick, and what makes per-trigger
+toggling cost one word each. Three more triggers need their own cave
+(`TCoinBlue::taken+0x24`, which is at the *head* of its function and rounds the
+quarterframe up; `TMario::taking+0x98` and `TMario::dropObject+0x38`, which are
+three-word `bl`s into the shared freezer). The seven status-based triggers
+(put down / triple jump / spin jump / ledge grab / wall kick / bounce / rope
+jump) share one site at `changePlayerStatus+0x194` whose cave calls into C —
+upstream open-codes one gecko comparison chain per enabled trigger, but a C
+dispatch is smaller and lets the set change without rebuilding. The last four
+are the state machine itself: `fireGetStar+0x48` and `TBathtub::startDemo+0x21C`
+stop the timer for good, `changeState+0x328` arms a restart, and
+`setNextStage+0x50` deliberately does *not* — which is what carries the clock
+across a pipe or a secret course.
+
+**Displaced originals are captured from the site, not hardcoded.** Each cave
+that overwrites a real instruction has a placeholder slot that `initCaves()`
+fills from the site word, so no cave depends on knowing what a revision encodes
+there. Every one of them is a store or an immediate load, hence safe to run from
+a different address.
+
+> **Two upstream bugs are not reproduced.** Its `C2` blocks at
+> `changeState+0x328` and `setNextStage+0x50` discard the instruction they
+> displace. Both are the zero-init of a field in a stack `TGameSequence` that is
+> then passed on by pointer, so the game goes on to read a garbage scenario byte
+> / flag halfword. Upstream gets away with it because those paths are rare;
+> preserving the instruction changes nothing about the timer.
+
+**Appearance is not a setting.** Position, size, colours, gradient, the resolved
+background rectangle and the freeze duration live in a config block pinned at
+the mod's link base (`include/susamune/gui_config.hxx`, section `.guicfg`, placed by
+`link_mod.py`'s `--section-start`). The mod ships the upstream generator's
+defaults there; the web configurator (`site/`) emits a Gecko code that overwrites
+the fields the user changed. Pinning is the whole point — a published code has
+to keep working across mod rebuilds. `site/FORMAT.md` is the contract for those
+offsets. The same block also carries the timer's runtime state, because a cave
+has no way to find a mod global and reaches it by absolute address; the state is
+placed *first* so the config can grow without moving. The background rectangle
+is **resolved by the configurator**, as it is in the upstream codes -- that
+keeps font metrics out of the mod's draw path entirely.
+
+**On size.** The gct of both codes with every trigger enabled is 1536 bytes, and
+that is the yardstick a port has to answer to: the mod region is finite and
+there are many codes left to bring over. `qftimer.cpp` is 2561 bytes, of which
+860 is the install table and the apply/install loops -- the per-trigger toggling
+a static `.gct` does not need. The remaining 1701 is the like-for-like part, and
+its 336 bytes of caves are less asm than the gct carries. Write these ports as
+transcriptions: a generic hook table with per-row capability flags cost twice
+what one mutable `Site` row and two straight loops do.
+
+And **use the game's own code**. `strcpy`/`strncpy`/`strcat`/`strlen`/`memcpy`/
+`memset`/`sprintf`/`snprintf`/`vsnprintf` are all resolved by `map_to_ld.py` and
+cost the blob nothing. A hand-rolled unsigned formatter and bounded string copy
+lived in a `util.cpp` for a while on the theory that they beat varargs; deleting
+them for `snprintf` took **256 bytes off the blob**, because one call site
+replaces several and the callee is free.
+
 ## Bind-driven actions (`binds.*` + `actions.cpp`)
 
 Several codes are not toggles: they act when a button combination is pressed.
@@ -534,7 +617,8 @@ mid-loop.
 - **Class C (multi-state)** — FLUDD in secrets (QoL, 3-state); Nozzle Lock
   (Misc, 4-state).
 - **Reimplemented in C** — Stage Intro Skip, No Shine Get Animation
-  (Misc).
+  (Misc); Quarterframe Timer + Quarterframe Section Timer (Timer / QF Freeze,
+  `qftimer.cpp`).
 - **Bind-driven actions** — Regrab Last Held Object, Spawn Yoshi (4 colours),
   Fast Forward (4x / 8x). See "Bind-driven actions" above.
 

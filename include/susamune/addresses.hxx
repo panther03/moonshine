@@ -68,6 +68,15 @@
 #define SUSAMUNE_SCRATCH 0x40u // idk
 #define SUSAMUNE_MOD_BLOB_MAX_SIZE (SUSAMUNE_MOD_REGION_SIZE - SUSAMUNE_SCRATCH)
 
+// The `.guicfg` section (gui_config.hxx), pinned at the very base of the blob
+// so its address survives a rebuild: the web configurator ships the user's GUI
+// appearance as a Gecko code writing literal addresses inside it, and the QF
+// timer's asm caves reach its state half the same way. link_mod.py passes the
+// matching --section-start and starts the code after it; MUST equal
+// patches.gui_block_size.
+#define SUSAMUNE_ADDR_GUI_BLOCK SUSAMUNE_ADDR_MOD_BASE
+#define SUSAMUNE_GUI_BLOCK_SIZE 0xA0u
+
 // The mod links at __ArenaLo, but OSInit hands the debug stack back to the
 // arena when no debug monitor is present (BI2DebugFlag < 2), leaving the
 // runtime __OSArenaLo at ALIGN32(_stack_addr) -- exactly this much BELOW

@@ -341,6 +341,10 @@ class Linker(Enum):
 class Project(object):
     def __init__(self, base_addr=None, verbose=False, compiler=Compiler.KuriboClang, assembler=Assembler.KuriboClang, linker=Linker.KuriboClang, kuribo_compiler_home=None):
         self.base_addr = base_addr
+        # Where the linker's location counter starts. Defaults to base_addr;
+        # raise it when a section is pinned at base_addr with --section-start
+        # so the rest of the blob is laid out after it instead of on top of it.
+        self.code_base_addr = None
         self.compiler = compiler
         self.assembler = assembler
         self.linker = linker
@@ -796,7 +800,7 @@ class Project(object):
             args = [os.path.join(self.kuribo_compiler_home,"powerpc-eabi-ld"), "-o", self.obj_dir+self.project_name+".o"]
             # The symbol "." represents the location counter.  By setting it this way,
             # we don't need a linker script to set the base address of our new code.
-            args.extend(("--defsym", ".="+hex(self.base_addr)))
+            args.extend(("--defsym", ".="+hex(self.code_base_addr if self.code_base_addr is not None else self.base_addr)))
             # Since we have to gather sda/sda2 base addresses for the project, we
             # might as well send that info to the linker if we have it.
             if self.sda_base:

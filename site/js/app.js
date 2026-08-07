@@ -5,8 +5,8 @@ import { loadRegion } from './text.js';
 import { buildElement, boundsOf, toStage, STAGE_W, STAGE_H, Y_ORIGIN } from './preview.js';
 import { parseFormat } from './format.js';
 import { FIELDS } from './fields.js';
-import { serialize } from './serialize.js';
-import { rgbToHex, hexToRgb, clamp, toBase64, toHexDump } from './util.js';
+import { buildGecko } from './gecko.js';
+import { rgbToHex, hexToRgb, clamp } from './util.js';
 
 const LS_KEY = 'susamune/gui-config';
 
@@ -605,31 +605,43 @@ function refresh({ inspector = false } = {}) {
 }
 
 function showExport() {
-  let bytes;
+  let lines, dropped;
   try {
-    bytes = serialize(state.elements, state.region);
+    ({ lines, dropped } = buildGecko(state.elements, state.region));
   } catch (err) {
-    dom.status.textContent = `Could not build the blob: ${err.message}`;
+    dom.status.textContent = `Could not build the code: ${err.message}`;
     return;
   }
   dom.status.textContent = '';
 
-  const counts = state.elements.length;
-  $('export-summary').textContent =
-    `${counts} element${counts === 1 ? '' : 's'}, ${bytes.length} bytes. ` +
-    'Region-independent — one file works on JP, US and PAL.';
-  $('export-dump').textContent = toHexDump(bytes);
+  const label = { US: 'GMSE01 (US)', JP: 'GMSJ01 (JP)', EU: 'GMSP01 (PAL)' }[state.region];
+  const text = lines.join('\n');
 
-  $('download-bin').onclick = () => {
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-    const a = h('a', { href: url, download: 'susamune_gui.bin' });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 500);
-  };
-  $('copy-b64').onclick = async (ev) => {
-    await navigator.clipboard.writeText(toBase64(bytes));
+  if (!lines.length) {
+    // No code at all rather than an empty one: the mod's own defaults already
+    // are the unconfigured layout, and a runner's .gct has finite room.
+    $('export-summary').textContent =
+      'Nothing to emit — add a Quarterframe Timer or QF Section Timer to the canvas.';
+  } else {
+    $('export-summary').textContent =
+      `${lines.length} lines, for ${label}. ` +
+      'The addresses are inside the mod, so this code is for that revision only.';
+  }
+
+  const note = dropped.length
+    ? `Not included: ${[...new Set(dropped)].join(', ')} — the mod does not render ` +
+      'these yet, so nothing is emitted for them. Your layout is still saved.'
+    : 'Add this to the .gct you load alongside the mod.';
+  $('dialog-note').textContent = note;
+
+  $('export-dump').textContent = text || '(empty)';
+
+  const copy = $('copy-code');
+  copy.disabled = !lines.length;
+  copy.onclick = async (ev) => {
+    await navigator.clipboard.writeText(text);
     ev.target.textContent = 'Copied';
-    setTimeout(() => (ev.target.textContent = 'Copy base64'), 1200);
+    setTimeout(() => (ev.target.textContent = 'Copy code'), 1200);
   };
 
   $('export-dialog').showModal();

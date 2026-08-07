@@ -45,6 +45,10 @@ enum SettingCategory {
     SETTING_CAT_MISC,
     SETTING_CAT_COSMETIC,
     SETTING_CAT_UI,
+    SETTING_CAT_TIMER,
+    // The eighteen quarterframe freeze triggers get a tab of their own -- they
+    // are a list to scan, not settings to mix in with anything else.
+    SETTING_CAT_QF_FREEZE,
     SETTING_CAT_COUNT
 };
 

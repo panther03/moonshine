@@ -19,7 +19,11 @@
 #include "susamune/debug_warp.hxx"
 #endif
 #include "susamune/savestate.hxx"
+#include "susamune/qftimer.hxx"
 #include "susamune/addresses.hxx"
+#if ENABLE_DRAW_CALIBRATION
+#include "Dolphin/printf.h"
+#endif
 #include "SMS/Manager/RumbleManager.hxx"
 
 SavestateManager* gSavestateMgr = nullptr;
@@ -91,6 +95,9 @@ extern "C" void onSetup(TMarDirector* director) {
 
     // Runs on every stage load, so this must stay above the once-only guard.
     featuresOnStageLoad();
+    // Upstream hooks the `unk260 = 1` store one instruction below this call;
+    // running here is the same point in the same frame.
+    qfTimerOnStageLoad();
 
     if (inited) return; else inited = true;
 
@@ -143,6 +150,8 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
 
     actionsApply();
 
+    qfTimerApply();
+
     if (gSavestateMgr) {
         gSavestateMgr->updateHook();
     }
@@ -153,6 +162,42 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     return state;
 }
 
+#if ENABLE_DRAW_CALIBRATION
+// A ruler in the declared 2D space, to find where the screen edges actually
+// are. Every value below is a coordinate in that space, so a screenshot reads
+// off directly: whichever labels are visible bound the visible band, and the
+// L-shaped corner marks show whether x = 0 / y = 0 are on screen at all.
+//
+// Delete nothing when this is answered -- fix kScreen2D* in menu.hxx and turn
+// the option back off.
+static void drawCalibration() {
+    const JUtility::TColor tick(255, 64, 64, 255);
+    const JUtility::TColor major(64, 255, 64, 255);
+    const JUtility::TColor corner(64, 160, 255, 255);
+
+    for (int y = kScreen2DTop; y <= kScreen2DBottom; y += 16) {
+        const bool label = ((y - kScreen2DTop) % 64) == 0;
+        gMenu->fillBox(0, y, label ? 96 : 40, 1, label ? major : tick);
+        gMenu->fillBox(kScreen2DWidth - (label ? 96 : 40), y, label ? 96 : 40, 1,
+                       label ? major : tick);
+        if (label) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d", y);
+            gMenu->drawText(buf, 100, y, 16, 16, major);
+        }
+    }
+    // Corner brackets on the declared bounds: if a leg is missing, that edge is
+    // off screen.
+    for (int i = 0; i < 4; i++) {
+        const int x = (i & 1) ? kScreen2DWidth - 64 : 0;
+        const int y = (i & 2) ? kScreen2DBottom - 4 : kScreen2DTop;
+        gMenu->fillBox(x, y, 64, 4, corner);
+        gMenu->fillBox((i & 1) ? kScreen2DWidth - 4 : 0,
+                       (i & 2) ? kScreen2DBottom - 64 : kScreen2DTop, 4, 64, corner);
+    }
+}
+#endif
+
 extern "C" void afterDraw() {
     // The original call is a full GXDrawDone barrier. Process queued loads
     // immediately afterward: director, fader, audio, and the current frame's
@@ -161,18 +206,30 @@ extern "C" void afterDraw() {
     if (gSavestateMgr) gSavestateMgr->processPendingLoad();
 
     {
-        J2DOrthoGraph ortho(0, 0, 640, 480);
-        ortho.setup2D();
+        // Establish the mod's 2D space (menu.hxx). mOrtho is assigned rather
+        // than passed to the constructor because neither constructor can give a
+        // space whose origin is not 0.
+        //
+        // **setPort(), not setup2D().** setup2D() only re-establishes vertex
+        // and TEV state; setPort() is what calls GXSetViewport, sets the
+        // scissor from mBounds, and builds the ortho projection from mOrtho.
+        // Calling setup2D() and expecting a coordinate space fails silently:
+        // the overlays still draw, in whatever space the game last set, and
+        // under whatever scissor it last left behind. Menu::fillBox/fillPoly
+        // call setup2D() deliberately, because they must NOT disturb this.
+        J2DOrthoGraph ortho(0, 0, kScreen2DWidth, kScreen2DHeight);
+        ortho.mOrtho.mY1 = kScreen2DTop;
+        ortho.mOrtho.mY2 = kScreen2DBottom;
+        ortho.setPort();
 
-        GXSetViewport(0, 0, 640, 480, 0, 1);
-        {
-            Mtx44 mtx;
-            C_MTXOrtho(mtx, 0, 480,0, 640, -1, 1);
-            GXSetProjection(mtx, GX_ORTHOGRAPHIC);
-        }        
-        
+#if ENABLE_DRAW_CALIBRATION
+        drawCalibration();
+#endif
         if (gMenu)
             gMenu->draw(&ortho);
+        qfTimerDraw();
+        // After Menu::draw, which is what leaves mOrtho set for the shared
+        // 2D primitives -- the same rule the warp wheel follows.
         if (!gSettings.getBool(SETTING_DISABLE_WARPS))
             WarpWheel::draw();
 #if ENABLE_SAVESTATE_DBG

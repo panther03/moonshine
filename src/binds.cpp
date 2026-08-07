@@ -10,7 +10,7 @@
 
 #include "JSystem/JUtility/JUTGamePad.hxx"
 #include "susamune/glyphs.hxx"
-#include "susamune/util.hxx"
+#include "Dolphin/string.h"
 
 namespace {
 
@@ -188,23 +188,22 @@ void Binds::commitRecord() {
 }
 
 void Binds::format(u16 mask, char *out) {
-    int n = 0;
+    out[0] = '\0';
     mask &= SUSAMUNE_BIND_BUTTON_MASK;
 
     for (int i = 0; i < kNumButtons; i++) {
         if (!(mask & kButtons[i].bit)) {
             continue;
         }
-        if (n > 0) {
-            n += Util::appendString(out + n, kDisplaySeparator);
+        if (out[0]) {
+            strcat(out, kDisplaySeparator);
         }
-        n += Util::appendString(out + n, kButtons[i].display);
+        strcat(out, kButtons[i].display);
     }
 
-    if (n == 0) {
-        n += Util::appendString(out + n, SUSAMUNE_BIND_NONE_TOKEN);
+    if (!out[0]) {
+        strcat(out, SUSAMUNE_BIND_NONE_TOKEN);
     }
-    out[n] = '\0';
 }
 
 const BindDesc &Binds::desc(BindId id) { return kBindDescs[id]; }

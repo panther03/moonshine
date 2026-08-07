@@ -1,174 +1,122 @@
-# `susamune_gui.bin` — GUI layout blob
+# GUI appearance config — the Gecko-code contract
 
-The configurator emits one binary file describing **what UI elements to draw and
-where**. It is not a patch and contains no PPC code: the mod renders every
-element itself through `Menu::drawText` / `fillBox` / `fillPoly`.
+The configurator emits a **Gecko code**, not a file. The mod ships its own
+appearance defaults in a config block pinned at a fixed address; a user's layout
+is a block write over the fields they changed.
 
-Both the ARM kernel and the PPC are big-endian, so every field below is
-big-endian and the mod can cast straight into the buffer with no swapping.
+This replaces the earlier `susamune_gui.bin` design. The reason is distribution:
+runners already load a `.gct`, and adding a second file the launcher has to find
+buys nothing that a few lines of Gecko do not. It also means a partial config is
+free — anything the code does not write keeps the compiled-in default.
 
-The file is **region-independent**. The region selector in the configurator only
-picks which font sheet the preview measures with; nothing region-specific is
-serialised.
+`include/susamune/gui_config.hxx` is the other half of this contract. Change one,
+change the other.
 
-## Loading
+## Where the block lives
 
-Same path as `mod_<region>.bin`: the Nintendont loader reads the file from
-`launch_dir` into a MEM2 window and the mod walks it once at startup. Nothing in
-`susamune.ini` or `struct SusamuneCfg` changes.
+The mod links into MEM1 at each revision's `__ArenaLo`, and `link_mod.py` pins the
+`.guicfg` section at exactly that address (`--section-start`), ahead of all the
+code. That is what makes the addresses below stable: the block does not move when
+the mod is rebuilt, only when `arena_lo` or `patches.gui_block_size` changes.
 
-## Coordinates
+| version  | `__ArenaLo` | config base (`+0x60`) |
+|----------|-------------|------------------------|
+| GMSJ01   | `0x80426020` | `0x80426080` |
+| GMSE01   | `0x80429800` | `0x80429860` |
+| GMSP01   | `0x80420D60` | `0x80420DC0` |
 
-**One space for every element**: the game's 2D ortho space, with the visible
-area spanning `x` 0..600 and `y` 16..464. That is the space the upstream
-generator's own inputs declare (`x min 0 max 600`, `y min 16 max 464`) and the
-one its text path uses unmodified.
+The `0x60` is the QF timer's private runtime state, which sits *before* the
+config so the config can grow towards the end of the reservation without moving.
+A Gecko code must never write into it.
 
-This deliberately drops two quirks in the upstream *controller* code, which
-stores `y - 16` and whose preview scales `x` by 0.9375 as if it were in a
-640-wide space. Since the mod reimplements the renderer rather than feeding the
-old blob, there is no reason to carry a second convention: a configurator where
-dragging two elements to the same spot puts them in the same spot is worth more
-than byte compatibility with a code we no longer emit. The mod applies whatever
-fixed offset its own draw path needs, once, for all element types.
+**The code is therefore version-specific**, unlike the old blob. The version
+selector in the configurator picks both the preview font metrics and these
+addresses.
 
 ## Layout
 
-All offsets are from the start of the structure. Every element is padded so its
-size is a multiple of 4; the file as a whole is therefore 4-byte aligned
-throughout and `u16`/`u32` reads are always naturally aligned.
+All offsets are from the config base. Every field is big-endian.
 
-### Header — 16 bytes
+| off  | type  | field              | notes |
+|------|-------|--------------------|-------|
+| 0x00 | `TextStyle` | `qft`        | Quarterframe Timer |
+| 0x1C | `u16` | `qftFreezeFrames`  | how long the timer holds after a trigger, in frames. 0 disables freezing |
+| 0x1E | `u16` | pad                | |
+| 0x20 | `TextStyle` | `qfst`       | Quarterframe Section Timer |
+| 0x3C | | *(unallocated)*        | see "Not implemented yet" |
 
-| off | type  | field     | notes                                       |
-|-----|-------|-----------|---------------------------------------------|
-| 0x0 | `u32` | `magic`   | `'SGUI'` = `0x53475549`                     |
-| 0x4 | `u16` | `version` | currently `1`                               |
-| 0x6 | `u16` | `count`   | number of elements that follow               |
-| 0x8 | `u32` | `size`    | total file size, header included             |
-| 0xC | `u32` | `crc32`   | CRC-32 (IEEE) of every byte after this field |
+### `TextStyle` — 28 bytes
 
-A reader rejects the file unless `magic` matches, `version` is understood, and
-`size` equals the actual byte count.
+| off  | type  | field        | notes |
+|------|-------|--------------|-------|
+| 0x00 | `s16` | `x`          | game 2D space, see "Coordinates" |
+| 0x02 | `s16` | `y`          | text **baseline**, not the top edge |
+| 0x04 | `s16` | `bgX0`       | background rect, already resolved |
+| 0x06 | `s16` | `bgY0`       | |
+| 0x08 | `s16` | `bgX1`       | |
+| 0x0A | `s16` | `bgY1`       | |
+| 0x0C | `u16` | `fontSize`   | 20 = the font's native size |
+| 0x0E | `u16` | pad          | zero |
+| 0x10 | `u32` | `fgTop`      | RGBA8888 |
+| 0x14 | `u32` | `fgBottom`   | RGBA8888; equals `fgTop` when there is no gradient |
+| 0x18 | `u32` | `bg`         | RGBA8888. Alpha 0 means "draw no background" |
 
-### Element header — 4 bytes
+**The rect is resolved here, not in the mod.** The configurator measures the
+text with the game's own font metrics, which is what the upstream generator
+does too, and the formula is upstream's `getFillRectParams` verbatim: the four
+padding offsets the inspector edits are relative to the measured text box.
+Resolving on this side keeps font metrics out of the mod's draw path entirely.
 
-| off | type  | field   | notes                                        |
-|-----|-------|---------|----------------------------------------------|
-| 0x0 | `u8`  | `type`  | see the element table below                  |
-| 0x1 | `u8`  | `flags` | bit 0 = enabled. Other bits reserved, zero   |
-| 0x2 | `u16` | `size`  | whole element incl. this header, multiple of 4 |
+The text measured is the element's **placeholder**, not the live string
+(`0:00.000` for the timer, its sixteen-line block for the section timer), so the
+box does not twitch as the digits change and the section timer's box is always
+sized for a full run's worth of splits.
 
-`size` is what makes this TLV: a reader that does not know a `type` skips
-`size` bytes and carries on, so a newer configurator never breaks an older mod.
+## Coordinates
 
-Only enabled elements are written, so `flags` bit 0 is always 1 today. It exists
-so a future "keep the config but hide it" state costs no format change.
+**One space for every element**: the game's 2D space, a 640 x 480 layout space
+of which the framebuffer shows only the middle 448 rows. **The visible band is
+therefore `y` 16..464, not 0..480** — which is why the timer's default baseline
+is 456, and why the canvas here is 448 tall with `Y_ORIGIN = 16`. Horizontally
+0..640 is the full width. The game's own 2D screens are authored the same way
+(GCConsole2 parks a pane "below screen" at `y1 = 465`), and so are the upstream
+codes' configs.
 
-### `TextStyle` — 24 bytes
+`y` is the text **baseline**, not the top edge.
 
-Shared by element types 0x01–0x05. This is the same set of knobs the upstream
-generator calls `TextConfig`.
+Measured, not inferred: the mod has an `ENABLE_DRAW_CALIBRATION` build option
+that overlays a labelled ruler in its own draw space. Two plausible-sounding
+derivations from the decomp's render-mode setup and from this page's own
+`Y_ORIGIN` both gave the wrong answer before anyone ran it.
 
-| off | type  | field        | notes                                          |
-|-----|-------|--------------|------------------------------------------------|
-| 0x00| `s16` | `x`          | game 2D space, see "Coordinates" below          |
-| 0x02| `s16` | `y`          | text **baseline**, not the top edge             |
-| 0x04| `u8`  | `fontSize`   | 20 = the font's native size                     |
-| 0x05| `u8`  | `styleFlags` | bit 0 = vertical gradient. Other bits zero      |
-| 0x06| `s8`  | `bgLeft`     | background padding, outward from the text box   |
-| 0x07| `s8`  | `bgRight`    |                                                 |
-| 0x08| `s8`  | `bgTop`      |                                                 |
-| 0x09| `s8`  | `bgBottom`   |                                                 |
-| 0x0A| `u16` | `reserved`   | zero                                            |
-| 0x0C| `u32` | `fgTop`      | RGBA8888                                        |
-| 0x10| `u32` | `fgBottom`   | RGBA8888; equals `fgTop` when bit 0 is clear    |
-| 0x14| `u32` | `bg`         | RGBA8888. Alpha 0 means "draw no background"    |
+## What the code looks like
 
-**The mod measures the text and derives the background rect itself.** The
-upstream gecko codes could not do that -- they had no font metrics at patch time
--- so they baked a resolved `x0,y0,x1,y1` rectangle into the blob. Storing the
-four `s8` offsets instead is both smaller and correct when the rendered string
-is a different width than the preview's placeholder.
+One `06` block write per configured element, covering only that element's fields:
 
-## Elements
+```
+06 <addr & 0x1FFFFFF> <byte count>
+<payload, zero-padded to a multiple of 8>
+```
 
-| type | element                    | multiplicity | body                                |
-|------|----------------------------|--------------|-------------------------------------|
-| 0x01 | Customized Display cell    | many         | `TextStyle` + format block          |
-| 0x02 | Quarterframe Timer         | one          | `TextStyle` + `u16 freezeDuration` + `u16` pad |
-| 0x03 | Quarterframe Section Timer | one          | `TextStyle`                         |
-| 0x04 | Attempt Counter            | one          | `TextStyle` + `u16 duration` + `u16` pad |
-| 0x05 | Pattern Selector           | one          | `TextStyle`                         |
-| 0x06 | Controller Input Display   | one          | 12 bytes, see below                 |
+The Quarterframe Timer writes 32 bytes at config `+0x00` (its `TextStyle` plus
+`qftFreezeFrames`); the Section Timer writes 28 bytes at config `+0x20`. An
+element that is not on the canvas is simply not written, and **a layout with
+neither of them emits no code at all** — an empty code would only take up room in
+the `.gct`.
 
-Durations are in frames.
+## Not implemented yet
 
-Types 0x02–0x05 draw a string the mod composes itself, so only the styling is
-configurable. The pattern table behind Pattern Selector, and the button/stick
-geometry behind the controller display, stay baked into the mod exactly as they
-are baked into the upstream codes.
+The configurator still lets you place a Customized Display, Attempt Counter,
+Pattern Selector and Controller Input Display, and remembers them, but
 
-### 0x01 — Customized Display cell
+> **TODO:** the mod does not render those four yet and no config block is
+> reserved for them. They are dropped from the emitted code, with a note in the
+> export dialog. When they land they append at config `+0x3C`, which moves
+> nothing that already exists — which is the whole point of putting the config
+> last in the block.
 
-`TextStyle`, then:
-
-| off | type   | field        | notes                                   |
-|-----|--------|--------------|-----------------------------------------|
-| 0x18| `u8`   | `fieldCount` | number of format arguments               |
-| 0x19| `u8`   | `fmtLen`     | bytes of `fmt`, NUL included             |
-| 0x1A| `u8[]` | `fields`     | `fieldCount` field ids, in argument order|
-| ... | `char[]`| `fmt`       | `fmtLen` bytes, NUL-terminated           |
-| ... |        | padding      | zeroes, up to a multiple of 4            |
-
-`fmt` is a **ready-to-use printf format string** and `fields` names the arguments
-it consumes, in order. The configurator does all the parsing: its `<x|.0|39.39>`
-markup is resolved at generation time into `%.0f` plus field id 1, and literal
-`%` in user text is escaped to `%%`.
-
-This is why the format costs the mod almost nothing. The game links the full MSL
-formatter -- `snprintf` / `vsnprintf` / `__pformatter`, already declared in
-`include/Dolphin/printf.h` and resolved by `map_to_ld.py` -- so rendering a cell
-is: walk `fields`, spill each value into a hand-built PPC EABI `va_list` (GPR
-save area at +0, FPR save area at +0x20), call `vsnprintf`, draw the result.
-There is no formatter to write and no format string to interpret.
-
-`fmt` is encoded in the game's font codepage, so a byte is not necessarily
-ASCII; `fmtLen` counts bytes, not characters. Newlines are literal `0x0A`.
-
-### 0x06 — Controller Input Display
-
-| off | type  | field       | notes                                        |
-|-----|-------|-------------|----------------------------------------------|
-| 0x00| `s16` | `x`         | top-left corner, same space as `TextStyle`   |
-| 0x02| `s16` | `y`         |                                              |
-| 0x04| `u16` | `height`    | 120 is native; width follows at 182/120 ratio |
-| 0x06| `u8`  | `lineWidth` | stroke weight, in the same 1/6 units upstream uses |
-| 0x07| `u8`  | reserved    | zero                                          |
-| 0x08| `u32` | `bg`        | RGBA8888                                      |
-
-#### Field ids
-
-Ids are stable — append only, never renumber.
-
-| id | name     | C type   | source                          | note                        |
-|----|----------|----------|---------------------------------|-----------------------------|
-| 1  | `x`      | `float`  | `gpMarioOriginal` + 0x10        |                             |
-| 2  | `y`      | `float`  | `gpMarioOriginal` + 0x14        |                             |
-| 3  | `z`      | `float`  | `gpMarioOriginal` + 0x18        |                             |
-| 4  | `angle`  | `u16`    | `gpMarioOriginal` + 0x96        |                             |
-| 5  | `hspd`   | `float`  | `gpMarioOriginal` + 0xB0        |                             |
-| 6  | `vspd`   | `float`  | `gpMarioOriginal` + 0xA8        |                             |
-| 7  | `qf`     | `u32`    | `gpMarDirector` + 0x58          | `& 3`                       |
-| 8  | `cangle` | `u16`    | `gpCamera` + 0xA6               | `- 0x8000`                  |
-| 9  | `invinc` | `u16`    | `gpMarioOriginal` + 0x14C       | `>> 2`, QF to frames        |
-| 10 | `goop`   | `s32`    | `getPollutionDegree(gpPollution)` | call                      |
-| 11 | `spin`   | `u32`    | `checkStickRotate(gpMarioOriginal)` | call; renders as a glyph |
-
-`float` arguments are varargs-promoted to `double`, so they occupy an FPR save
-slot; everything else takes a GPR slot.
-
-## Sharing
-
-The configurator also offers the identical bytes base64-encoded, for pasting
-into chat. Decoding that text yields the file verbatim.
+The Customized Display's design still holds when it gets there: a cell stores a
+ready-made printf format string plus an ordered field-id list, because the game
+links the full MSL formatter (`vsnprintf` / `__pformatter`, declared in
+`include/Dolphin/printf.h`), so rendering a cell costs a hand-built PPC EABI
+`va_list` and nothing more.

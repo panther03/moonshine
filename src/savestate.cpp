@@ -60,7 +60,7 @@
 #include "susamune/mem2_map.h"
 #include "susamune/settings.hxx"
 #if ENABLE_SAVESTATE_DBG
-#include "susamune/util.hxx"
+#include "Dolphin/printf.h"
 #endif
 
 #include "Dolphin/CARD.h"
@@ -368,7 +368,7 @@ SavestateManager::SavestateManager() {
 #if ENABLE_SAVESTATE_DBG
 void SavestateManager::setStatus(const char *msg) {
     // Do NOT call J2DTextBox::setString; it reallocates on the stage heap.
-    Util::copyString(sStatusBuf, sizeof(sStatusBuf), msg);
+    snprintf(sStatusBuf, sizeof(sStatusBuf), "%s", msg);
 }
 #define SET_STATUS(msg) setStatus(msg)
 #else

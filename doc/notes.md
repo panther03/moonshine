@@ -1,3 +1,18 @@
+## 2026-08-03
+
+GUI config idea:
+
+Don't use "gui.bin", but rather distribute the gui config as a gecko code.
+These gecko codes will target fixed addresses that by default, hold the default config for each code.
+So the behavior of the code itself is in the C++, but its config data will be overwritten by gecko. 
+let's say each config thing is some struct that has color, gradient, bla bla. All this is in the fixed location in .data.
+The C++ code reads from this. The gecko issues some 04 commands to overwrite this with the config blob.
+
+The only exception to this is configurable GUI. This I think should be implemented completely with code (Just like the current one, basically).
+However, I do think it should not hook in directly to the game loop, but hook in in a place where it can be called from the C++. This way, it can be a no op by default and also be toggled on and off in-game.
+
+One big problem remains: whats the way we distribute this gecko code? because people are already going to have their gct files most likely. so we'll want to allow loading it from elsewhere. Maybe the gecko codes themselves can be gui.bin, and we just make nintendont load gecko codes from alternate sources?
+
 ## 2026-07-28
 
 > move all the initialization to appinit?

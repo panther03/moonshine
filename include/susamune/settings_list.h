@@ -69,7 +69,30 @@
     X(SETTING_SHINE_OUTFIT,         "shine_outfit")                           \
     X(SETTING_SHINY_SHINES,         "shiny_shines")                           \
     /* -- UI -- */                                                            \
-    X(SETTING_SHOW_BGM_SLOTS,       "show_bgm_slots")                        
+    X(SETTING_SHOW_BGM_SLOTS,       "show_bgm_slots")                          \
+    /* -- Timer -- */                                                          \
+    X(SETTING_QF_TIMER,             "qf_timer")                                \
+    X(SETTING_QF_SECTION_TIMER,     "qf_section_timer")                        \
+    X(SETTING_QF_SECTION_KEEP,      "qf_section_keep")                         \
+    /* -- QF freeze triggers, in the upstream generator's order -- */          \
+    X(SETTING_QF_FREEZE_YELLOW,     "qf_freeze_yellow_coin")                   \
+    X(SETTING_QF_FREEZE_RED,        "qf_freeze_red_coin")                      \
+    X(SETTING_QF_FREEZE_BLUE,       "qf_freeze_blue_coin")                     \
+    X(SETTING_QF_FREEZE_ITEM,       "qf_freeze_item")                          \
+    X(SETTING_QF_FREEZE_TALK,       "qf_freeze_talk")                          \
+    X(SETTING_QF_FREEZE_DEMO,       "qf_freeze_demo")                          \
+    X(SETTING_QF_FREEZE_CLEANED,    "qf_freeze_cleaned")                       \
+    X(SETTING_QF_FREEZE_BOWSER,     "qf_freeze_bowser")                        \
+    X(SETTING_QF_FREEZE_YOSHI,      "qf_freeze_yoshi")                         \
+    X(SETTING_QF_FREEZE_TAKE,       "qf_freeze_take")                          \
+    X(SETTING_QF_FREEZE_DROP,       "qf_freeze_drop")                          \
+    X(SETTING_QF_FREEZE_PUT,        "qf_freeze_put")                           \
+    X(SETTING_QF_FREEZE_TRIPLE,     "qf_freeze_triple_jump")                   \
+    X(SETTING_QF_FREEZE_SPIN,       "qf_freeze_spin_jump")                     \
+    X(SETTING_QF_FREEZE_LEDGE,      "qf_freeze_ledge_grab")                    \
+    X(SETTING_QF_FREEZE_WALLKICK,   "qf_freeze_wall_kick")                     \
+    X(SETTING_QF_FREEZE_BOUNCE,     "qf_freeze_bounce")                        \
+    X(SETTING_QF_FREEZE_ROPE,       "qf_freeze_rope_jump")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

@@ -78,7 +78,35 @@ const SettingDesc kSettingDescs[SETTING_COUNT] = {
     SBOOL("Shiny shines", 0, SETTING_CAT_COSMETIC),
 
     // UI settings.
-    SBOOL("Show BGM slot counter", 0, SETTING_CAT_UI)
+    SBOOL("Show BGM slot counter", 0, SETTING_CAT_UI),
+
+    // Quarterframe timer (qftimer.cpp). Both displays default Off, which is
+    // also what leaves the game completely unpatched; their appearance is not
+    // a setting but a Gecko-writable config block (gui_config.hxx).
+    SBOOL("Quarterframe timer", 0, SETTING_CAT_TIMER),
+    SBOOL("QF section timer", 0, SETTING_CAT_TIMER),
+    SBOOL("Keep sections across restart", 0, SETTING_CAT_TIMER),
+
+    // Freeze triggers. Defaults are the upstream generator's: everything but
+    // the yellow coin, which fires far too often to be useful.
+    SBOOL("Yellow coin", 0, SETTING_CAT_QF_FREEZE),
+    SBOOL("Red coin", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Blue coin", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Item pickup", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Dialogue start", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Cutscene start", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("NPC cleaned", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Bowser platform broken", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Yoshi mounted", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Object held", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Object thrown", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Object put down", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Triple jump", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Spin jump", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Ledge grab", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Wall kick", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Bounce", 1, SETTING_CAT_QF_FREEZE),
+    SBOOL("Rope jump", 1, SETTING_CAT_QF_FREEZE)
 };
 
 const u32 kSettingsMagic   = 0x53535454u;  // 'SSTT'

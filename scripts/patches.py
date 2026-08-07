@@ -56,6 +56,15 @@ mod_region_size = 0x8000
 # the blob must not grow into. MUST match SUSAMUNE_SCRATCH in addresses.hxx.
 mod_scratch_size = 0x40
 
+# Head of the region, pinned at __ArenaLo itself: the `.guicfg` output section
+# holding the on-screen-GUI configuration the web configurator overwrites with
+# a Gecko code, plus the QF timer's runtime state (which the asm caves reach by
+# absolute address). It is placed FIRST, at base_addr, precisely so its address
+# never moves as the code around it grows -- a published Gecko code has to keep
+# working across mod builds. link_mod.py passes both the --section-start for it
+# and the raised code base. MUST match SUSAMUNE_GUI_BLOCK_SIZE in addresses.hxx.
+gui_block_size = 0xA0
+
 # Ceiling enforced on the linked blob by every link_mod.py mode.
 mod_blob_max_size = mod_region_size - mod_scratch_size
 

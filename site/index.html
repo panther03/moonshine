@@ -11,15 +11,15 @@
       <h1>Susamune <span>GUI Configurator</span></h1>
       <div class="topbar-actions">
         <label class="field-inline">
-          Font
-          <select id="region" title="Only affects preview text metrics — the output is region-independent">
+          Version
+          <select id="region" title="Picks preview font metrics AND the addresses the Gecko code writes to">
             <option value="US">US</option>
             <option value="JP">JP</option>
             <option value="EU">PAL</option>
           </select>
         </label>
         <button id="reset" class="btn btn-quiet">Reset</button>
-        <button id="export" class="btn btn-primary">Download blob</button>
+        <button id="export" class="btn btn-primary">Get Gecko code</button>
       </div>
     </header>
 
@@ -66,17 +66,14 @@
     </footer>
 
     <dialog id="export-dialog" class="dialog">
-      <h2>susamune_gui.bin</h2>
+      <h2>Gecko code</h2>
       <p class="dialog-sub" id="export-summary"></p>
       <div class="dialog-actions">
-        <button id="download-bin" class="btn btn-primary">Save file</button>
-        <button id="copy-b64" class="btn">Copy base64</button>
+        <button id="copy-code" class="btn btn-primary">Copy code</button>
         <button id="close-dialog" class="btn btn-quiet">Close</button>
       </div>
       <pre id="export-dump" class="dump"></pre>
-      <p class="dialog-note">
-        Save this to the root of your SD card, next to <code>susamune.ini</code>.
-      </p>
+      <p class="dialog-note" id="dialog-note"></p>
     </dialog>
 
     <div id="boot-error" class="boot-error" hidden>

@@ -14,7 +14,7 @@
 - [x] [SD card settings persistence](#sd-card-persistence)
 - [x] Dont require different channels for different regions. load a bin from SD card
 - [x] Restore the Nintendont menu and give a way to select the version, and configure the directory.
-- [ ] [Customizable GUI support](#customizable-gui)
+- [ ] [Customizable GUI support](#customizable-gui) — mechanism done (pinned `.guicfg` block + Gecko code from the site); only the QF timers render so far, the other four element types are still TODO
 - [ ] Gecko code porting (gecko_codes.md)
 - [ ] Emulator autodetect.
 - [ ] Settings menu pauses the game
@@ -22,7 +22,7 @@
     - A bit problematic to deal with because we _sorta_ need two different settings structs, and I dont want that, so we have to be more clever
 - [ ] Input tracing feature. Needs planning.
 - [ ] Switch everything to a single Clang compiler (based on the kuribo tree) that does PowerPC and ARM to simplify dependencies.
-- [ ] QFT doesnt pause on shine get grab when no shine get animation is on (maybe just my qft settings? probably not)
+- [ ] QFT doesnt pause on shine get grab when no shine get animation is on (maybe just my qft settings? probably not). Now worth re-testing against the native port: No Shine Get Animation replaces the `fireGetStar` call at `winDemo+0x88`, and the timer's stop hook is inside `fireGetStar` itself, so with that feature on the call never happens and the timer never stops.
 - [ ] Chatgpt critical review that codes have been implemented accurately
 - [ ] update readme its not just savestates anymore. update credits to people who made the codes
 - [ ] sound fix (warspyking)
@@ -34,7 +34,8 @@
     - And he says it would only save 5KiB.
 - [ ] Fast text broken on US
     - Can't reproduce?
-- [ ] restore help text about configurable gui elements in site  
+- [ ] restore help text about configurable gui elements in site
+- [ ] warp wheel too low
 
 ### Bindings
 

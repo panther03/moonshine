@@ -16,8 +16,10 @@
       import { loadRegion } from './js/text.js';
       import { makeElement, PRESETS } from './js/model.js';
       import { parseFormat } from './js/format.js';
-      import { serialize } from './js/serialize.js';
-      import { toHexDump, crc32 } from './js/util.js';
+      import { buildGecko, bgRect } from './js/gecko.js';
+
+      const hex4 = (r) => r.map((v) => (v & 0xffff).toString(16).toUpperCase().padStart(4, '0'))
+        .join('').replace(/^(.{8})/, '$1 ');
 
       const lines = [];
       const check = (name, actual, expected) => {
@@ -42,43 +44,37 @@
         check('spin is %s', parseFormat('<spin>', 'US').format, '%s');
         check('hex spec', parseFormat('<angle|04X>', 'US').format, '%04hX');
 
+        // Gecko output: only qft/qfst are emitted, everything else is dropped.
         const els = [makeElement('display', PRESETS.PAS.config), makeElement('qft')];
-        const bytes = serialize(els, 'US');
-        const dv = new DataView(bytes.buffer);
+        const { lines: code, dropped } = buildGecko(els, 'US');
+        check('display dropped', dropped, ['display']);
+        // 06 header + 32 bytes of qft config = 4 payload lines.
+        check('qft line count', code.length, 5);
+        // US __ArenaLo 0x80429800 + config 0x60
+        check('qft address line', code[0], '06429860 00000020');
+        // x=16, y=456
+        check('qft x/y', code[1].split(' ')[0], '001001C8');
+        // resolved bg rect: x0/y0 then x1/y1
+        check('qft bg rect', code[1].split(' ')[1] + ' ' + code[2].split(' ')[0],
+          hex4(bgRect(els[1], 'US')));
+        // fontSize 20, no gradient
+        check('qft fontSize', code[2].split(' ')[1], '00140000');
+        check('qft fg top/bottom', code[3], 'FFFFFFFF FFFFFFFF');
+        // bg 50% black, then freezeDuration 30 and its pad
+        check('qft bg + freeze', code[4], '00000080 001E0000');
 
-        check('magic', dv.getUint32(0), 0x53475549);
-        check('version', dv.getUint16(4), 1);
-        check('count', dv.getUint16(6), 2);
-        check('size field == length', dv.getUint32(8), bytes.length);
-        check('crc', dv.getUint32(12), crc32(bytes.subarray(16)));
+        const qfst = buildGecko([makeElement('qfst')], 'JP');
+        check('qfst address line', qfst.lines[0], '064260A0 0000001C');
+        check('qfst line count', qfst.lines.length, 5);
 
-        // element 0: display
-        check('el0 type', bytes[16], 0x01);
-        check('el0 enabled', bytes[17], 0x01);
-        const s0 = dv.getUint16(18);
-        check('el0 size 4-aligned', s0 % 4, 0);
-        check('el0 fontSize', bytes[16 + 4 + 4], 20);
-        check('el0 fieldCount', bytes[16 + 4 + 24], 6);
-        const fmtLen = bytes[16 + 4 + 25];
-        check('el0 fmtLen', fmtLen, pas.format.length + 1);
-        check('el0 field list', Array.from(bytes.subarray(16 + 4 + 26, 16 + 4 + 32)), [1, 2, 3, 4, 5, 6]);
-        const fmtOff = 16 + 4 + 32;
-        check('el0 fmt NUL-terminated', bytes[fmtOff + fmtLen - 1], 0);
-        check('el0 fmt bytes',
-          String.fromCharCode(...bytes.subarray(fmtOff, fmtOff + fmtLen - 1)), pas.format);
-        check('el0 size', s0, 4 + 24 + 2 + 6 + fmtLen + ((4 - ((4 + 24 + 2 + 6 + fmtLen) % 4)) % 4));
+        check('nothing configured emits nothing', buildGecko([], 'US').lines.length, 0);
 
-        // element 1: qft
-        const o1 = 16 + s0;
-        check('el1 type', bytes[o1], 0x02);
-        check('el1 size', dv.getUint16(o1 + 2), 32);
-        check('el1 x', dv.getInt16(o1 + 4), 16);
-        check('el1 y', dv.getInt16(o1 + 6), 456);
-        check('el1 bg rgba', dv.getUint32(o1 + 4 + 20), 0x00000080);
-        check('el1 freezeDuration', dv.getUint16(o1 + 4 + 24), 30);
-        check('total length', bytes.length, 16 + s0 + 32);
+        // The mod's compiled-in defaults must equal what this page emits for an
+        // untouched element, or a user who changes nothing still needs a code.
+        lines.push('<div>qft default rect ' + JSON.stringify(bgRect(makeElement('qft'), 'US')) +
+          ', qfst ' + JSON.stringify(bgRect(makeElement('qfst'), 'US')) + '</div>');
 
-        lines.push(`<pre>${bytes.length} bytes\n${toHexDump(bytes)}</pre>`);
+        lines.push(`<pre>${code.join('\n')}</pre>`);
       } catch (e) {
         lines.push(`<div class="bad">THREW ${e && e.stack ? e.stack : e}</div>`);
       }

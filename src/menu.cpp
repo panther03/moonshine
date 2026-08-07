@@ -15,7 +15,7 @@
 #include "susamune/binds.hxx"
 #include "susamune/glyphs.hxx"
 #include "susamune/settings.hxx"
-#include "susamune/util.hxx"
+#include "Dolphin/printf.h"
 #if ENABLE_DEBUG_WARPS
 #include "susamune/debug_warp.hxx"
 #endif
@@ -61,8 +61,10 @@ bool     sFontFixed   = false;  // font advances every glyph by sFontFixedW
 int      sFontFixedW  = 0;
 
 // -------- layout ----------------------------------------------------------
+// Vertical coordinates are in the game 2D space, whose visible band starts at
+// kScreen2DTop -- see menu.hxx.
 const int PANEL_X = 40;
-const int PANEL_Y = 20;
+const int PANEL_Y = kScreen2DTop + 20;
 const int PANEL_W = 560;
 const int PANEL_H = 400;
 
@@ -159,22 +161,14 @@ void bgmStatsDraw(Menu *menu) {
         }
     }
 
-    char text[20];
-    int  pos = 0;
-    text[pos++] = 'R';
-    text[pos++] = 'T';
-    text[pos++] = ':';
-    pos += Util::formatUInt(text + pos, freeRoots); 
-    text[pos++] = ' ';
-    text[pos++] = 'S';
-    text[pos++] = ':';
-    pos += Util::formatUInt(text + pos, JASystem::TrackMgr::seqRemain);
-    text[pos] = '\0';
+    char text[24];
+    snprintf(text, sizeof(text), "RT:%lu S:%lu", freeRoots,
+             JASystem::TrackMgr::seqRemain);
 
     const int size = 16;
     const int tw = Menu::textWidth(text, size);
-    const int x    = 640 - 20 - tw;
-    const int y    = 480 - 80 - size;
+    const int x    = kScreen2DWidth - 20 - tw;
+    const int y    = kScreen2DBottom - 48 - size;
     menu->fillBox(x, y, tw + 1, size + 1, col(0, 0, 0, 180));
     menu->drawText(text, x, y, size, size, col(255, 255, 255, 255));
 }
@@ -495,6 +489,8 @@ u8 sCosmeticBuf[sizeof(CategorySettingsTab)]   __attribute__((aligned(8)));
 u8 sMiscBuf[sizeof(CategorySettingsTab)]       __attribute__((aligned(8)));
 u8 sSavestateBuf[sizeof(CategorySettingsTab)]  __attribute__((aligned(8)));
 u8 sUiBuf[sizeof(CategorySettingsTab)]  __attribute__((aligned(8)));
+u8 sTimerBuf[sizeof(CategorySettingsTab)]      __attribute__((aligned(8)));
+u8 sQfFreezeBuf[sizeof(CategorySettingsTab)]   __attribute__((aligned(8)));
 u8 sBindsBuf[sizeof(BindsTab)]                 __attribute__((aligned(8)));
 }  // namespace
 
@@ -547,6 +543,8 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     mTabs[mNumTabs++] = new (sMiscBuf) CategorySettingsTab("Misc", SETTING_CAT_MISC);
     mTabs[mNumTabs++] = new (sSavestateBuf) CategorySettingsTab("Savestate", SETTING_CAT_SAVESTATE);
     mTabs[mNumTabs++] = new (sUiBuf) CategorySettingsTab("UI", SETTING_CAT_UI);
+    mTabs[mNumTabs++] = new (sTimerBuf) CategorySettingsTab("Timer", SETTING_CAT_TIMER);
+    mTabs[mNumTabs++] = new (sQfFreezeBuf) CategorySettingsTab("QF Freeze", SETTING_CAT_QF_FREEZE);
     mTabs[mNumTabs++] = new (sBindsBuf) BindsTab();
 }
 
@@ -591,22 +589,36 @@ int Menu::textWidth(const char *s, int sizeX) {
     return w;
 }
 
-void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color color) {
+void Menu::drawTextBaseline(const char *s, int x, int baseline, int sizeX, int sizeY,
+                            Color top, Color bottom) {
     mText.mCharSizeX      = sizeX;
     mText.mCharSizeY      = sizeY;
-    mText.mGradientTop    = color;
-    mText.mGradientBottom = color;
+    mText.mGradientTop    = top;
+    mText.mGradientBottom = bottom;
     mText.mStrPtr         = const_cast<char *>(s);
-    // `y` is the cell top; convert to the baseline J2DTextBox::draw expects.
-    int baseline = y + mFontAscent * sizeY / mFontHeight;
     mText.draw(x, baseline);
 }
 
+void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color color) {
+    // `y` is the cell top; convert to the baseline J2DTextBox::draw expects.
+    drawTextBaseline(s, x, y + mFontAscent * sizeY / mFontHeight, sizeX, sizeY, color,
+                     color);
+}
+
+// Re-establish the flat pos+colour vertex state before filling.
+//
+// This cannot be hoisted out to a once-per-frame call. J2DGrafContext::fillBox
+// reloads the position matrix and the blend mode itself but NOT the vertex
+// descriptor, and text drawing (JUTResFont, via J2DTextBox) switches that to a
+// textured layout -- so a fill after any text submits pos+colour into a
+// descriptor expecting a texture coordinate too, and renders as skewed garbage.
+// Menu content alternates fills and text, so nearly every fill really is the
+// first one after a text draw; a "has text been drawn since" flag was measured
+// at +88 bytes to skip one redundant call per frame, which is the wrong trade.
+//
+// setup2D() and not setPort(): it must not disturb the viewport and projection
+// afterDraw established.
 void Menu::fillBox(int x, int y, int w, int h, Color color) {
-    // Restore the flat pos+color vertex state before filling. J2DFillBox draws
-    // with whatever GX vertex descriptor is current, and J2DTextBox/JUTResFont
-    // switch it to a textured layout; without this, any fill after a text draw
-    // renders as skewed garbage. setup2D() leaves the projection alone.
     if (mOrtho) {
         mOrtho->setup2D();
     }
@@ -614,8 +626,6 @@ void Menu::fillBox(int x, int y, int w, int h, Color color) {
 }
 
 void Menu::fillPoly(const s16 *xy, int n, Color color) {
-    // setup2D() reasserts the flat vertex state and the position matrix, the
-    // same preconditions J2DGrafContext::fillBox relies on.
     if (!mOrtho) {
         return;
     }
@@ -624,7 +634,7 @@ void Menu::fillPoly(const s16 *xy, int n, Color color) {
     volatile u16 *const wgU16 = (volatile u16 *)0xCC008000;
     volatile u32 *const wgU32 = (volatile u32 *)0xCC008000;
 
-    mOrtho->setup2D();
+    mOrtho->setup2D();  // see fillBox: text drawing invalidates the descriptor
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
     GXBegin(GX_TRIANGLEFAN, GX_VTXFMT0, (u16)n);
     const u32 packed = ((u32)color.r << 24) | ((u32)color.g << 16) |
@@ -646,7 +656,7 @@ void Menu::switchTab(int dir) {
 // =====================================================================
 
 void Menu::toast(const char *msg) {
-    Util::copyString(mToastBuf, sizeof(mToastBuf), msg);
+    snprintf(mToastBuf, sizeof(mToastBuf), "%s", msg);
     mToastFrames = kToastFrames;
 }
 
@@ -659,7 +669,7 @@ void Menu::drawToast() {
     const int padX = 10;
     const int padY = 6;
     const int x    = 20;
-    const int y    = 412;
+    const int y    = kScreen2DTop + 412;
     const int w    = textWidth(mToastBuf, sz) + padX * 2;
     const int h    = sz + padY * 2;
 
@@ -703,10 +713,7 @@ void Menu::pollSettingsSave() {
         // FatFS FRESULT, so the failure can be looked up (7 = write protected,
         // 9 = invalid object, ...).
         char buf[48];
-        int  n = Util::appendString(buf, "Save failed (fs ");
-        n += Util::formatUInt(buf + n, gSettings.lastError());
-        buf[n++] = ')';
-        buf[n]   = '\0';
+        snprintf(buf, sizeof(buf), "Save failed (fs %lu)", gSettings.lastError());
         toast(buf);
         break;
     }
@@ -824,7 +831,7 @@ void Menu::draw(J2DOrthoGraph *ortho) {
     }
 
     // Dim the whole frame, then the panel on top.
-    fillBox(0, 0, 640, 480, cBackdrop());
+    fillBox(0, kScreen2DTop, kScreen2DWidth, kScreen2DHeight, cBackdrop());
     fillBox(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, cPanel());
     // Accent rule at the top edge of the panel.
     fillBox(PANEL_X, PANEL_Y, PANEL_W, 3, cAccent());

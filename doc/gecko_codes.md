@@ -185,9 +185,54 @@ Absorbs all the various 'savestate' codes (and the savestate function in D-Pad f
 
 ## QFT & QSFT
 
-TODO
+**Implemented** — `src/qftimer.cpp`; see doc/gecko_porting.md, "Quarterframe
+Timer + Section Timer", for the site-by-site derivation. Visibility, the section
+timer's reset behaviour and the eighteen freeze triggers are settings (the
+`Timer` and `QF Freeze` menu tabs); appearance is the pinned config block the
+web configurator overwrites with a Gecko code (`site/FORMAT.md`).
 
-- Misc timer for QFT. has its own page of settings.
+**It came to ~3.3 KB, against a 1536-byte `.gct` for the same two codes with
+every trigger on.** `qftimer.cpp` itself is 2561 bytes; the rest is the 21
+settings (descriptors + labels, ~540) and the two menu tabs. The excess over the
+gct is almost exactly the machinery the gct does not need, because a `.gct` is
+static and this is not:
+
+| | bytes |
+|---|---|
+| `gSites` + `qfTimerApply` + `installCaves` — install/uninstall a site per trigger toggle | 860 |
+| everything else in `qftimer.cpp` (caves, state machine, both renderers, the config block) | 1701 |
+
+1701 against the gct's 1536 is the like-for-like comparison, and the 336 bytes of
+caves are *less* than the asm the gct carries. Collapsing the eighteen triggers
+to a single on/off would recover most of the 860.
+
+The original requirement follows.
+
+Reimplement quarterframe timer gecko code exactly. It is very important that this code is implemented faithfully, because it is used for timing IL runs. Slight mismatches in behavior could ruin trust in the mod. Freezing behavior is controlled by the following toggles (from the original gecko code), which have entries in their own settings tab:
+
+- When a yellow coin is collected	
+- When a red coin is collected	
+- When a blue coin is collected	
+- When an item (e.g. nozzle) is collected	
+- When dialogue starts	
+- When a cutscene starts	
+- When an NPC is cleaned	
+- When a platform is destroyed in the Bowser fight	
+- When Yoshi is mounted	
+- When Mario holds an object	
+- When Mario throws an object	
+- When Mario puts down an object	
+- When Mario triple jumps	
+- When Mario spin jumps	
+- When Mario ledge grabs	
+- When Mario wall kicks	
+- When Mario bounces (e.g. on a roof)	
+- When Mario jumps from a rope
+
+Quarterframe section timer is behind a toggle in the settings menu as well to hide it. It adds an entry every time the timer freezes. There will be another setting to control the reset behavior of the quarterframe section timer; normally it clears the entries every time you restart the level, but should be toggleable so that it never resets.
+Should also be able to toggle the quarterframe timer to hide it. 
+
+The implementation of these features should not add more than 2KB total to the mod.
 
 ## Controller Display & Customized Display
 

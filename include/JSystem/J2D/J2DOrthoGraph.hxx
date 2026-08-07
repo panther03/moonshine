@@ -14,10 +14,11 @@ public:
     void setLookat();
     void scissorBounds(JUTRect *, JUTRect *);
 
-    JUTRect _D8;
-    u32 _DC;
-    u32 _E0;
-    u32 _E4;
-    f32 _E8;
-    f32 _EC;
+    // The coordinate space setPort() feeds to C_MTXOrtho, as distinct from
+    // mBounds, which is the viewport it is mapped onto. The two constructors
+    // always set this to (0, 0, w, h); assign it afterwards for a space whose
+    // origin is not (0, 0). See afterDraw() in src/main.cpp.
+    /* 0xD8 */ JUTRect mOrtho;
+    /* 0xE8 */ f32 mNear;
+    /* 0xEC */ f32 mFar;
 };
