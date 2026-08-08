@@ -185,26 +185,24 @@ Absorbs all the various 'savestate' codes (and the savestate function in D-Pad f
 
 ## QFT & QSFT
 
-**Implemented** — `src/qftimer.cpp`; see doc/gecko_porting.md, "Quarterframe
-Timer + Section Timer", for the site-by-site derivation. Visibility, the section
+**Implemented** — `src/qftimer.cpp`. **`doc/qft_correspondence.md` maps every
+line of both gecko codes onto the code that handles it**; doc/gecko_porting.md,
+"Quarterframe Timer + Section Timer", has the design rationale. Visibility, the section
 timer's reset behaviour and the eighteen freeze triggers are settings (the
 `Timer` and `QF Freeze` menu tabs); appearance is the pinned config block the
 web configurator overwrites with a Gecko code (`site/FORMAT.md`).
 
-**It came to ~3.3 KB, against a 1536-byte `.gct` for the same two codes with
-every trigger on.** `qftimer.cpp` itself is 2561 bytes; the rest is the 21
-settings (descriptors + labels, ~540) and the two menu tabs. The excess over the
-gct is almost exactly the machinery the gct does not need, because a `.gct` is
-static and this is not:
+**It came to ~3.1 KB, against a 1536-byte `.gct` for the same two codes with
+every trigger on** — the jp release blob went 23604 → 26660. About 540 of that
+is the 21 settings (descriptors + labels) and the rest of the difference is the
+two menu tabs, neither of which the gct offers. Within `qftimer.cpp`, roughly a
+third is `gSites` + `qfTimerApply` + `installCaves`, i.e. the ability to install
+and uninstall a site per trigger toggle, which a static `.gct` does not need;
+collapsing the eighteen triggers to a single on/off would recover most of it.
+The caves themselves are *less* asm than the gct carries.
 
-| | bytes |
-|---|---|
-| `gSites` + `qfTimerApply` + `installCaves` — install/uninstall a site per trigger toggle | 860 |
-| everything else in `qftimer.cpp` (caves, state machine, both renderers, the config block) | 1701 |
-
-1701 against the gct's 1536 is the like-for-like comparison, and the 336 bytes of
-caves are *less* than the asm the gct carries. Collapsing the eighteen triggers
-to a single on/off would recover most of the 860.
+A generic hook table with per-row capability flags cost twice what one mutable
+`Site` row and two straight loops do. Write these ports as transcriptions.
 
 The original requirement follows.
 

@@ -52,8 +52,7 @@ struct SusamuneQfState {
     /* 0x0C */ s32 freezeCtr;     // frames of hold left; -1 = indefinitely
     /* 0x10 */ s32 caveScratch;   // r4 spill for the changePlayerStatus cave
     /* 0x14 */ s32 lastQf;        // quarterframe of the last split
-    /* 0x18 */ s32 lastSeenQf;    // director quarterframe as of the last frame
-    /* 0x1C */ s32 pad;
+    /* 0x18 */ s32 pad[2];
     /* 0x20 */ s32 entries[16];   // split ring, indexed by count & 15
 };
 

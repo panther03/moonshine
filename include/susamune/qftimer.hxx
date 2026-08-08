@@ -22,9 +22,14 @@ void qfTimerApply();
 // TMarDirector::setupObjects() -- the point the upstream code hooks.
 void qfTimerOnStageLoad();
 
-// Advance the freeze counter, record a section split, and render both
-// overlays. Once per frame from afterDraw, which is this port's equivalent of
-// upstream's hook at the tail of TGCConsole2::perform.
-void qfTimerDraw();
+// Render whatever the last TGCConsole2::perform left to show, into `ortho`'s
+// space. From afterDraw.
+//
+// The freeze counter and the section splits are NOT advanced here -- that
+// happens in susamuneQfTick(), off the injected hook at the tail of
+// TGCConsole2::perform, which is upstream's site. Reaching that hook is also
+// what makes this draw anything at all, so the timers hide themselves outside
+// a stage without anything having to ask.
+void qfTimerDraw(void *ortho);
 
 #endif  // _SUSAMUNE_QFTIMER_HXX

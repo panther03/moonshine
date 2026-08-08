@@ -385,17 +385,34 @@ which advances 120 times a second. The five state words are upstream's
 `unk5C` is *not* `unk58` (the paused-aware frame counter) and not the `& 3`
 quarterframe field the Customized Display reads.
 
-**Four of upstream's hooks are not injections here**, because the mod already
-owns the same points in the frame:
+**`doc/qft_correspondence.md` maps every line of both gecko codes onto the part
+of `qftimer.cpp` that handles it, and lists every deliberate divergence.** Read
+that before changing anything here.
+
+**Two of upstream's hooks are not injections here**, because the mod already
+owns an indistinguishable point in the frame:
 
 | upstream site | replaced by |
 |---|---|
-| `direct+0x88` (the `unk260 = 1` store) | `qfTimerOnStageLoad()`, called from `onSetup` — which *is* the `bl setupObjects` one instruction earlier |
-| `TApplication::proc+0x34` (section-timer reset) | the same call; the only app-state iterations that can be observed are the ones that build a stage |
-| `~TMarDirector` (bank the outgoing ticks) | `lastSeenQf` is cached every frame and folded in at the next load. Nothing reads the timer in between |
-| the tail of `TGCConsole2::perform` (draw) | `qfTimerDraw()`, from `afterDraw` |
+| `direct+0x88` (the `unk260 = 1` store) | `qfTimerOnStageLoad()`, called from `onSetup` — which *is* the `bl setupObjects` two instructions earlier; the decomp shows the pair is straight-line |
+| `TApplication::proc+0x34` (section-timer reset) | the same call. Upstream also resets when the file-select director is built, but nothing draws the section timer between there and the next stage load |
 
-**Fourteen sites are left.** Eight are trailing `blr`s of a trigger function
+**Everything else is a real injection at upstream's own address**, including the
+two that an earlier cut of this port got wrong:
+
+- **The draw hook, at the tail of `TGCConsole2::perform`.** Rendering from
+  `afterDraw` instead was the single worst mistake in the first version. That
+  function is the in-game HUD, so hooking it is what hides both timers on the
+  title screen, the file select and the black frames of a transition — for free,
+  with nothing having to ask. It is also the console's own 2D space, so the
+  upstream coordinates land where upstream puts them, and it samples `unk5C` at
+  the same point in the frame, so the digits agree tick for tick.
+- **`~TMarDirector`, which banks the outgoing stage's ticks.** Caching `unk5C`
+  every frame and folding it in at the next load is *not* the same: the director
+  keeps ticking between the last drawn frame and its destructor, and the
+  difference lands in the banked total of a multi-area run.
+
+**Eighteen sites.** Eight are trailing `blr`s of a trigger function
 (`TCoin::taken`, `TCoinRed::taken`, `TItem::taken`, `TTalk2D2::openTalkWindow`,
 `fireStartDemoCamera`, `TBaseNPC::emitHappyEffect_`, `TBathtub::quake`,
 `TYoshi::ride`), so one `b` per site into a single seven-word cave that ends in
@@ -407,11 +424,21 @@ three-word `bl`s into the shared freezer). The seven status-based triggers
 (put down / triple jump / spin jump / ledge grab / wall kick / bounce / rope
 jump) share one site at `changePlayerStatus+0x194` whose cave calls into C —
 upstream open-codes one gecko comparison chain per enabled trigger, but a C
-dispatch is smaller and lets the set change without rebuilding. The last four
+dispatch is smaller and lets the set change without rebuilding. (The cave spills
+`r4` around the call because a C callee may clobber every volatile; the site
+disassembles to show `r4` is the only one live across it.) The remaining seven
 are the state machine itself: `fireGetStar+0x48` and `TBathtub::startDemo+0x21C`
-stop the timer for good, `changeState+0x328` arms a restart, and
-`setNextStage+0x50` deliberately does *not* — which is what carries the clock
-across a pipe or a secret course.
+stop the timer for good; `changeState+0x328` (quit to file select),
+`TCardLoad::changeScene+0x1278` (load a file) and
+`nextStateInitialize+0x56C` (die / restart) all arm a restart;
+`setNextStage+0x50` deliberately does *not*, which is what carries the clock
+across a pipe or a secret course; and `TGCConsole2::perform` draws.
+
+> **The two restart hooks were missing from the first cut**, which is why the
+> timer only ever restarted via quit-to-file-select. Both take the flag byte
+> from whatever register the displaced original happens to leave — `r28 + 1` at
+> one, a post-call `r5` at the other — and the port reproduces that rather than
+> substituting a tidy `1`.
 
 **Displaced originals are captured from the site, not hardcoded.** Each cave
 that overwrites a real instruction has a placeholder slot that `initCaves()`
@@ -438,6 +465,31 @@ has no way to find a mod global and reaches it by absolute address; the state is
 placed *first* so the config can grow without moving. The background rectangle
 is **resolved by the configurator**, as it is in the upstream codes -- that
 keeps font metrics out of the mod's draw path entirely.
+
+**Both timers render through the game's own code, not through `Menu`.** The
+draw hook runs inside `TGCConsole2::perform`, in the console's 2D space, so the
+`J2DOrthoGraph` `afterDraw` sets up does not exist yet — and the appearance has
+to match upstream's exactly anyway. So `drawBg` calls ScrnFader.cpp's file-local
+`fill_rect` by address (it is `static`, so `map_to_ld.py` never sees it), and
+`drawLine` is a transcription of the `drawText` dependency blob: a `J2DPrint`
+built in place on `gpSystemFont`, the font size poked into `mFontSizeX/Y` after
+construction, `initiate()` deliberately not called, and
+`J2DPrint::print(x, y, 0xFF, fmt, ...)` — which is `locate()` plus
+`print_alpha_va`, the same two calls the blob makes. Going through
+`Menu::drawTextBaseline` (i.e. `J2DTextBox::draw`) instead gets a different font
+object, a position matrix, `setSomeColors` and `initiate()`, and the two timers
+visibly disagree.
+
+> **`J2DGrafContext::setup2D` between the two elements is not tidy-up.**
+> `JUTResFont::drawChar_scale` ends with
+> `GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_CLR_RGBA, GX_F32, 0)`, so any text
+> draw leaves `VTXFMT0`'s position format as `f32`. `fill_rect` then writes
+> `GXPosition3s16` — six bytes where the GP expects twelve — and the FIFO
+> desyncs: Dolphin pops `GFX FIFO: Unknown Opcode` and the game hangs. Upstream
+> has the call because its two hooks are separate `C2` blocks with a `setup2D`
+> at the end of the first; folding them into one C function drops it, and the
+> section timer's background is the first thing to fall over. This is the same
+> hazard `Menu::fillBox` documents, one layer down.
 
 **On size.** The gct of both codes with every trigger enabled is 1536 bytes, and
 that is the yardstick a port has to answer to: the mod region is finite and

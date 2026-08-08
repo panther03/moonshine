@@ -36,6 +36,9 @@
     - Can't reproduce?
 - [ ] restore help text about configurable gui elements in site
 - [ ] warp wheel too low
+- [ ] error handling on read only SD card (susamune.ini write failure.. not triggering?)
+- [ ] just reimplement all this graphics stuff in terms of the drawText, fillRect,  etc. that the gecko codes use? Scrap all the Ortho stuff..
+- [ ] Open warp wheel. Hit reset. Close it. Reset doesn't work, and exit area takes you back to the main menu for some reason.
 
 ### Bindings
 

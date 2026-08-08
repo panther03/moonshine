@@ -11,24 +11,23 @@
 // The timer counts TMarDirector::unk5C, the director's logic-tick counter,
 // which advances 120 times a second.
 //
-// Four of upstream's hooks are not injections here, because the mod already
+// Two of upstream's hooks are not injections here, because the mod already
 // runs at those points:
 //
 //   direct+0x88 (the `unk260 = 1` store) -> qfTimerOnStageLoad(), called from
-//     onSetup, which IS the `bl setupObjects` one instruction earlier
-//   TApplication::proc+0x34 (section reset) -> the same call; the only
-//     app-state iterations that can be observed are the ones building a stage
-//   ~TMarDirector (bank the ticks) -> lastSeenQf is cached every frame and
-//     folded in at the next load; nothing reads the timer in between
-//   the tail of TGCConsole2::perform (draw) -> qfTimerDraw(), from afterDraw
+//     onSetup, which IS the `bl setupObjects` two instructions earlier
+//   TApplication::proc+0x34 (section reset) -> the same call. Upstream resets
+//     at the top of the app-state loop, which also fires when the file-select
+//     director is built; nothing draws the timer between there and the next
+//     stage load, so the two are indistinguishable.
 //
-// Fourteen sites are left. Eight are trailing `blr`s and share one cave, which
-// is upstream's own trick and is what makes a per-trigger toggle one word.
+// Everything else is a real injection at upstream's own address, including the
+// draw hook -- see gDrawCave. Eight of the freeze triggers are trailing `blr`s
+// and share one cave, which is upstream's trick and is what makes a per-trigger
+// toggle one word.
 //
 // Displaced originals are copied from the site at install time, so no cave
-// depends on a revision's encoding. That also preserves the two instructions
-// upstream drops (at changeState+0x328 and setNextStage+0x50, both the
-// zero-init of a stack TGameSequence field that is then passed by pointer).
+// depends on a revision's encoding.
 // =====================================================================
 
 #include "susamune/qftimer.hxx"
@@ -36,14 +35,17 @@
 #include "susamune/addresses.hxx"
 #include "susamune/features.hxx"  // writeGameCode, branchWord
 #include "susamune/gui_config.hxx"
-#include "susamune/menu.hxx"
 #include "susamune/settings.hxx"
 
 #include "Dolphin/OS.h"
-#include "Dolphin/printf.h"
+#include "SMS/System/Application.hxx"  // gpSystemFont
 #include "SMS/System/MarDirector.hxx"
 
 extern "C" void susamuneQfOnPlayerStatus(u32 status);
+extern "C" void susamuneQfTick();
+// J2DGrafContext::setup2D. The renderer re-enters 2D vertex state with it; see
+// "The GX state trap" in doc/qft_correspondence.md.
+extern "C" void qfSetup2D(void *) __asm__("setup2D__14J2DGrafContextFv");
 
 // Pinned at the link base by link_mod.py's --section-start, so a published
 // Gecko code keeps working across rebuilds. Defaults are upstream's.
@@ -88,6 +90,8 @@ const u32 kHa16  = ((kBlock + 0x8000u) >> 16) & 0xFFFFu;
 #define MR(rd, rs)       (0x7C000378u | ((u32)(rs) << 21) | ((u32)(rd) << 16) | ((u32)(rs) << 11))
 #define ADD(rd, ra, rb)  (0x7C000214u | ((u32)(rd) << 21) | ((u32)(ra) << 16) | ((u32)(rb) << 11))
 #define TRUNC4(ra, rs)   (0x54000000u | ((u32)(rs) << 21) | ((u32)(ra) << 16) | (29u << 1))
+#define CMPWI0(ra)       (0x2C000000u | ((u32)(ra) << 16))
+#define BNE(off)         (0x40820000u | ((u32)(off) & 0xFFFCu))
 #define BLR              0x4E800020u
 #define PATCHED          0x60000000u  // filled in by installCaves()
 
@@ -107,7 +111,11 @@ enum {
     CV_BATH   = CV_STAR + 11,
     CV_CHGST  = CV_BATH + 11,
     CV_NEXT   = CV_CHGST + 11,
-    CV_END    = CV_NEXT + 11,
+    CV_DRAW   = CV_NEXT + 11,
+    CV_DTOR   = CV_DRAW + 2,
+    CV_NSTAT  = CV_DTOR + 10,
+    CV_CARD   = CV_NSTAT + 4,
+    CV_END    = CV_CARD + 4,
 };
 
 u32 gCaves[] = {
@@ -233,7 +241,61 @@ u32 gCaves[] = {
     LI(0, -1),
     STW(0, 5, D(ST(freezeCtr))),
     PATCHED,  // +10 b -> site+4
+
+    // -- CV_DRAW: the tail of TGCConsole2::perform, upstream's draw hook.
+    //    The console is the in-game HUD, so reaching this instruction is
+    //    exactly the condition under which upstream's timers are visible --
+    //    never on the title screen, the file select, or the black frames of a
+    //    stage transition -- and it is the point in the frame at which
+    //    upstream samples the quarterframe.
+    //
+    //    This hook runs the state machine only; the pixels go out from
+    //    qfTimerDraw, off afterDraw. Upstream draws here, but issuing GX from
+    //    inside the console's teardown is not something the mod can afford to
+    //    get subtly wrong, and afterDraw is a context it already renders in
+    //    every frame. Same frame, same numbers, same 2D space.
+    //
+    //    The site is `addi r0,r3,-0x64B8` inside an elided destructor: the
+    //    store it feeds writes a vtable pointer into a stack object two
+    //    instructions before the frame is torn down. Upstream drops it, and so
+    //    does this -- origAt aims at the branch slot, which overwrites it.
+    PATCHED,  // +0 bl susamuneQfTick
+    PATCHED,  // +1 b -> site+4 (and the slot the dropped original lands in)
+
+    // -- CV_DTOR: ~TMarDirector. Banks the stage's ticks into the running
+    //    total, unless the timer has already stopped or a restart is armed.
+    //      lhz r0,0xB2 / cmpwi / bne / lwz r0,0xB4 / lwz r6,0x5C(r3) / add / stw
+    //    One `lhz` covers both flag bytes, which is why they are adjacent.
+    LIS(5),
+    LHZ(0, 5, D(ST(stopped))),
+    CMPWI0(0),
+    BNE(0x14),
+    LWZ(0, 5, D(ST(base))),
+    LWZ(6, 3, 0x5C),
+    ADD(0, 0, 6),
+    STW(0, 5, D(ST(base))),
+    PATCHED,  // +8 original
+    PATCHED,  // +9 b -> site+4
+
+    // -- CV_NSTAT: TMarDirector::nextStateInitialize+0x56C, and
+    // -- CV_CARD:  TCardLoad::changeScene+0x1278.
+    //    The two paths that arm a restart. Both take the flag from whatever the
+    //    displaced original left in a register, which is upstream's encoding
+    //    verbatim: `addi r4,r28,1` here, `cmpwi r3,1` there.
+    PATCHED,  // +0 original (addi r4,r28,1)
+    LIS(5),
+    STB(4, 5, D(ST(resetPending))),
+    PATCHED,  // +3 b -> site+4
+
+    PATCHED,  // +0 original (cmpwi r3,1)
+    LIS(3),
+    STB(5, 3, D(ST(resetPending))),
+    PATCHED,  // +3 b -> site+4
 };
+
+// A miscount here silently overlaps two caves, which executes as garbage.
+static_assert(sizeof(gCaves) / sizeof(gCaves[0]) == CV_END,
+              "gCaves is out of step with its index enum");
 
 // ---------------------------------------------------------------- sites ----
 //
@@ -270,6 +332,10 @@ Site gSites[] = {
     { SUSAMUNE_MEM1_ADDR(0x801D1F38u, 0x801FA380u, 0x801F2258u), 0, CV_BATH,  CV_CHGST,   9, kAlways                  },  // TBathtub::startDemo+0x21C
     { SUSAMUNE_MEM1_ADDR(0x800EC72Cu, 0x802991A8u, 0x80291040u), 0, CV_CHGST, CV_NEXT,    9, kAlways                  },  // changeState+0x328
     { SUSAMUNE_MEM1_ADDR(0x800ED8F0u, 0x8029A36Cu, 0x80292204u), 0, CV_NEXT,  CV_END,     0, kAlways                  },  // setNextStage+0x50
+    { SUSAMUNE_MEM1_ADDR(0x802069E0u, 0x801441C0u, 0x80138DFCu), 0, CV_DRAW,  CV_DTOR,    1, kAlways                  },  // TGCConsole2::perform, the draw hook
+    { SUSAMUNE_MEM1_ADDR(0x800EFA30u, 0x8029C520u, 0x802943FCu), 0, CV_DTOR,  CV_NSTAT,   8, kAlways                  },  // ~TMarDirector
+    { SUSAMUNE_MEM1_ADDR(0x800EBD78u, 0x8029880Cu, 0x802906A4u), 0, CV_NSTAT, CV_CARD,    0, kAlways                  },  // nextStateInitialize+0x56C
+    { SUSAMUNE_MEM1_ADDR(0x802257CCu, 0x80164E24u, 0x80159E9Cu), 0, CV_CARD,  CV_END,     0, kAlways                  },  // TCardLoad::changeScene+0x1278
 };
 const int kNumSites = (int)(sizeof(gSites) / sizeof(gSites[0]));
 // The changePlayerStatus row, the one gated by a group rather than a setting.
@@ -289,6 +355,10 @@ const u8 kStatusGate[] = {
 const int kNumStatus = (int)(sizeof(kStatus) / sizeof(kStatus[0]));
 
 bool gInited;
+// Set by the perform hook, consumed by the draw: "the console drew this frame,
+// and this is the total it computed".
+bool gVisible;
+s32  gShownTotal;
 
 bool engineOn() {
     return gSettings.getBool(SETTING_QF_TIMER) ||
@@ -307,32 +377,71 @@ __attribute__((noinline)) void installCaves() {
         c[s.origAt] = s.orig;
         c[last]     = branchWord((u32)&c[last], s.addr + 4);
     }
-    // The one cave that calls out to C.
+    // The two slots that call somewhere absolute.
     gCaves[CV_STATUS + 3] =
         branchWord((u32)&gCaves[CV_STATUS + 3], (u32)&susamuneQfOnPlayerStatus) | 1u;
+    gCaves[CV_DRAW] = branchWord((u32)&gCaves[CV_DRAW], (u32)&susamuneQfTick) | 1u;
 
     DCFlushRange(gCaves, sizeof(gCaves));
     ICInvalidateRange(gCaves, sizeof(gCaves));
     gInited = true;
 }
 
-JUtility::TColor col(u32 rgba) {
-    return JUtility::TColor((u8)(rgba >> 24), (u8)(rgba >> 16), (u8)(rgba >> 8), (u8)rgba);
+// ------------------------------------------------------------- rendering ---
+//
+// Transcribed from upstream's `drawText` library code (the `077F0238` blob the
+// two timers depend on) and from the fill_rect its draw hook calls. Not routed
+// through Menu: the draw hook runs inside TGCConsole2::perform, in the
+// console's own 2D space, not the one afterDraw sets up.
+
+// Storage for a J2DPrint (JSystem/J2D/J2DPrint.cpp, 0x64 bytes). Raw on
+// purpose: the game's constructor fills it in, and there is no destructor to
+// run (J2DPrint::~J2DPrint is empty).
+struct QfPrint {
+    u8  head[0x58];
+    s32 fontSizeX;  // 0x58, poked after construction; the ctor picks the
+    s32 fontSizeY;  // 0x5C  font's native size and upstream overrides it
+    u8  tail[0x08];
+};
+
+// Declared with their CodeWarrior names so the JUtility::TColor arguments can
+// be spelled as the pointers MWCC actually passes them as.
+extern "C" void qfPrintCtor(QfPrint *, void *font, int charSpace, int lineHeight,
+                            const u32 *fgTop, const u32 *fgBottom)
+    __asm__("__ct__8J2DPrintFP7JUTFontiiQ28JUtility6TColorQ28JUtility6TColor");
+extern "C" void qfPrintPrint(QfPrint *, int x, int y, u8 alpha, const char *fmt, ...)
+    __asm__("print__8J2DPrintFiiUcPCce");
+extern "C" void qfPrintInit(QfPrint *) __asm__("initiate__8J2DPrintFv");
+
+// ScrnFader.cpp's `fill_rect(const JDrama::TRect &, JUtility::TColor)`, the one
+// upstream's hook calls. File-local, so it is not in the linker scripts and has
+// to be an address. Both arguments arrive by pointer; TRect is four s32.
+typedef void (*QfFillRect)(const s32 *rect, const u32 *color);
+const QfFillRect qfFillRect =
+    (QfFillRect)SUSAMUNE_MEM1_ADDR(0x80201EA8u, 0x80140390u, 0x80134F0Cu);
+
+void drawBg(const SusamuneTextStyle &s) {
+    const s32 rect[4] = { s.bgX0, s.bgY0, s.bgX1, s.bgY1 };
+    qfFillRect(rect, &s.bg);
 }
 
 // One line of an element. Both timers print the same shape of number, so they
 // share the call: the section timer's format stops after two conversions.
+// `line` is upstream's per-line advance, which is the font size exactly.
 void drawLine(const SusamuneTextStyle &s, int line, const char *fmt, u32 a, u32 b, u32 c) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), fmt, a, b, c);
-    gMenu->drawTextBaseline(buf, s.x, s.y + line * s.fontSize, s.fontSize, s.fontSize,
-                            col(s.fgTop), col(s.fgBottom));
-}
-
-void drawBg(const SusamuneTextStyle &s) {
-    if (s.bg & 0xFFu) {
-        gMenu->fillBox(s.bgX0, s.bgY0, s.bgX1 - s.bgX0, s.bgY1 - s.bgY0, col(s.bg));
-    }
+    QfPrint p;
+    qfPrintCtor(&p, (void *)gpSystemFont, 0, s.fontSize, &s.fgTop, &s.fgBottom);
+    p.fontSizeX = s.fontSize;
+    p.fontSizeY = s.fontSize;
+    // initiate() -> JUTResFont::setGX(), which is the ONLY thing that turns
+    // GX_VA_TEX0 back on in the vertex descriptor. JUTResFont::drawChar_scale
+    // writes a GXTexCoord2u16 per vertex unconditionally, and fill_rect clears
+    // the descriptor down to POS + CLR0, so without this the glyph quads push
+    // four bytes a vertex that the GP never consumes and the FIFO desyncs.
+    // Upstream leaves it out and relies on the ambient descriptor; the game's
+    // own text path (J2DTextBox::draw) always calls it.
+    qfPrintInit(&p);
+    qfPrintPrint(&p, s.x, s.y + line * s.fontSize, 0xFF, fmt, a, b, c);
 }
 
 // A quarterframe is 1001/120 ms. divwu, as upstream: a negative total (the
@@ -392,13 +501,6 @@ void qfTimerApply() {
 void qfTimerOnStageLoad() {
     SusamuneQfState &st = gGuiBlock.qf;
 
-    // ~TMarDirector, deferred:
-    //   lhz r0,0xB2 / cmpwi 0 / bne / lwz r0,0xB4 / lwz r6,0x5C(r3) / add / stw
-    if ((st.stopped | st.resetPending) == 0) {
-        st.base += st.lastSeenQf;
-    }
-    st.lastSeenQf = 0;
-
     // direct+0x88: the freeze always clears, the timer only restarts when
     // something armed it. -4 is what makes the clock read 0:00.000 on the last
     // black frame of the load.
@@ -418,19 +520,16 @@ void qfTimerOnStageLoad() {
     }
 }
 
-void qfTimerDraw() {
-    if (!gMenu || !engineOn()) {
-        return;
-    }
+// Upstream's two draw hooks, minus the drawing: called from CV_DRAW, i.e. from
+// the tail of TGCConsole2::perform, which is where upstream advances the freeze
+// counter and records a split. Reaching it is also what makes the timers
+// visible this frame.
+//
+// Note that JDrama calls perform more than once per frame (once per perform
+// list), so this runs more than once per frame -- as upstream's hook does.
+extern "C" void susamuneQfTick() {
+    SusamuneQfState &st = gGuiBlock.qf;
 
-    SusamuneQfState         &st  = gGuiBlock.qf;
-    const SusamuneGuiConfig &cfg = gGuiBlock.cfg;
-
-    if (gpMarDirector) {
-        st.lastSeenQf = gpMarDirector->unk5C;
-    }
-
-    // The upstream draw hook, in order.
     s32 total = st.base;
     if (!st.stopped) {
         s32 live = gpMarDirector ? gpMarDirector->unk5C : 0;
@@ -447,18 +546,41 @@ void qfTimerDraw() {
     }
 
     // The section-timer hook, which runs straight after and reads that state.
+    // One entry per freeze, not one per frozen frame: freezeCtr stays non-zero
+    // for the whole hold, but lastQf catches up on the first frame of it.
     if (st.freezeCtr != 0 && st.freezeQf > st.lastQf) {
         st.entries[st.count & 15] = st.freezeQf - st.lastQf;
         st.lastQf                 = st.freezeQf;
         st.count++;
     }
 
+    gShownTotal = total;
+    gVisible    = true;
+}
+
+void qfTimerDraw(void *ortho) {
+    const bool visible = gVisible;
+    gVisible           = false;  // one frame of console draw buys one frame of timer
+    if (!visible) {
+        return;
+    }
+
+    const SusamuneGuiConfig &cfg = gGuiBlock.cfg;
+    const SusamuneQfState   &st  = gGuiBlock.qf;
+
+    // Every fill_rect needs the flat 2D vertex state, and every text draw needs
+    // the textured one that drawLine's initiate() establishes. See "The GX
+    // state trap" in doc/qft_correspondence.md -- getting this wrong desyncs
+    // the FIFO rather than just looking wrong.
+    qfSetup2D(ortho);
+
     if (gSettings.getBool(SETTING_QF_TIMER)) {
-        const u32 ms  = qfToMs(total);
+        drawBg(cfg.qft);
+        const u32 ms  = qfToMs(gShownTotal);
         const u32 sec = ms / 1000u;
         const u32 min = sec / 60u;
-        drawBg(cfg.qft);
         drawLine(cfg.qft, 0, "%lu:%02lu.%03lu", min, sec - min * 60u, ms - sec * 1000u);
+        qfSetup2D(ortho);
     }
 
     if (gSettings.getBool(SETTING_QF_SECTION_TIMER)) {
@@ -469,5 +591,6 @@ void qfTimerDraw() {
             const u32 sec = ms / 1000u;
             drawLine(cfg.qfst, line, "%2lu.%03lu", sec, ms - sec * 1000u, 0);
         }
+        qfSetup2D(ortho);
     }
 }

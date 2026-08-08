@@ -225,9 +225,11 @@ extern "C" void afterDraw() {
 #if ENABLE_DRAW_CALIBRATION
         drawCalibration();
 #endif
+        // Before the menu, as the game's own HUD is: this is the overlay the
+        // console would have drawn.
+        qfTimerDraw(&ortho);
         if (gMenu)
             gMenu->draw(&ortho);
-        qfTimerDraw();
         // After Menu::draw, which is what leaves mOrtho set for the shared
         // 2D primitives -- the same rule the warp wheel follows.
         if (!gSettings.getBool(SETTING_DISABLE_WARPS))

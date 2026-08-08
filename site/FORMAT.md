@@ -84,6 +84,12 @@ codes' configs.
 
 `y` is the text **baseline**, not the top edge.
 
+The two quarterframe timers draw from inside `TGCConsole2::perform`, exactly
+where the upstream codes draw, so they are in the console's own 2D space — the
+one the upstream configurator's numbers were authored against. Elements the mod
+renders from `afterDraw` use the same space; that is what the calibration below
+established.
+
 Measured, not inferred: the mod has an `ENABLE_DRAW_CALIBRATION` build option
 that overlays a labelled ruler in its own draw space. Two plausible-sounding
 derivations from the decomp's render-mode setup and from this page's own
