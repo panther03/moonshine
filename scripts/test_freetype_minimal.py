@@ -9,6 +9,60 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _archive_member(archive: bytes, wanted: str) -> bytes:
+    """Return one member from a GNU ar archive without external tools."""
+    if not archive.startswith(b"!<arch>\n"):
+        raise AssertionError("invalid FreeType archive")
+    offset = 8
+    long_names = b""
+    while offset < len(archive):
+        header = archive[offset:offset + 60]
+        if len(header) != 60 or header[58:60] != b"`\n":
+            raise AssertionError("invalid FreeType archive member")
+        size = int(header[48:58].decode("ascii").strip())
+        data_start = offset + 60
+        data = archive[data_start:data_start + size]
+        raw_name = header[:16].decode("ascii").strip()
+        if raw_name == "//":
+            long_names = data
+        elif raw_name.startswith("/") and raw_name[1:].isdigit():
+            name_start = int(raw_name[1:])
+            name_end = long_names.find(b"/\n", name_start)
+            if name_end < 0:
+                raise AssertionError("invalid GNU ar name table")
+            name = long_names[name_start:name_end].decode("ascii")
+            if name == wanted:
+                return data
+        elif raw_name.rstrip("/") == wanted:
+            return data
+        offset = data_start + size + (size & 1)
+    raise AssertionError(f"missing archive member {wanted}")
+
+
+def _elf_section(elf: bytes, wanted: str) -> bytes:
+    """Return one section from a big-endian ELF32 object."""
+    if elf[:6] != b"\x7fELF\x01\x02":
+        raise AssertionError("invalid PowerPC ELF member")
+    header = struct.unpack_from(">HHIIIIIHHHHHH", elf, 16)
+    section_offset = header[5]
+    section_entry_size = header[10]
+    section_count = header[11]
+    name_index = header[12]
+    sections = [
+        struct.unpack_from(">IIIIIIIIII", elf,
+                           section_offset + index * section_entry_size)
+        for index in range(section_count)
+    ]
+    names_header = sections[name_index]
+    names = elf[names_header[4]:names_header[4] + names_header[5]]
+    for section in sections:
+        end = names.find(b"\0", section[0])
+        name = names[section[0]:end].decode("ascii")
+        if name == wanted:
+            return elf[section[4]:section[4] + section[5]]
+    raise AssertionError(f"missing ELF section {wanted}")
+
+
 class MinimalFreeTypeTests(unittest.TestCase):
     def test_embedded_font_is_unicode_truetype_outline(self) -> None:
         archive = ROOT / "launcher" / "loader" / "data" / "font.zip"
@@ -76,19 +130,28 @@ class MinimalFreeTypeTests(unittest.TestCase):
         self.assertRegex(public, r"#define FREETYPE_MINOR\s+4")
         self.assertRegex(public, r"#define FREETYPE_PATCH\s+12")
         self.assertIn("/* #define TT_CONFIG_OPTION_BYTECODE_INTERPRETER */", options)
-        self.assertIn("/* #define TT_CONFIG_OPTION_UNPATENTED_HINTING */",
-                      options)
-        self.assertNotRegex(
+        self.assertRegex(
             options, r"(?m)^\s*#define TT_CONFIG_OPTION_UNPATENTED_HINTING$")
         self.assertEqual(
             hashlib.sha256(archive_bytes).hexdigest().upper(),
-            "250649849EA117286D8A8F4D64448DB403D6C0C74297E637CE3E48BC7832678C")
+            "0A99B683903BBA63C325EA865FB3279B1315DD2A0B488F1FC4E2C49A1B6F7E70")
         self.assertIn(b"GCC: (devkitPPC release 35) 8.3.0", archive_bytes)
 
         audit = (ROOT / "doc" / "v2.2.0-freetype-audit.md").read_text(
             encoding="utf-8")
         self.assertIn("VER-2-4-12", audit)
         self.assertIn("cecf93ef90c660a8b0b45e5adbbfb5ea443fb6b9", audit)
+
+    def test_truetype_face_layout_matches_the_legacy_sfnt_member(self) -> None:
+        archive = (ROOT / "launcher" / "loader" / "extlibs" / "lib" /
+                   "libfreetype.a").read_bytes()
+        truetype = _archive_member(archive, "truetype.o")
+        driver = _elf_section(truetype, ".rodata.tt_driver_class")
+
+        # sfnt.o was built with the legacy hinter field and reads the
+        # postscript_name pointer at +0x298.  A 0x310 face is four bytes short
+        # and makes that cleanup path free glyf_len instead.
+        self.assertEqual(struct.unpack_from(">I", driver, 0x24)[0], 0x314)
 
     def test_superbuild_enables_and_forwards_allowlist(self) -> None:
         top = (ROOT / "launcher" / "CMakeLists.txt").read_text(encoding="utf-8")
