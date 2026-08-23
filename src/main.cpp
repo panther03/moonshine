@@ -31,6 +31,7 @@
 #include "susamune/qft_display.hxx"
 #include "susamune/records.hxx"
 #include "susamune/records_persistence.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/split_events.hxx"
 #include "susamune/split_stats.hxx"
 #include "susamune/stage_loader.hxx"
@@ -80,6 +81,7 @@ extern "C" void onAppInit(TApplication* app) {
     app->initialize();
     CrashReport::init();
     gSettings.init();
+    rngControlInit();
     gQFTTimer.init();
     Ghost::init();
     GhostModel::init();
@@ -185,6 +187,7 @@ extern "C" void onSetup(TMarDirector* director) {
     if (Ghost::observerCleanupPending())
         ILing::resetAfterObserver();
     ILing::beforeStageSetup();
+    rngControlBeforeStageSetup();
     director->setupObjects();
     CrashReport::note(SUSAMUNE_CRASH_EVENT_SETUP_RETURN,
                       static_cast<u32>(director->mAreaID) << 8 |
@@ -311,6 +314,7 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
          wheelOpenBeforeDirect || WarpWheel::promptPending()))
         WarpWheel::update(gpApplication.mGamePads[0]);
     PatternSelector::update(!creationEditing && !sessionResultBeforeDirect);
+    rngControlApply();
 
     // Freeze the stage while an overlay is up. direct() runs the movement and
     // animation perform lists only outside the pause and stage-exit states, so

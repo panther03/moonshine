@@ -45,6 +45,13 @@ const ChompletPath kChompletPaths[] = {
 
 const u8 kBossPaths[3] = { 0x1e, 0x6e, 0x20 };  // left, up, right
 
+// One authored outgoing edge for every Bianco Petey graph node. The stop
+// sequence is 3 (N1) -> 10 (S1) -> 8 (S2) -> 12 (S3); 16 and 9 are the
+// retail non-stop transit back to S1.
+const u8 kPeteyPath[] = {
+    1, 2, 3, 10, 3, 4, 7, 8, 12, 10, 8, 4, 16, 3, 11, 12, 9, 3,
+};
+
 bool inPlayableStage() {
     return gpMarDirector && gpMarDirector->mCurState == TMarDirector::STATE_NORMAL;
 }
@@ -93,6 +100,12 @@ int selectedNode(TSpineEnemy *enemy, int current, int previous) {
         }
     }
     return -1;
+}
+
+bool forcesPeteyRoute(TSpineEnemy *enemy) {
+    return gSettings.getBool(SETTING_PETEY_ROUTE) && gpMarDirector &&
+           gpMarDirector->mAreaID == 2 && gpMarDirector->mEpisodeID == 4 &&
+           *(const u32 *)enemy == SUSAMUNE_VT_BOSS_PAKKUN;
 }
 
 }  // namespace
@@ -161,9 +174,18 @@ extern "C" void susamuneGoToRandomNextGraphNode(TSpineEnemy *enemy) {
         tracer->setTo(findNearest(graph, enemy->mTranslation, (u32)-1));
     } else {
         const int current = tracer->getCurGraphIndex();
-        int next = selectedNode(enemy, current, tracer->mPreviousNode);
-        if (next < 0) {
+        int next;
+        if (forcesPeteyRoute(enemy)) {
+            // Preserve the conditional retail RNG advance even though its edge
+            // choice is replaced. The graph node itself is the route phase.
             next = graph->getRandomNextIndex(current, tracer->mPreviousNode, (u32)-1);
+            if ((u32)current < sizeof(kPeteyPath)) next = kPeteyPath[current];
+        } else {
+            next = selectedNode(enemy, current, tracer->mPreviousNode);
+            if (next < 0) {
+                next = graph->getRandomNextIndex(current, tracer->mPreviousNode,
+                                                 (u32)-1);
+            }
         }
         tracer->moveTo(next);
     }

@@ -76,6 +76,16 @@ patches = [
     # Chomplet / Chain Chomp graph node when Pattern Selector is enabled.
     {'jp': 0x8024f2dc, 'us': 0x8003b6ac, 'pal': 0x8003b4fc,
      'sym': 'susamuneGoToRandomNextGraphNode', 'type': PatchType.B},
+    # King Boo: preserve forceStopSlot(), then optionally arm this reel's
+    # targeted fruit stop. This is the unique SlotStart semantic call.
+    {'jp': 0x802d0f78, 'us': 0x800be8e8, 'pal': 0x800b7f88,
+     'sym': 'susamuneForceKingBooFruit', 'type': PatchType.BL},
+    # Ricco cranes: retail rand still runs once; the shims forward the live
+    # actor from each caller's nonvolatile register so its roll can be retained.
+    {'jp': 0x801a5ed0, 'us': 0x801ce318, 'pal': 0x801c61d0,
+     'sym': 'gCraneUpDownRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a625c, 'us': 0x801ce6a4, 'pal': 0x801c655c,
+     'sym': 'gCraneRotYRandShim', 'type': PatchType.BL},
 ]
 
 # The mod is linked into a region carved from the BOTTOM of the game's heap

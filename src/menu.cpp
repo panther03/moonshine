@@ -3074,12 +3074,15 @@ const u8 kSettingSectionStarts[] = {
     SETTING_TIMER_SECTIONS,
     SETTING_SAVE_RNG_STATE,
     SETTING_SAVESTATE_FEEDBACK,
+    SETTING_KING_BOO_ALWAYS_FRUIT,
+    SETTING_PETEY_NO_TORNADO,
+    SETTING_RICCO_CRANE_SPEED,
 };
 const char kSettingSectionNames[] =
     "GENERAL\0SKIPS & UNLOCKS\0YOSHI EGGS\0WORLD RULES\0SAVE PROMPTS\0"
     "LEVEL RULES\0PRACTICE TOOLS\0PATTERNS\0BOX GAMES\0PRESENTATION\0WORLD\0"
     "DIAGNOSTICS\0PRACTICE FEEDBACK\0DISPLAY\0FREEZE EVENTS\0"
-    "SECTION HISTORY\0STATE\0FEEDBACK";
+    "SECTION HISTORY\0STATE\0FEEDBACK\0KING BOO\0PETEY\0RICCO CRANE";
 
 }  // namespace
 
@@ -3089,7 +3092,11 @@ public:
         : mSel(0), mCat(cat), mTitleOffset(titleOffset), mResetConfirm(0) {}
 
     const char *title() const override { return kCategoryTitles + mTitleOffset; }
-    bool favoriteHint() const override { return true; }
+    bool favoriteHint() const override {
+        u8 ids[SETTING_COUNT];
+        const int settings = buildList(ids);
+        return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;
+    }
     bool grabsInput() const override {
         return mResetConfirm ||
                (hasVisualEditor() && gCreationExtras.editing());
@@ -3153,7 +3160,7 @@ public:
             return;
         }
         SettingId id = (SettingId)ids[mSel];
-        if (rapid & TMarioGamePad::X) {
+        if ((rapid & TMarioGamePad::X) && id < SETTING_FAVORITES_0) {
             gSettings.toggleFavorite(id);
             menu->toast(gSettings.favorite(id)
                             ? "Added to Shined"
@@ -3275,7 +3282,11 @@ private:
             const SettingId id = (SettingId)i;
             const bool include = isRng()
                 ? id == SETTING_ANY_FRUIT_YOSHI ||
-                      id == SETTING_PATTERN_SELECTOR
+                      id == SETTING_PATTERN_SELECTOR ||
+                      id == SETTING_KING_BOO_ALWAYS_FRUIT ||
+                      id == SETTING_PETEY_NO_TORNADO ||
+                      id == SETTING_PETEY_ROUTE ||
+                      id == SETTING_RICCO_CRANE_SPEED
                 : isStarred()
                     ? Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)

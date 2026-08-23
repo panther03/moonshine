@@ -107,16 +107,21 @@ class GelatoGbsContracts(unittest.TestCase):
             r"X\((SETTING_[A-Z0-9_]+),\s*\"[^\"]+\"\)",
             SETTINGS.read_text(encoding="utf-8"),
         )
+        first = setting_rows.index("SETTING_TIMER_FREEZE_MOVING_PLATFORM")
         self.assertEqual(
-            setting_rows[-3:],
+            setting_rows[first : first + 3],
             [
                 "SETTING_TIMER_FREEZE_MOVING_PLATFORM",
                 "SETTING_LEVEL_SPLITS",
                 "SETTING_STREAK_AUTO_RESET",
             ],
         )
+        desc_lines = DESCS.read_text(encoding="utf-8").strip().splitlines()
+        first_desc = desc_lines.index(
+            'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)'
+        )
         self.assertEqual(
-            DESCS.read_text(encoding="utf-8").strip().splitlines()[-3:],
+            desc_lines[first_desc : first_desc + 3],
             [
                 'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)',
                 'SBOOL("Level splits", 1, SETTING_CAT_TIMER)',
