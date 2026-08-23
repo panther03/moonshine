@@ -173,7 +173,8 @@
     X(SETTING_KING_BOO_ALWAYS_FRUIT,        "king_boo_always_fruit")          \
     X(SETTING_PETEY_NO_TORNADO,             "petey_no_tornado")               \
     X(SETTING_PETEY_ROUTE,                  "petey_route")                    \
-    X(SETTING_RICCO_CRANE_SPEED,            "ricco_crane_speed")
+    X(SETTING_RICCO_CRANE_SPEED,            "ricco_crane_speed")             \
+    X(SETTING_RICCO_FRUIT_MACHINE,          "ricco_fruit_machine")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

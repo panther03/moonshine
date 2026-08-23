@@ -30,6 +30,9 @@ public:
     void update(TMarioGamePad *pad);
     void draw(J2DOrthoGraph *ortho);
 
+    // Drawn after every other overlay so assisted footage cannot hide it.
+    void drawInvalidIlWarning();
+
     bool shown() const { return mShown; }
     // A tab-owned confirmation may still read A/B directly while configured
     // actions stay silent until those buttons are released.

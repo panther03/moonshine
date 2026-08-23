@@ -36,6 +36,7 @@ public:
     void stageWallkickInto(volatile SusamuneWallkickStyleCfg *dst) const;
 
     void onStageSetup();
+    void onSavestateLoaded();
     void restoreHudDefaults();
     void update();
     void draw(Menu *menu) const;

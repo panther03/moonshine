@@ -31,6 +31,7 @@
 #include "susamune/qft_display.hxx"
 #include "susamune/records.hxx"
 #include "susamune/records_persistence.hxx"
+#include "susamune/ricco_fruit.hxx"
 #include "susamune/rng_control.hxx"
 #include "susamune/split_events.hxx"
 #include "susamune/split_stats.hxx"
@@ -82,6 +83,7 @@ extern "C" void onAppInit(TApplication* app) {
     CrashReport::init();
     gSettings.init();
     rngControlInit();
+    riccoFruitControlInit();
     gQFTTimer.init();
     Ghost::init();
     GhostModel::init();
@@ -188,6 +190,7 @@ extern "C" void onSetup(TMarDirector* director) {
         ILing::resetAfterObserver();
     ILing::beforeStageSetup();
     rngControlBeforeStageSetup();
+    riccoFruitControlBeforeStageSetup();
     director->setupObjects();
     CrashReport::note(SUSAMUNE_CRASH_EVENT_SETUP_RETURN,
                       static_cast<u32>(director->mAreaID) << 8 |
@@ -442,5 +445,7 @@ extern "C" void afterDraw() {
         if (!sessionModal &&
             (!gSettings.getBool(SETTING_DISABLE_WARPS) || WarpWheel::shown()))
             WarpWheel::draw();
+        if (gMenu)
+            gMenu->drawInvalidIlWarning();
     }
 }

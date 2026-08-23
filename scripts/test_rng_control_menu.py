@@ -19,7 +19,7 @@ class RngControlMenuTests(unittest.TestCase):
             'SBOOL("Pattern selector", 0, SETTING_CAT_CUSTOM)', descs
         )
         self.assertIn(
-            'SBOOL("Always rolls fruit", 0, SETTING_CAT_CUSTOM)', descs
+            'SBOOL("Fruit every other roll", 0, SETTING_CAT_CUSTOM)', descs
         )
         self.assertIn(
             'SBOOL("Disable tornado", 0, SETTING_CAT_CUSTOM)', descs
@@ -33,6 +33,11 @@ class RngControlMenuTests(unittest.TestCase):
             "SETTING_CAT_CUSTOM)",
             descs,
         )
+        self.assertIn(
+            'SCHOICE("Fruit", 0, CHOICES_RICCO_FRUIT_MACHINE, '
+            "SETTING_CAT_CUSTOM)",
+            descs,
+        )
         self.assertIn('"RNG Control\\0Shined"', menu)
         self.assertIn("const u8 kRngCategory = SETTING_CAT_COUNT + 1;", menu)
         self.assertIn("id == SETTING_ANY_FRUIT_YOSHI", menu)
@@ -41,7 +46,11 @@ class RngControlMenuTests(unittest.TestCase):
         self.assertIn("id == SETTING_PETEY_NO_TORNADO", menu)
         self.assertIn("id == SETTING_PETEY_ROUTE", menu)
         self.assertIn("id == SETTING_RICCO_CRANE_SPEED", menu)
-        self.assertIn("FEEDBACK\\0KING BOO\\0PETEY\\0RICCO CRANE", menu)
+        self.assertIn("id == SETTING_RICCO_FRUIT_MACHINE", menu)
+        self.assertIn(
+            "FEEDBACK\\0KING BOO\\0PETEY\\0RICCO CRANE\\0", menu
+        )
+        self.assertIn('"RICCO FRUIT MACHINE"', menu)
         self.assertIn("practice, savestate, timer, gameplay, rng,", menu)
         self.assertIn(
             "return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;",

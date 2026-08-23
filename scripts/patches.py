@@ -86,6 +86,17 @@ patches = [
      'sym': 'gCraneUpDownRandShim', 'type': PatchType.BL},
     {'jp': 0x801a625c, 'us': 0x801ce6a4, 'pal': 0x801c655c,
      'sym': 'gCraneRotYRandShim', 'type': PatchType.BL},
+    # Ricco fruit launcher: one shared shim identifies the three selection
+    # calls and first velocity call by LR. Every reached site still calls
+    # retail rand exactly once; the velocity result is never substituted.
+    {'jp': 0x801a50f8, 'us': 0x801cd540, 'pal': 0x801c53f8,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5214, 'us': 0x801cd65c, 'pal': 0x801c5514,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5330, 'us': 0x801cd778, 'pal': 0x801c5630,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5464, 'us': 0x801cd8ac, 'pal': 0x801c5764,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
 ]
 
 # The mod is linked into a region carved from the BOTTOM of the game's heap

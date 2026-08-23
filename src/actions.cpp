@@ -86,6 +86,7 @@ void regrabLastHeldObject() {
         return;
     }
 
+    ILing::invalidateForAssist();
     mario->mGrabTarget = gLastHeldObject;
     mario->mState      = kMarioStatusTake;
     if (gLastHeldObject->receiveMessage(mario, kHitMessageTake)) {
@@ -224,6 +225,7 @@ void spawnYoshi(u8 color) {
     mario->changePlayerStatus(kMarioStatusWait, 0, false);
 
     gEggKillFrames = 2;  // survives this frame's countdown, see gEggKillFrames
+    ILing::invalidateForAssist();
 }
 
 void spawnYoshiFromBinds() {

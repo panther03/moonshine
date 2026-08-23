@@ -28,6 +28,7 @@
 #include "susamune/raw_prompt_input.hxx"
 #include "susamune/records.hxx"
 #include "susamune/records_persistence.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/settings.hxx"
 #include "susamune/split_stats.hxx"
 #include "susamune/stage_loader.hxx"
@@ -58,6 +59,23 @@ namespace {
 typedef JUtility::TColor Color;
 
 inline Color col(u8 r, u8 g, u8 b, u8 a) { return Color(r, g, b, a); }
+inline Color warningForeground(Color color, bool menuShown) {
+    if (!menuShown && rngControlInvalidatesIl() &&
+        (u16)color.r + color.g + color.b > 192) {
+        color.r = 255;
+        color.g = 0;
+        color.b = 0;
+    }
+    return color;
+}
+inline Color warningText(Color color, bool menuShown) {
+    if (!menuShown && rngControlInvalidatesIl()) {
+        color.r = 255;
+        color.g = 0;
+        color.b = 0;
+    }
+    return color;
+}
 inline int clampi(int value, int lo, int hi) {
     if (value < lo) return lo;
     if (value > hi) return hi;
@@ -212,6 +230,7 @@ public:
     // the menu's input grab and stage-freeze behaviour.
     virtual bool fullScreen() const { return false; }
     virtual bool favoriteHint() const { return false; }
+    virtual bool available() const { return true; }
     virtual void focus() {}
     // Protected PB saves may need to route through a nested Ghosts page.
     virtual bool beginProtectedPBSave(Menu *, u32) { return false; }
@@ -3077,12 +3096,14 @@ const u8 kSettingSectionStarts[] = {
     SETTING_KING_BOO_ALWAYS_FRUIT,
     SETTING_PETEY_NO_TORNADO,
     SETTING_RICCO_CRANE_SPEED,
+    SETTING_RICCO_FRUIT_MACHINE,
 };
 const char kSettingSectionNames[] =
     "GENERAL\0SKIPS & UNLOCKS\0YOSHI EGGS\0WORLD RULES\0SAVE PROMPTS\0"
     "LEVEL RULES\0PRACTICE TOOLS\0PATTERNS\0BOX GAMES\0PRESENTATION\0WORLD\0"
     "DIAGNOSTICS\0PRACTICE FEEDBACK\0DISPLAY\0FREEZE EVENTS\0"
-    "SECTION HISTORY\0STATE\0FEEDBACK\0KING BOO\0PETEY\0RICCO CRANE";
+    "SECTION HISTORY\0STATE\0FEEDBACK\0KING BOO\0PETEY\0RICCO CRANE\0"
+    "RICCO FRUIT MACHINE";
 
 }  // namespace
 
@@ -3286,7 +3307,8 @@ private:
                       id == SETTING_KING_BOO_ALWAYS_FRUIT ||
                       id == SETTING_PETEY_NO_TORNADO ||
                       id == SETTING_PETEY_ROUTE ||
-                      id == SETTING_RICCO_CRANE_SPEED
+                      id == SETTING_RICCO_CRANE_SPEED ||
+                      id == SETTING_RICCO_FRUIT_MACHINE
                 : isStarred()
                     ? Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)
@@ -3353,6 +3375,7 @@ public:
     CreationTab() : mSel(ROW_QFT_EDITOR) {}
 
     const char *title() const override { return "Creation"; }
+    bool available() const override { return !rngControlInvalidatesIl(); }
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
                gMetadataDisplay.editing() || gCreationExtras.editing();
@@ -4490,6 +4513,10 @@ public:
             mSel = (u8)wrap(mSel + 1, mCount);
         }
         if (mNavInput.update() & JUTGamePad::A) {
+            if (!mChildren[mSel]->available()) {
+                menu->toast("Disable boss RNG controls first");
+                return;
+            }
             mPage = (s8)mSel;
             mNavInput.begin(JUTGamePad::B);
         }
@@ -4505,8 +4532,10 @@ public:
                     drawSectionHeader(menu, x, ry, w, section);
                     ry += ROW_H;
                 }
-                drawValueRow(menu, x, ry, w, mChildren[i]->title(), nullptr,
-                             i == mSel, false, true);
+                const bool available = mChildren[i]->available();
+                drawValueRow(menu, x, ry, w, mChildren[i]->title(),
+                             available ? nullptr : "Disabled",
+                             i == mSel, false, available);
                 ry += ROW_H;
             }
             return;
@@ -4528,7 +4557,9 @@ private:
     enum { MAX_CHILDREN = 9 };
 
     MenuTab *current() const {
-        return mPage >= 0 && mPage < mCount ? mChildren[mPage] : nullptr;
+        MenuTab *child = mPage >= 0 && mPage < mCount
+                             ? mChildren[mPage] : nullptr;
+        return child && child->available() ? child : nullptr;
     }
 
     const char *sectionName(int child) const {
@@ -4875,6 +4906,7 @@ int Menu::textWidth(const char *s, int sizeX) {
 }
 
 void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color color) {
+    color = warningText(color, mShown);
     mText.mCharSizeX      = sizeX;
     mText.mCharSizeY      = sizeY;
     mText.mGradientTop    = color;
@@ -4891,6 +4923,7 @@ void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color col
 #if ENABLE_SAVESTATE_DBG
 void Menu::drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
                             Color color) {
+    color = warningText(color, mShown);
     mText.mCharSizeX      = sizeX;
     mText.mCharSizeY      = sizeY;
     mText.mGradientTop    = color;
@@ -4904,6 +4937,7 @@ void Menu::drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
 #endif
 
 void Menu::fillBox(int x, int y, int w, int h, Color color) {
+    color = warningForeground(color, mShown);
     // Restore the flat pos+color vertex state before filling. J2DFillBox draws
     // with whatever GX vertex descriptor is current, and J2DTextBox/JUTResFont
     // switch it to a textured layout; without this, any fill after a text draw
@@ -4950,11 +4984,11 @@ __attribute__((noinline)) void drawPolygon(J2DOrthoGraph *ortho,
 }  // namespace
 
 void Menu::fillPoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, false, color);
+    drawPolygon(mOrtho, xy, n, false, warningForeground(color, mShown));
 }
 
 void Menu::strokePoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, true, color);
+    drawPolygon(mOrtho, xy, n, true, warningForeground(color, mShown));
 }
 
 void Menu::switchTab(int dir) {
@@ -5209,7 +5243,10 @@ void Menu::update(TMarioGamePad *pad) {
         switchTab(+1);
     }
 
+    const bool invalidBefore = rngControlInvalidatesIl();
     mTabs[mCurTab]->update(this, pad);
+    if (invalidBefore != rngControlInvalidatesIl())
+        gCreationExtras.update();
 }
 
 void Menu::draw(J2DOrthoGraph *ortho) {
@@ -5281,6 +5318,17 @@ void Menu::draw(J2DOrthoGraph *ortho) {
     drawToast();
     drawAchievementBanner(this);
     bgmStatsDraw(this);
+}
+
+void Menu::drawInvalidIlWarning() {
+    if (!rngControlInvalidatesIl()) return;
+    const char *text = "INVALID IL";
+    const int size = 18;
+    const int x = 632 - textWidth(text, size);
+    const int y = 454;
+    fillBox(x - 4, y - 2, textWidth(text, size) + 8, size + 4,
+            col(0, 0, 0, 190));
+    drawText(text, x, y, size, size, col(255, 0, 0, 255));
 }
 
 // =====================================================================

@@ -20,12 +20,13 @@ class RngControlRuntimeTests(unittest.TestCase):
             SETTINGS.read_text(encoding="utf-8"),
         )
         self.assertEqual(
-            rows[-4:],
+            rows[-5:],
             [
                 "SETTING_KING_BOO_ALWAYS_FRUIT",
                 "SETTING_PETEY_NO_TORNADO",
                 "SETTING_PETEY_ROUTE",
                 "SETTING_RICCO_CRANE_SPEED",
+                "SETTING_RICCO_FRUIT_MACHINE",
             ],
         )
 
@@ -81,16 +82,29 @@ class RngControlRuntimeTests(unittest.TestCase):
         self.assertEqual((values[3], values[10], values[8], values[12]),
                          (10, 8, 12, 16))
 
-    def test_king_boo_arms_the_targeted_stop_state(self) -> None:
+    def test_king_boo_alternates_only_after_a_completed_result(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
         wrapper = source.split(
             'extern "C" void susamuneForceKingBooFruit', 1
         )[1]
         self.assertIn("(u32)reel >= 3u", wrapper)
+        self.assertIn("bytes + 0x19D", wrapper)
+        self.assertIn("bytes + 0x1AB", wrapper)
+        self.assertIn("bytes + 0x1A0", wrapper)
         self.assertIn("bytes + 0x1A4", wrapper)
         self.assertIn("bytes + 0x198 + reel", wrapper)
         self.assertIn("bytes + 0x1A8 + reel", wrapper)
-        self.assertIn("= 2;", wrapper)
+        self.assertIn("boss + 0x1A8", wrapper)
+        self.assertIn("kKingBooFruit = 2", source)
+        self.assertIn("kKingBooNoFruit = 3", source)
+        self.assertIn("*state ^= kKingBooNextNoFruit", wrapper)
+        self.assertIn("void rngControlOnSavestateLoaded()", source)
+        self.assertIn("keepRestored", wrapper)
+
+        savestate = (ROOT / "src" / "savestate.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("rngControlOnSavestateLoaded();", savestate)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 #include "susamune/glyphs.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/packed_text.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/settings.hxx"
 
 const char gCreationLettersLower[33] = "abcdefghijklmnopqrstuvwxyz.,!?-_";
@@ -72,6 +73,11 @@ const u32 kPreviewRootTags[] = {
     '\0t_0', '\0c_0', '\0r_0', '\0d_0', '\0m_0', '\0s_0',
 };
 
+u8 sHudBeforeWarning[CreationExtras::HUD_PANE_COUNT][2][3];
+u8 sWaterBeforeWarning[2][3];
+bool sHudWarningApplied;
+bool sHudWarningSnapshotValid;
+
 constexpr int packedEntries(const char *pool, u32 bytes) {
     int count = 1;
     for (u32 i = 0; i + 1 < bytes; i++)
@@ -96,6 +102,42 @@ inline int clampi(int value, int lo, int hi) {
 
 void copyRgb(u8 dst[3], const u8 src[3]) {
     for (int c = 0; c < 3; c++) dst[c] = src[c];
+}
+
+void saveRgb(u8 dst[3], const Color &src) {
+    dst[0] = src.r;
+    dst[1] = src.g;
+    dst[2] = src.b;
+}
+
+void loadRgb(Color &dst, const u8 src[3]) {
+    dst.r = src[0];
+    dst.g = src[1];
+    dst.b = src[2];
+}
+
+void makeRed(Color &dst) {
+    dst.r = 255;
+    dst.g = 0;
+    dst.b = 0;
+}
+
+bool isRed(const Color &color) {
+    return color.r == 255 && color.g == 0 && color.b == 0;
+}
+
+void snapshotWarningColors(J2DPicture *const *pictures) {
+    for (u32 i = 0; i < CreationExtras::HUD_PANE_COUNT; i++) {
+        J2DPicture *picture = pictures[i];
+        if (!picture) continue;
+        saveRgb(sHudBeforeWarning[i][0], picture->mColorMask);
+        saveRgb(sHudBeforeWarning[i][1], picture->mColorOverlay);
+    }
+    if (!gpMarDirector || !gpMarDirector->mGCConsole) return;
+    saveRgb(sWaterBeforeWarning[0],
+            gpMarDirector->mGCConsole->mWaterLeftPanelColor);
+    saveRgb(sWaterBeforeWarning[1],
+            gpMarDirector->mGCConsole->mWaterRightPanelColor);
 }
 
 bool sameRgb(const u8 a[3], const u8 b[3]) {
@@ -459,6 +501,8 @@ void CreationExtras::stageWallkickInto(
 }
 
 void CreationExtras::onStageSetup() {
+    sHudWarningApplied = false;
+    sHudWarningSnapshotValid = false;
     memset(mHudPictures, 0, sizeof(mHudPictures));
     mHudScreen = nullptr;
     if (!gpMarDirector || !gpMarDirector->mGCConsole ||
@@ -503,10 +547,75 @@ void CreationExtras::onStageSetup() {
                 mWaterFillDefault[0]);
     }
 
+    // A same-scenario savestate may outlive a restart of this stage heap.
+    snapshotWarningColors(mHudPictures);
+    sHudWarningSnapshotValid = true;
+    applyHud();
+}
+
+void CreationExtras::onSavestateLoaded() {
+    if (!gpMarDirector || !gpMarDirector->mGCConsole ||
+        gpMarDirector->mGCConsole->mMainScreen != mHudScreen) return;
     applyHud();
 }
 
 void CreationExtras::applyHud() {
+    const bool warning = rngControlInvalidatesIl();
+    if (warning) {
+        if (!sHudWarningApplied) {
+            snapshotWarningColors(mHudPictures);
+            sHudWarningApplied = true;
+            sHudWarningSnapshotValid = true;
+        }
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture) continue;
+            makeRed(picture->mColorMask);
+            makeRed(picture->mColorOverlay);
+        }
+        if (!mTimerLabelVisible && mHudPictures[HUD_PANE_COUNT - 1])
+            mHudPictures[HUD_PANE_COUNT - 1]->mIsVisible = false;
+        if (gpMarDirector && gpMarDirector->mGCConsole) {
+            makeRed(gpMarDirector->mGCConsole->mWaterLeftPanelColor);
+            makeRed(gpMarDirector->mGCConsole->mWaterRightPanelColor);
+        }
+        return;
+    }
+
+    if (sHudWarningApplied) {
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture) continue;
+            loadRgb(picture->mColorMask, sHudBeforeWarning[i][0]);
+            loadRgb(picture->mColorOverlay, sHudBeforeWarning[i][1]);
+        }
+        if (gpMarDirector && gpMarDirector->mGCConsole) {
+            loadRgb(gpMarDirector->mGCConsole->mWaterLeftPanelColor,
+                    sWaterBeforeWarning[0]);
+            loadRgb(gpMarDirector->mGCConsole->mWaterRightPanelColor,
+                    sWaterBeforeWarning[1]);
+        }
+        sHudWarningApplied = false;
+    } else if (sHudWarningSnapshotValid) {
+        // A savestate made while assisted can restore red stage-heap panes
+        // after the setting itself has been turned off.
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture || !isRed(picture->mColorMask) ||
+                !isRed(picture->mColorOverlay)) continue;
+            loadRgb(picture->mColorMask, sHudBeforeWarning[i][0]);
+            loadRgb(picture->mColorOverlay, sHudBeforeWarning[i][1]);
+        }
+        if (gpMarDirector && gpMarDirector->mGCConsole &&
+            isRed(gpMarDirector->mGCConsole->mWaterLeftPanelColor) &&
+            isRed(gpMarDirector->mGCConsole->mWaterRightPanelColor)) {
+            loadRgb(gpMarDirector->mGCConsole->mWaterLeftPanelColor,
+                    sWaterBeforeWarning[0]);
+            loadRgb(gpMarDirector->mGCConsole->mWaterRightPanelColor,
+                    sWaterBeforeWarning[1]);
+        }
+    }
+
     for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
         J2DPicture *picture = mHudPictures[i];
         if (!picture) continue;

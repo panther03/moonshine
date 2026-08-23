@@ -11,8 +11,16 @@ void rngControlInit();
 // dropped before that call begins.
 void rngControlBeforeStageSetup();
 
+// Re-adopt King Boo's stage-heap phase after a same-scenario restore.
+void rngControlOnSavestateLoaded();
+
 // Apply transition-based instruction controls before the director advances.
 void rngControlApply();
+
+// Boss steering makes the current attempt ineligible for leaderboard credit.
+// Crane speed is deliberately excluded: it is a practice setup, not a boss
+// outcome override.
+bool rngControlInvalidatesIl();
 
 extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);
 

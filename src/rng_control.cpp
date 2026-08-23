@@ -8,6 +8,7 @@
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/addresses.hxx"
 #include "susamune/features.hxx"
+#include "susamune/iling.hxx"
 #include "susamune/settings.hxx"
 
 extern "C" int rand();
@@ -53,6 +54,10 @@ const u32 kUpDownRetailSpeed =
     SUSAMUNE_MEM1_ADDR(0x804090C4u, 0x8040C834u, 0x80403F94u);
 const u32 kKingBooForceStop =
     SUSAMUNE_MEM1_ADDR(0x802D6DE0u, 0x800C476Cu, 0x800BDE0Cu);
+const u8 kKingBooFruit = 2;
+const u8 kKingBooNoFruit = 3;
+const u8 kKingBooNextNoFruit = 1 << 0;
+const u8 kKingBooPending = 1 << 1;
 
 const char *const kCraneNames[kCraneCount] = {
     "crane90 0", "crane90 1", "crane90 2",
@@ -70,6 +75,8 @@ struct CraneRoll {
 };
 
 CraneRoll sCranes[kCraneCount];
+void *sKingBooSlot;
+bool sKingBooRestorePending;
 bool sPeteyPatchCaptured;
 bool sPeteyPatchInstalled;
 
@@ -164,6 +171,8 @@ void rngControlInit() {
 }
 
 void rngControlBeforeStageSetup() {
+    sKingBooSlot = nullptr;
+    sKingBooRestorePending = false;
     for (int i = 0; i < kCraneCount; i++) {
         sCranes[i].actor = nullptr;
         sCranes[i].retailSpeed = 0.0f;
@@ -172,8 +181,21 @@ void rngControlBeforeStageSetup() {
     }
 }
 
+void rngControlOnSavestateLoaded() {
+    sKingBooSlot = nullptr;
+    sKingBooRestorePending =
+        gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT);
+}
+
 void rngControlApply() {
     applyPeteyTornadoControl();
+    if (rngControlInvalidatesIl()) ILing::invalidateForAssist();
+}
+
+bool rngControlInvalidatesIl() {
+    return gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT) ||
+           gSettings.getBool(SETTING_PETEY_NO_TORNADO) ||
+           gSettings.get(SETTING_PETEY_ROUTE) != 0;
 }
 
 extern "C" int susamuneCraneUpDownRandImpl(void *crane) {
@@ -218,12 +240,46 @@ extern "C" void susamuneCraneRotYControl(void *crane) {
 extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel) {
     typedef void (*ForceStopFn)(void *, s32);
     reinterpret_cast<ForceStopFn>(kKingBooForceStop)(slot, reel);
-    if (!slot || (u32)reel >= 3u ||
-        !gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT))
+    if (!gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT)) {
+        sKingBooSlot = nullptr;
+        sKingBooRestorePending = false;
+        return;
+    }
+    if (!slot || (u32)reel >= 3u)
         return;
 
     u8 *bytes = static_cast<u8 *>(slot);
-    *reinterpret_cast<volatile s32 *>(bytes + 0x1A4) = 2;
+    u8 *const magic = bytes + 0x19D;
+    u8 *const state = bytes + 0x1AB;
+    const bool markerValid = magic[0] == 'K' && magic[1] == 'B' &&
+                             magic[2] == 'R';
+    const bool keepRestored = sKingBooSlot != slot &&
+                              sKingBooRestorePending && markerValid;
+    if (sKingBooSlot != slot || !markerValid) {
+        sKingBooSlot = slot;
+        sKingBooRestorePending = false;
+        if (!keepRestored) {
+            magic[0] = 'K';
+            magic[1] = 'B';
+            magic[2] = 'R';
+            *state = 0;
+        }
+    }
+    if (*state & kKingBooPending) {
+        const s32 prior = (*state & kKingBooNextNoFruit)
+                              ? kKingBooNoFruit
+                              : kKingBooFruit;
+        u8 *const boss = *reinterpret_cast<u8 **>(bytes + 0x1A0);
+        // generateSlotItem writes this only after all three reels agree.
+        if (boss && *reinterpret_cast<volatile s32 *>(boss + 0x1A8) == prior)
+            *state ^= kKingBooNextNoFruit;
+    }
+
+    const s32 result = (*state & kKingBooNextNoFruit)
+                           ? kKingBooNoFruit
+                           : kKingBooFruit;
+    *state = (*state & kKingBooNextNoFruit) | kKingBooPending;
+    *reinterpret_cast<volatile s32 *>(bytes + 0x1A4) = result;
     // A forecast only steers the drum while both targeted-stop flags are set.
     *reinterpret_cast<volatile u8 *>(bytes + 0x198 + reel) = 1;
     *reinterpret_cast<volatile u8 *>(bytes + 0x1A8 + reel) = 1;

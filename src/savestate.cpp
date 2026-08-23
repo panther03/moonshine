@@ -66,6 +66,7 @@
 #include "susamune/split_stats.hxx"
 #include "susamune/iling.hxx"
 #include "susamune/records.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/warp_wheel.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/settings.hxx"
@@ -622,6 +623,8 @@ bool SavestateManager::loadState() {
     SplitStats::onSavestateLoaded();
     Ghost::onSavestateLoaded();
     GhostStorage::onSavestateLoaded();
+    rngControlOnSavestateLoaded();
+    gCreationExtras.onSavestateLoaded();
     // An armed warp lives in mod BSS, outside the restored game snapshot.
     // Cancel it before ILing adopts the save-time attempt state.
     LevelWarp::cancelPending();
