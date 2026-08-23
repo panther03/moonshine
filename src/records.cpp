@@ -330,7 +330,7 @@ constexpr char kSpecialDescriptions[] =
     "PB every world on one profile.\0Spend two hours in Creation menus.\0"
     "Spend 30 hours in one world.\0Exactly tie an IL PB's QFT.\0"
     "Unlock one in every non-Special category.\0Die 100 times.\0"
-    "Start 2,000 attempts per world.\0Play Susamune for 1,000 hours.\0"
+    "Start 2,000 attempts per world.\0Play Moonshine for 1,000 hours.\0"
     "Bianco 3 Secret: exact 13.80 QFT benchmark.\0"
     "Unlock the original Bronze-through-Demon roster.";
 

@@ -473,16 +473,12 @@ const CarryDesc *carryForRoute(u16 route) {
 }
 
 bool publishTransition(u16 route, u8 event, u8 target) {
-    const volatile u16 *capturedTarget =
-        reinterpret_cast<volatile u16 *>(SUSAMUNE_ADDR_QFT_TRANSITION_TARGET);
-    if (*capturedTarget == 0xffff ||
+    s32 qf;
+    u16 capturedTarget;
+    if (!gQFTTimer.transitionEntryQf(&qf, &capturedTarget) ||
+        capturedTarget != target ||
         gpApplication.mNextScene.mAreaID != target ||
         gpApplication.mNextScene.mEpisodeID != 0) return false;
-    s32 qf;
-    if (!gQFTTimer.currentQf(&qf)) return false;
-    const volatile s32 *capturedQf =
-        reinterpret_cast<volatile s32 *>(SUSAMUNE_ADDR_QFT_TRANSITION_QF);
-    qf += *capturedQf - sStageDirector->unk5C;
     if (!publishEventAt(route, event, qf)) return false;
     if (carryForRoute(route)) sArmedCarryRoute = route;
     return true;
@@ -970,20 +966,6 @@ void noteTalk(TBaseNPC *npc) {
     }
 }
 
-bool captureDemoEvent(TMarDirector *director, u16 *route, u8 *event, s32 *qf) {
-    if (!route || !event || !qf || director != gpMarDirector ||
-        !SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2) ||
-        Ghost::observerStatsSuppressed())
-        return false;
-    if (director->mAreaID != 2 ||
-        (director->mEpisodeID != 0 && director->mEpisodeID != 1) ||
-        !gQFTTimer.currentQf(qf))
-        return false;
-    *route = SplitStats::ROUTE_BIANCO_2;
-    *event = 1;
-    return true;
-}
-
 void updateTransitions() {
     armCarryTransition();
     switch (sActiveRoute) {
@@ -1466,11 +1448,6 @@ extern "C" void susamuneSplitStartDemo(
     u32 callbackArg, JDrama::TActor *actor,
     const JDrama::TFlagT<u16> *demoFlag) {
     // This accepted queue edge is the single owner of demo-event freezes.
-    u16 candidateRoute = SplitStats::ROUTE_INVALID;
-    u8 candidateEvent = 0;
-    s32 candidateQf = 0;
-    const bool hasCandidate = captureDemoEvent(
-        director, &candidateRoute, &candidateEvent, &candidateQf);
     const u8 before = *(reinterpret_cast<const u8 *>(director) + 0x24C);
     // Retail passes the non-trivial by-value flag through an indirect pointer.
     reinterpret_cast<StartDemoFn>(sStartDemoTrampoline)(
@@ -1478,10 +1455,15 @@ extern "C" void susamuneSplitStartDemo(
         actor, demoFlag);
     const u8 after = *(reinterpret_cast<const u8 *>(director) + 0x24C);
     if (after == before) return;
+    s32 acceptedQf;
+    const bool timed = gQFTTimer.currentQf(&acceptedQf);
     if (gSettings.getBool(SETTING_TIMER_FREEZE_DEMO))
         gQFTTimer.freezeEvent();
-    if (hasCandidate)
-        publishEventAt(candidateRoute, candidateEvent, candidateQf);
+    // Expected-event ordering rejects opening and unrelated demos before the
+    // rollout, so the split can share the exact queue edge that QFT accepted.
+    if (timed && sActiveRoute == SplitStats::ROUTE_BIANCO_2 &&
+        !Ghost::observerStatsSuppressed())
+        publishEventAt(sActiveRoute, 1, acceptedQf);
 }
 
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc) {

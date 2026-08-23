@@ -76,6 +76,9 @@ bool acceptDeferredRestart();
 // the completed attempt must not survive into the replacement director.
 bool retryOwnsDeparture();
 bool holdGameModeBeforeUpdate(TMarDirector *director);
+// With streak auto-reset disabled, let retail own the save box and replace
+// its eventual stage departure with the next exact IL start.
+bool holdPostSaveDeparture();
 // Main-scene deaths that would lose the selected route can reuse its exact
 // start after the retail death sequence finishes. Internal retries stay put.
 bool copyDeathRetryDest(LevelWarp::Dest *out);

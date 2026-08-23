@@ -1,4 +1,4 @@
-name: Build release artifacts
+name: Build Moonshine release artifacts
 
 on:
   release:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   build-and-upload:
-    name: launcher
+    name: Moonshine Launcher
     # The bundled devkitPro toolchain is Windows-specific.  Pin the runner so
     # its pre-installed CMake/Ninja versions cannot change unexpectedly.
     runs-on: windows-2022
@@ -46,10 +46,10 @@ jobs:
       - name: Upload launcher to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" "build/susamune_launcher.zip" --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" "build/moonshine_launcher.zip" --clobber
 
   build-emulator-patch:
-    name: emulator BPS
+    name: Moonshine emulator BPS
     runs-on: windows-2022
 
     steps:
@@ -82,9 +82,9 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          Rename-Item -LiteralPath "build/susamune_jp.bps" -NewName "susamune_emu_jp_${env:RELEASE_TAG}.bps"
-          Rename-Item -LiteralPath "build/susamune_us.bps" -NewName "susamune_emu_us_${env:RELEASE_TAG}.bps"
-          Rename-Item -LiteralPath "build/susamune_pal.bps" -NewName "susamune_emu_pal_${env:RELEASE_TAG}.bps"
+          Rename-Item -LiteralPath "build/moonshine_jp.bps" -NewName "moonshine_emu_jp_${env:RELEASE_TAG}.bps"
+          Rename-Item -LiteralPath "build/moonshine_us.bps" -NewName "moonshine_emu_us_${env:RELEASE_TAG}.bps"
+          Rename-Item -LiteralPath "build/moonshine_pal.bps" -NewName "moonshine_emu_pal_${env:RELEASE_TAG}.bps"
 
       - name: Upload emulator patches to release
         env:
@@ -92,7 +92,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: >-
           gh release upload "${env:RELEASE_TAG}"
-          "build/susamune_emu_jp_${env:RELEASE_TAG}.bps"
-          "build/susamune_emu_us_${env:RELEASE_TAG}.bps"
-          "build/susamune_emu_pal_${env:RELEASE_TAG}.bps"
+          "build/moonshine_emu_jp_${env:RELEASE_TAG}.bps"
+          "build/moonshine_emu_us_${env:RELEASE_TAG}.bps"
+          "build/moonshine_emu_pal_${env:RELEASE_TAG}.bps"
           --clobber

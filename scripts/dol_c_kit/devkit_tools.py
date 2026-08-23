@@ -377,6 +377,9 @@ class Project(object):
         # Filled in by __process_project: (name, addr, size) per SHF_ALLOC
         # section, in address order.
         self.section_layout = []
+        # End of the last initialized SHF_ALLOC byte, rounded for the launcher
+        # wire format. The full blob_size still includes trailing NOBITS.
+        self.initialized_size = 0
         self.blob_size = 0
         # Raw compiler/assembler/linker argv dumps. Separate from `verbose`,
         # which also controls the hook summary.
@@ -601,11 +604,11 @@ class Project(object):
         datablob = bytearray()
         if self.build_project() == True:
             with open(self.obj_dir+self.project_name+".bin", "rb") as f:
-                datablob += f.read()
+                datablob += f.read(self.initialized_size)
         while (len(datablob) % 4) != 0:
             datablob += b'\x00'
 
-        self.__check_blob_size(len(datablob))
+        self.__check_blob_size(self.blob_size)
 
         writes = []
         for hook in self.hooks:
@@ -617,6 +620,7 @@ class Project(object):
         manifest = {
             "base_addr": self.base_addr,
             "size": len(datablob),
+            "memory_size": self.blob_size,
             # The arena reservation (mod_region_size) is the amount every
             # bottom-anchored heap allocation shifts up by once the mod is
             # active. The launcher needs it to relocate hardcoded-heap-address
@@ -778,6 +782,10 @@ class Project(object):
             print("  {:<10} {:#010x}  {:>6} ({:#7x})".format(name, addr, size, size))
         print("  {:<10} {:#010x}  {:>6} ({:#7x})".format(
             "TOTAL", self.base_addr + self.blob_size, self.blob_size, self.blob_size))
+        if self.initialized_size < self.blob_size:
+            print("  {:<10} {:#010x}  {:>6} ({:#7x})".format(
+                "FILE INIT", self.base_addr + self.initialized_size,
+                self.initialized_size, self.initialized_size))
         if self.blob_max_size is not None:
             free = self.blob_max_size - self.blob_size
             print("  limit {:#x}, {} bytes free ({:.1f}% used)".format(
@@ -819,16 +827,29 @@ class Project(object):
         with open(self.obj_dir+self.project_name+".o", 'rb') as f:
             elf = ELFFile(f)
             self.section_layout = []
+            initialized_end = self.base_addr
+            runtime_end = self.base_addr
             with open(self.obj_dir+self.project_name+".bin", "wb") as bin:
                 for iter in elf.iter_sections():
                     # Filter out sections without SHF_ALLOC attribute
                     if iter.header["sh_flags"] & 0x2:
+                        section_end = (iter.header["sh_addr"] +
+                                       iter.header["sh_size"])
+                        runtime_end = max(runtime_end, section_end)
+                        if iter.header["sh_type"] != "SHT_NOBITS":
+                            initialized_end = max(initialized_end, section_end)
                         bin.seek(iter.header["sh_addr"] - self.base_addr)
                         bin.write(iter.data())
                         self.section_layout.append(
                             (iter.name, iter.header["sh_addr"], iter.header["sh_size"]))
+                # Keep the legacy full .bin for DOL and Gecko modes. The
+                # launcher manifest reads only initialized_size bytes.
+                bin.truncate(runtime_end - self.base_addr)
             self.section_layout.sort(key=lambda s: s[1])
-            self.blob_size = os.path.getsize(self.obj_dir+self.project_name+".bin")
+            self.blob_size = runtime_end - self.base_addr
+            self.initialized_size = ((initialized_end - self.base_addr + 3) & ~3)
+            if self.initialized_size > self.blob_size:
+                raise RuntimeError("initialized mod span exceeds runtime span")
             self.__report_layout()
 
             symtab = elf.get_section_by_name(".symtab")

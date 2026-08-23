@@ -2,7 +2,7 @@
 #include <string.h>
 #include "ipl.h"
 
-u8 BS2Ntsc448IntAa[] = {
+static const u8 BS2Ntsc448IntAa[] = {
 	0x00,0x00,0x00,0x00,
 	0x02,0x50,0x00,0xE2,
 	0x01,0xC0,0x00,0x28,
@@ -77,6 +77,89 @@ void Descrambler(unsigned char* data, unsigned int size)
 
 #define DECRYPT_START		0x100
 #define CODE_START			0x820
+#define IPL_BASE			0x81300000u
+
+#define ARRAY_COUNT(values) (sizeof(values) / sizeof((values)[0]))
+
+static const u8 kEnglishValues[] = {
+	38, 10, 39, 15, 7, 1, 4, 45, 46, 42, 40, 43, 31, 29, 30, 80,
+};
+
+static const u16 kEnglishUs12a[] = {
+	0x0B906, 0x0B926, 0x0B92E, 0x0B932, 0x0B93A, 0x0B93E,
+	0x0B946, 0x0B94A, 0x0B952, 0x0B956, 0x0B95E, 0x0B962,
+	0x0B976, 0x0B97A, 0x0B982, 0x0B98E,
+};
+
+static const u16 kEnglishUs12b[] = {
+	0x0B91E, 0x0B93E, 0x0B946, 0x0B94A, 0x0B952, 0x0B956,
+	0x0B95E, 0x0B962, 0x0B96A, 0x0B96E, 0x0B976, 0x0B97A,
+	0x0B98E, 0x0B992, 0x0B99A, 0x0B9A6,
+};
+
+static const u16 kEnglishUs11[] = {
+	0x0B592, 0x0B5B2, 0x0B5BA, 0x0B5BE, 0x0B5C6, 0x0B5CA,
+	0x0B5D2, 0x0B5D6, 0x0B5DE, 0x0B5E2, 0x0B5EA, 0x0B5EE,
+	0x0B602, 0x0B606, 0x0B60E, 0x0B61A,
+};
+
+static const u16 kEnglishUs10[] = {
+	0x0B40A, 0x0B412, 0x0B416, 0x0B422, 0x0B42E, 0x0B43A,
+	0x0B446, 0x0B44E, 0x0B452, 0x0B45A, 0x0B45E, 0x0B466,
+	0x0B476, 0x0B47E, 0x0B482, 0x0B48E,
+};
+
+static const u8 kPalAnimHalfOffsets[] = {
+	0x06, 0x0A, 0x16, 0x1A, 0x1E, 0x22, 0x26, 0x2A, 0x32, 0x36,
+};
+static const u8 kPalAnimHalfValues[] = {
+	10, 255, 7, 6, 5, 16, 18, 20, 40, 60,
+};
+static const u8 kPalAnimWordOffsets[] = { 0x70, 0x78, 0x7C, 0x80, 0x84 };
+static const u32 kPalAnimWordValues[] = {
+	0xB3E30016, 0x9963000B, 0x9BC3001C, 0x9BA30037, 0x99430035,
+};
+
+static void ApplyEnglishPatches(const u16 *offsets, u8 secondValue)
+{
+	u32 i;
+	for (i = 0; i < ARRAY_COUNT(kEnglishValues); ++i)
+	{
+		const u16 value = i == 1 ? secondValue : kEnglishValues[i];
+		*(u16 *)(IPL_BASE + offsets[i]) = value;
+	}
+}
+
+static void ApplyPalAnimation(u32 base)
+{
+	u32 i;
+	for (i = 0; i < ARRAY_COUNT(kPalAnimHalfOffsets); ++i)
+		*(u16 *)(base + kPalAnimHalfOffsets[i]) = kPalAnimHalfValues[i];
+	for (i = 0; i < ARRAY_COUNT(kPalAnimWordOffsets); ++i)
+		*(u32 *)(base + kPalAnimWordOffsets[i]) = kPalAnimWordValues[i];
+}
+
+static void ApplyVideoFilter(u32 address, bool progressive, bool sharp)
+{
+	if (progressive)
+	{
+		*(u16 *)address = 0x0408;
+		*(u32 *)(address + 2) = 0x0C100C08;
+		*(u16 *)(address + 6) = 0x0400;
+	}
+	if (sharp)
+	{
+		*(u16 *)address = 0;
+		*(u32 *)(address + 2) = 0x15161500;
+		*(u16 *)(address + 6) = 0;
+	}
+}
+
+static void __attribute__((noinline)) ApplyJingle(u32 address, int jingle)
+{
+	if (jingle > 0)
+		*(u32 *)address = 0x38600000u | (u32)jingle;
+}
 
 void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 {
@@ -90,49 +173,23 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 			*(s16 *)0x81300876 = type; //swiss
 			*(s16 *)0x8137ECBA = type; //2 = 480p
 			*(s16 *)0x8137ECCE = 0; //single field
-			// Vertical filter
-			*(s16 *)0x8137ECEA = 0x0408;
-			*(u32 *)0x8137ECEC = 0x0C100C08;
-			*(s16 *)0x8137ECF0 = 0x0400;
 		}
 		else {
 			//test if this removes the video refresh
 			*(s16 *)0x81300876 = type; //swiss
 			//*(s16 *)0x8137ECBA = type; //video mode
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x8137ECEA = 0x0000;
-			*(u32 *)0x8137ECEC = 0x15161500;
-			*(s16 *)0x8137ECF0 = 0x0000;
-		}
+		ApplyVideoFilter(0x8137ECEA, prog, sharp);
 		
 		// Accept any region code. JP games don't need this, but PAL ones do
 		*(s16 *)0x81300ACE = 1;
 		*(s16 *)0x81300AF2 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81303184 = 0x38600000 | jingle;
+		ApplyJingle(0x81303184, jingle);
 		
-		// SUSO: JP games will show the NTSC-U IPL in Japanese
-		// Force English language
-		*(s16 *)0x8130B906 = 38;
-		*(s16 *)0x8130B926 = 10;
-		*(s16 *)0x8130B92E = 39;
-		*(s16 *)0x8130B932 = 15;
-		*(s16 *)0x8130B93A = 7;
-		*(s16 *)0x8130B93E = 1;
-		*(s16 *)0x8130B946 = 4;
-		*(s16 *)0x8130B94A = 45;
-		*(s16 *)0x8130B952 = 46;
-		*(s16 *)0x8130B956 = 42;
-		*(s16 *)0x8130B95E = 40;
-		*(s16 *)0x8130B962 = 43;
-		*(s16 *)0x8130B976 = 31;
-		*(s16 *)0x8130B97A = 29;
-		*(s16 *)0x8130B982 = 30;
-		*(s16 *)0x8130B98E = 80;
+		// JP games otherwise show this NTSC-U IPL in Japanese.
+		ApplyEnglishPatches(kEnglishUs12a, 10);
 	}
 	else if(*(u32 *)0x8130B91C == 0x3800000C) { //other NTSC-U 1.2
 		// 480p video mode
@@ -140,43 +197,17 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 			*(s16 *)0x81300876 = type; //swiss
 			*(s16 *)0x8137F13A = type; //2 = 480p
 			*(s16 *)0x8137F14E = 0; //single field
-			// Vertical filter
-			*(s16 *)0x8137F16A = 0x0408;
-			*(u32 *)0x8137F16C = 0x0C100C08;
-			*(s16 *)0x8137F170 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x8137F16A = 0x0000;
-			*(u32 *)0x8137F16C = 0x15161500;
-			*(s16 *)0x8137F170 = 0x0000;
-		}
+		ApplyVideoFilter(0x8137F16A, prog, sharp);
 		
 		// Accept any region code.
 		*(s16 *)0x81300ACE = 1;
 		*(s16 *)0x81300AF2 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x8130319C = 0x38600000 | jingle;
+		ApplyJingle(0x8130319C, jingle);
 		
-		// Force English language
-		*(s16 *)0x8130B91E = 38;
-		*(s16 *)0x8130B93E = 10;
-		*(s16 *)0x8130B946 = 39;
-		*(s16 *)0x8130B94A = 15;
-		*(s16 *)0x8130B952 = 7;
-		*(s16 *)0x8130B956 = 1;
-		*(s16 *)0x8130B95E = 4;
-		*(s16 *)0x8130B962 = 45;
-		*(s16 *)0x8130B96A = 46;
-		*(s16 *)0x8130B96E = 42;
-		*(s16 *)0x8130B976 = 40;
-		*(s16 *)0x8130B97A = 43;
-		*(s16 *)0x8130B98E = 31;
-		*(s16 *)0x8130B992 = 29;
-		*(s16 *)0x8130B99A = 30;
-		*(s16 *)0x8130B9A6 = 80;
+		ApplyEnglishPatches(kEnglishUs12b, 10);
 	}
 	else if(*(u32 *)0x8130B590 == 0x3800000C) { //NTSC-U 1.1
 		// 480p video mode
@@ -184,43 +215,17 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 			*(s16 *)0x81300522 = type; //swiss
 			*(s16 *)0x8137D9F2 = type; //2 = 480p
 			*(s16 *)0x8137DA06 = 0; //single field
-			// Vertical filter
-			*(s16 *)0x8137DA22 = 0x0408;
-			*(u32 *)0x8137DA24 = 0x0C100C08;
-			*(s16 *)0x8137DA28 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x8137DA22 = 0x0000;
-			*(u32 *)0x8137DA24 = 0x15161500;
-			*(s16 *)0x8137DA28 = 0x0000;
-		}
+		ApplyVideoFilter(0x8137DA22, prog, sharp);
 		
 		// Accept any region code.
 		*(s16 *)0x8130077E = 1;
 		*(s16 *)0x813007A2 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81302DE8 = 0x38600000 | jingle;
+		ApplyJingle(0x81302DE8, jingle);
 		
-		// Force English language
-		*(s16 *)0x8130B592 = 38;
-		*(s16 *)0x8130B5B2 = 10;
-		*(s16 *)0x8130B5BA = 39;
-		*(s16 *)0x8130B5BE = 15;
-		*(s16 *)0x8130B5C6 = 7;
-		*(s16 *)0x8130B5CA = 1;
-		*(s16 *)0x8130B5D2 = 4;
-		*(s16 *)0x8130B5D6 = 45;
-		*(s16 *)0x8130B5DE = 46;
-		*(s16 *)0x8130B5E2 = 42;
-		*(s16 *)0x8130B5EA = 40;
-		*(s16 *)0x8130B5EE = 43;
-		*(s16 *)0x8130B602 = 31;
-		*(s16 *)0x8130B606 = 29;
-		*(s16 *)0x8130B60E = 30;
-		*(s16 *)0x8130B61A = 80;
+		ApplyEnglishPatches(kEnglishUs11, 10);
 	}
 	else if(*(u32 *)0x8130B408 == 0x3800000B) { //NTSC-U 1.0
 		// 480p video mode
@@ -228,17 +233,8 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 			*(s16 *)0x81300712 = 2 & ~0x3; //swiss, 480p does not work
 		//	*(s16 *)0x8135DDE2 = 2; //2 = 480p
 		//	*(s16 *)0x8135DDF6 = 0; //field rendering
-			// Vertical filter
-			*(s16 *)0x8135DE12 = 0x0408;
-			*(u32 *)0x8135DE14 = 0x0C100C08;
-			*(s16 *)0x8135DE18 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x8135DE12 = 0x0000;
-			*(u32 *)0x8135DE14 = 0x15161500;
-			*(s16 *)0x8135DE18 = 0x0000;
-		}
+		ApplyVideoFilter(0x8135DE12, prog, sharp);
 		
 		// Accept any region code
 		*(s16 *)0x81300E8A = 1;
@@ -246,118 +242,51 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 		*(s16 *)0x81300EAA = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81302F00 = 0x38600000 | jingle;
+		ApplyJingle(0x81302F00, jingle);
 		
-		// Force English language
-		*(s16 *)0x8130B40A = 38;
-		*(s16 *)0x8130B412 = 38;
-		*(s16 *)0x8130B416 = 39;
-		*(s16 *)0x8130B422 = 15;
-		*(s16 *)0x8130B42E = 7;
-		*(s16 *)0x8130B43A = 1;
-		*(s16 *)0x8130B446 = 4;
-		*(s16 *)0x8130B44E = 45;
-		*(s16 *)0x8130B452 = 46;
-		*(s16 *)0x8130B45A = 42;
-		*(s16 *)0x8130B45E = 40;
-		*(s16 *)0x8130B466 = 43;
-		*(s16 *)0x8130B476 = 31;
-		*(s16 *)0x8130B47E = 29;
-		*(s16 *)0x8130B482 = 30;
-		*(s16 *)0x8130B48E = 80;
+		ApplyEnglishPatches(kEnglishUs10, 38);
 	}
 	else if(*(u32 *)0x81300610 == 0x38600004) { //PAL 1.2
 		// 480p video mode, this needs to be fixed for PAL60
 		if(prog) {
 			*(s16 *)0x81300612 = type; //swiss
 			
-			// Correct animation speed
-			*(s16 *)0x8130F306 = 10;
-			*(s16 *)0x8130F30A = 255;
-			*(s16 *)0x8130F316 = 7;
-			*(s16 *)0x8130F31A = 6;
-			*(s16 *)0x8130F31E = 5;
-			*(s16 *)0x8130F322 = 16;
-			*(s16 *)0x8130F326 = 18;
-			*(s16 *)0x8130F32A = 20;
-			*(s16 *)0x8130F332 = 40;
-			*(s16 *)0x8130F336 = 60;
-			*(u32 *)0x8130F370 = 0xB3E30016;
-			*(u32 *)0x8130F378 = 0x9963000B;
-			*(u32 *)0x8130F37C = 0x9BC3001C;
-			*(u32 *)0x8130F380 = 0x9BA30037;
-			*(u32 *)0x8130F384 = 0x99430035;
+			ApplyPalAnimation(0x8130F300);
 			
 			memcpy((void*)0x81382470, BS2Ntsc448IntAa, sizeof(BS2Ntsc448IntAa));
 			
 			*(s16 *)0x81382472 = type; //2 = 480p
 			*(s16 *)0x81382486 = 0; //field rendering
-			// Vertical filter
-			*(s16 *)0x813824A2 = 0x0408;
-			*(u32 *)0x813824A4 = 0x0C100C08;
-			*(s16 *)0x813824A8 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x813824A2 = 0x0000;
-			*(u32 *)0x813824A4 = 0x15161500;
-			*(s16 *)0x813824A8 = 0x0000;
-		}
+		ApplyVideoFilter(0x813824A2, prog, sharp);
 		
 		// Accept any region code (unneeded)
 		*(s16 *)0x81300882 = 1;
 		*(s16 *)0x813008A6 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81302F50 = 0x38600000 | jingle;
+		ApplyJingle(0x81302F50, jingle);
 	}
 	else if(*(u32 *)0x81300520 == 0x38600004) { //PAL 1.0
 		// 480p video mode, this needs to be fixed for PAL60
 		if(prog) {
 			*(s16 *)0x81300522 = type; //swiss
 			
-			// Correct animation speed
-			*(s16 *)0x8130F1C6 = 10;
-			*(s16 *)0x8130F1CA = 255;
-			*(s16 *)0x8130F1D6 = 7;
-			*(s16 *)0x8130F1DA = 6;
-			*(s16 *)0x8130F1DE = 5;
-			*(s16 *)0x8130F1E2 = 16;
-			*(s16 *)0x8130F1E6 = 18;
-			*(s16 *)0x8130F1EA = 20;
-			*(s16 *)0x8130F1F2 = 40;
-			*(s16 *)0x8130F1F6 = 60;
-			*(u32 *)0x8130F230 = 0xB3E30016;
-			*(u32 *)0x8130F238 = 0x9963000B;
-			*(u32 *)0x8130F23C = 0x9BC3001C;
-			*(u32 *)0x8130F240 = 0x9BA30037;
-			*(u32 *)0x8130F244 = 0x99430035;
+			ApplyPalAnimation(0x8130F1C0);
 			
 			memcpy((void*)0x81380FD0, BS2Ntsc448IntAa, sizeof(BS2Ntsc448IntAa));
 			
 			*(s16 *)0x81380FD2 = type; //2 = 480p
 			*(s16 *)0x81380FE6 = 0; //field rendering
-			// Vertical filter
-			*(s16 *)0x81381002 = 0x0408;
-			*(u32 *)0x81381004 = 0x0C100C08;
-			*(s16 *)0x81381008 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x81381002 = 0x0000;
-			*(u32 *)0x81381004 = 0x15161500;
-			*(s16 *)0x81381008 = 0x0000;
-		}
+		ApplyVideoFilter(0x81381002, prog, sharp);
 		
 		// Accept any region code
 		*(s16 *)0x81300882 = 1;
 		*(s16 *)0x813008A6 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81302DE8 = 0x38600000 | jingle;
+		ApplyJingle(0x81302DE8, jingle);
 	}
 	else if(*(u32 *)0x81300520 == 0x38600008) { //MPAL 1.1
 		// 480p video mode
@@ -385,25 +314,15 @@ void load_ipl(unsigned char *buf, bool prog, bool sharp, int jingle, int type)
 			
 			*(s16 *)0x8137D912 = type; //2 = 480p
 			*(s16 *)0x8137D926 = 0; //field rendering
-			// Vertical filter
-			*(s16 *)0x8137D942 = 0x0408;
-			*(u32 *)0x8137D944 = 0x0C100C08;
-			*(s16 *)0x8137D948 = 0x0400;
 		}
-		// Check for no deflicker
-		if(sharp) {
-			*(s16 *)0x8137D942 = 0x0000;
-			*(u32 *)0x8137D944 = 0x15161500;
-			*(s16 *)0x8137D948 = 0x0000;
-		}
+		ApplyVideoFilter(0x8137D942, prog, sharp);
 		
 		// Accept any region code
 		*(s16 *)0x81300882 = 1;
 		*(s16 *)0x813008A6 = 1;
 		
 		// Force boot sound. 1=kid, 2=kabuki
-		if(jingle > 0)
-			*(u32 *)0x81302DE8 = 0x38600000 | jingle;
+		ApplyJingle(0x81302DE8, jingle);
 	}
 	
 	DCFlushRange((void*)0x81300000, IPL_ROM_FONT_SJIS - CODE_START);

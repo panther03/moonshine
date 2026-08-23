@@ -2,6 +2,7 @@
 
 #include <Dolphin/mem.h>
 #include <Dolphin/printf.h>
+#include <Dolphin/string.h>
 
 #include "susamune/creation.hxx"
 #include "susamune/iling.hxx"
@@ -750,8 +751,43 @@ StorageState storageState() {
     return sState->lastError ? STORAGE_FAILED : STORAGE_SD;
 }
 
+#if defined(SUSAMUNE_VERSION_JP)
+u8 overlayBrightness(u8 value, u8 brightness) {
+    const int result = (int)value * brightness / 100;
+    return (u8)(result > 255 ? 255 : result);
+}
+
+void drawJpPositiveDelta(Menu *menu, const CreationStyle &style,
+                         const u8 *rgb, const char *text,
+                         const char *layoutText) {
+    const int size = 20 * (int)style.scale / 100;
+    const int pad = style.padding == 0xff ? 0 : style.padding;
+    const int width = Creation::textWidth(layoutText, size);
+    if (style.padding != 0xff) {
+        menu->fillBox((int)style.x - pad, (int)style.y - pad,
+                      width + pad * 2, size + pad * 2,
+                      JUtility::TColor(style.bgR, style.bgG, style.bgB,
+                                       style.bgA));
+    }
+
+    const int cell = Menu::textWidth("P", size);
+    const int stroke = size / 10 > 0 ? size / 10 : 1;
+    const int arm = cell * 2 / 3 > stroke ? cell * 2 / 3 : stroke;
+    const int cx = (int)style.x + cell / 2;
+    const int cy = (int)style.y + size / 2;
+    const JUtility::TColor color(
+        overlayBrightness(rgb[0], style.textBrightness),
+        overlayBrightness(rgb[1], style.textBrightness),
+        overlayBrightness(rgb[2], style.textBrightness), style.textA);
+    menu->fillBox(cx - arm / 2, cy - stroke / 2, arm, stroke, color);
+    menu->fillBox(cx - stroke / 2, cy - arm / 2, stroke, arm, color);
+    menu->drawText(text + 1, (int)style.x + cell, style.y, size, size, color);
+}
+#endif
+
 void draw(Menu *menu) {
-    if (!menu || sState->overlayFrames == 0 || !sState->overlayText[0] ||
+    if (!menu || !gSettings.getBool(SETTING_LEVEL_SPLITS) ||
+        sState->overlayFrames == 0 || !sState->overlayText[0] ||
         sState->overlayAnchorQf < 0) {
         return;
     }
@@ -759,13 +795,32 @@ void draw(Menu *menu) {
     char anchor[20];
     formatAnchorQf(sState->overlayAnchorQf, anchor, sizeof(anchor));
     CreationStyle style;
+#if defined(SUSAMUNE_VERSION_JP)
+    char layoutText[sizeof(sState->overlayText)];
+    const bool customPlus = sState->overlayText[0] == '+';
+    const char *deltaLayout = sState->overlayText;
+    if (customPlus) {
+        strncpy(layoutText, sState->overlayText, sizeof(layoutText));
+        layoutText[sizeof(layoutText) - 1] = '\0';
+        // JP maps Shift-JIS plus onto the controller X icon. Reserve one
+        // ordinary glyph cell, then draw the sign geometrically below.
+        layoutText[0] = 'P';
+        deltaLayout = layoutText;
+    }
+    if (!gQftDisplay.adjacentStyle(anchor, deltaLayout, &style)) {
+#else
     if (!gQftDisplay.adjacentStyle(anchor, sState->overlayText, &style)) {
+#endif
         if (gQftDisplay.hasAnchor(anchor)) return;
         // Coordinate/boss checkpoints have no native QFT freezer. Render the
         // captured clock in the user's compact style for the same lifetime.
         gQftDisplay.draw(menu, anchor);
+#if defined(SUSAMUNE_VERSION_JP)
+        if (!gQftDisplay.adjacentStyle(anchor, deltaLayout, &style)) return;
+#else
         if (!gQftDisplay.adjacentStyle(anchor, sState->overlayText, &style))
             return;
+#endif
     }
     static const u8 kColors[][3] = {
         {245, 95, 85},
@@ -774,6 +829,13 @@ void draw(Menu *menu) {
         {255, 196, 40},
     };
     const u8 color = sState->overlayColor < 4 ? sState->overlayColor : 1;
+#if defined(SUSAMUNE_VERSION_JP)
+    if (customPlus) {
+        drawJpPositiveDelta(menu, style, kColors[color], sState->overlayText,
+                            deltaLayout);
+        return;
+    }
+#endif
     Creation::drawTextBox(menu, style, &kColors[color], 1,
                           sState->overlayText, true);
 }

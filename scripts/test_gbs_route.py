@@ -107,10 +107,21 @@ class GelatoGbsContracts(unittest.TestCase):
             r"X\((SETTING_[A-Z0-9_]+),\s*\"[^\"]+\"\)",
             SETTINGS.read_text(encoding="utf-8"),
         )
-        self.assertEqual(setting_rows[-1], "SETTING_TIMER_FREEZE_MOVING_PLATFORM")
         self.assertEqual(
-            DESCS.read_text(encoding="utf-8").strip().splitlines()[-1],
-            'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)',
+            setting_rows[-3:],
+            [
+                "SETTING_TIMER_FREEZE_MOVING_PLATFORM",
+                "SETTING_LEVEL_SPLITS",
+                "SETTING_STREAK_AUTO_RESET",
+            ],
+        )
+        self.assertEqual(
+            DESCS.read_text(encoding="utf-8").strip().splitlines()[-3:],
+            [
+                'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)',
+                'SBOOL("Level splits", 1, SETTING_CAT_TIMER)',
+                'SBOOL("Streak auto-reset", 1, SETTING_CAT_CUSTOM)',
+            ],
         )
         self.assertIn("void freezeEvent();", QFT_HEADER.read_text(encoding="utf-8"))
         qft = QFT_SOURCE.read_text(encoding="utf-8")

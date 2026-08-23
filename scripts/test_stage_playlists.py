@@ -16,6 +16,9 @@ KERNEL = ROOT / "launcher" / "kernel" / "SusamuneCfg.c"
 STAGE_LOADER = ROOT / "src" / "stage_loader.cpp"
 ILING = ROOT / "src" / "iling.cpp"
 WARP_WHEEL = ROOT / "src" / "warp_wheel.cpp"
+MENU = ROOT / "src" / "menu.cpp"
+SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
+SETTING_DESCS = ROOT / "src" / "settings_descs.inc"
 
 MAGIC = 0x53504C46
 VERSION_V1 = 1
@@ -410,6 +413,71 @@ def identity_change_valid(current: V2Payload, staged: V2Payload) -> bool:
 
 
 class PlaylistFormatTests(unittest.TestCase):
+    def test_streak_auto_reset_can_wait_for_the_savebox(self) -> None:
+        stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
+        wheel = WARP_WHEEL.read_text(encoding="utf-8")
+        menu = MENU.read_text(encoding="utf-8")
+        settings = SETTINGS.read_text(encoding="utf-8")
+        descs = SETTING_DESCS.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'X(SETTING_STREAK_AUTO_RESET,            "streak_auto_reset")',
+            settings,
+        )
+        self.assertIn(
+            'SBOOL("Streak auto-reset", 1, SETTING_CAT_CUSTOM)', descs
+        )
+        success = stage_loader[
+            stage_loader.index("void queueSuccess"):
+            stage_loader.index("u16 modalHeld()")
+        ]
+        self.assertRegex(
+            success,
+            r"normalShine\s*&&\s*\n\s*!gSettings\.getBool\("
+            r"SETTING_STREAK_AUTO_RESET\)",
+        )
+        self.assertIn("sRuntime.state = STATE_RETRY_SAVEBOX;", success)
+        post_save = stage_loader[
+            stage_loader.index("bool holdPostSaveDeparture()"):
+            stage_loader.index("bool copyDeathRetryDest")
+        ]
+        self.assertIn("requestCurrentPostSave()", post_save)
+        self.assertIn("STATE_WAITING_POST_SAVE", post_save)
+        on_directed = wheel[wheel.index("s32 onDirected(s32 appState)") :]
+        on_directed = on_directed[: on_directed.index("namespace WarpWheel")]
+        self.assertRegex(
+            on_directed,
+            r"appState > TApplication::CONTEXT_DIRECT_MAIN_LOOP\s*&&\s*"
+            r"StageLoader::holdPostSaveDeparture\(\)",
+        )
+        self.assertRegex(
+            on_directed,
+            r"(?s)if \(sCourseGuard\).*?if \(holdPostSave\).*?"
+            r"prepareArmedDeparture\(\)",
+        )
+        self.assertIn("if (holdPostSave) return 0;", on_directed)
+        self.assertIn('name = "Streak auto-reset";', menu)
+        self.assertIn("gSettings.cycle(SETTING_STREAK_AUTO_RESET, 1);", menu)
+        self.assertIn(
+            "return mStreaking ? OPTION_BUILTIN + 1 : OPTION_AUTO_RESET;",
+            menu,
+        )
+        self.assertRegex(
+            menu,
+            r"mStreaking\s*&&\s*row == OPTION_BUILTIN\s*\?\s*"
+            r"OPTION_AUTO_RESET",
+        )
+        update = stage_loader[
+            stage_loader.index("void update()"):
+            stage_loader.index("void onILAttemptStarted")
+        ]
+        self.assertRegex(
+            update,
+            r"(?s)SETTING_DISABLE_WARPS\).*?STATE_RETRY_SAVEBOX.*?"
+            r"STATE_WAITING_POST_SAVE",
+        )
+        self.assertIn("sRuntime.state = STATE_BLOCKED;", update)
+
     def test_final_modal_waits_for_shine_tail_and_pinna_exit_is_preserved(self) -> None:
         stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
         readiness = stage_loader[

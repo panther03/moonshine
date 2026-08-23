@@ -52,12 +52,14 @@ MD5_DB_Status LoadMD5Database(MD5_DB_t *pDB)
 	// If loaded from network, launch_dir[] is empty,
 	// so use /apps/Nintendont/ as a fallback.
 	char filepath[MAXPATHLEN];
-	snprintf(filepath, sizeof(filepath), "%sgcn_md5.txt",
-		 launch_dir[0] != 0 ? launch_dir : "/apps/Nintendont/");
+	int written = snprintf(filepath, sizeof(filepath), "%sgcn_md5.txt",
+		launch_dir[0] != 0 ? launch_dir : "/apps/Nintendont/");
 
 	FIL f_md5;
 	pDB->db = NULL;
 	pDB->size = 0;
+	if ((unsigned int)written >= sizeof(filepath))
+		return MD5_DB_READ_ERROR;
 	FRESULT res = f_open_char(&f_md5, filepath, FA_READ|FA_OPEN_EXISTING);
 	if (res == FR_OK)
 	{

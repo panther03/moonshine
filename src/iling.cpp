@@ -186,6 +186,8 @@ constexpr const char *regularGroupName(int group) {
 }
 
 constexpr int regularSuffixType(int flags) {
+    // A replay-only clear does not change the visible route name.
+    if (flags == ENTRY_CLEAR_RESULT) return 0;
     return ((flags >> 3) & 1) + (flags & 1) + ((flags >> 2) & 1) +
            3 * ((flags >> 4) & 1);
 }
@@ -417,6 +419,7 @@ const int kPbSlotCount = 126;
 const int kEntryGelato4Inside = 31;
 const int kEntryGelatoGbs = 121;
 const int kEntryPinnaEyg = 46;
+const int kEntryPinna8 = 50;
 const u8 kPinnaEygParentEpisode = 2;
 const int kEntrySirena8 = 63;
 const int kEntryNoki3Inside = 67;
@@ -431,6 +434,13 @@ static_assert(kEntries[kEntryPinnaEyg].start.area ==
                       kPinnaEygParentEpisode &&
                   kEntries[kEntryPinnaEyg].prerequisite == 121,
               "Pinna EYG entry moved");
+static_assert(kEntries[kEntryPinna8].start.area ==
+                      TGameSequence::AREA_PINNAPARCO &&
+                  kEntries[kEntryPinna8].start.episode == 5 &&
+                  kEntries[kEntryPinna8].start.gameInt3 == 7 &&
+                  kEntries[kEntryPinna8].result == 37 &&
+                  (kEntries[kEntryPinna8].flags & ENTRY_CLEAR_RESULT),
+              "Pinna 8 entry moved");
 static_assert(kEntries[kEntrySirena8].start.area == 7 &&
                   kEntries[kEntrySirena8].start.episode == 4 &&
                   kEntries[kEntrySirena8].start.gameInt3 == 7 &&
@@ -915,6 +925,13 @@ bool isPinnaOneRouteScene(const TGameSequence &scene) {
            (scene.mAreaID == 0x3A && scene.mEpisodeID == 1);
 }
 
+bool isPinnaEightReturn(const TGameSequence &scene) {
+    const TGameSequence &previous = gpApplication.mPrevScene;
+    return sameDest(sAttemptStart, kEntries[kEntryPinna8].start) &&
+           sceneMatches(scene, kEntries[kEntryPinna8].start) &&
+           previous.mAreaID == 0x3A && previous.mEpisodeID == 0;
+}
+
 bool acceptsSelectedOriginScene(const Entry &item,
                                 const TGameSequence &scene) {
     if (!acceptsAnySelectedOrigin(item)) return false;
@@ -930,6 +947,11 @@ bool stageObjectsLive() {
 
 bool isInternalScene(const LevelWarp::Dest &start,
                      const TGameSequence &scene) {
+    if (start.area == TGameSequence::AREA_PINNAPARCO &&
+        start.episode == 5 && scene.mAreaID == 0x3A &&
+        scene.mEpisodeID == 0) {
+        return true;
+    }
     if (start.area == 0x34 && scene.mAreaID == TGameSequence::AREA_CORONABOSS) {
         return true;
     }
@@ -1716,7 +1738,9 @@ void beforeStageSetup() {
 
     if (sRunning) {
         if (sceneMatches(scene, sAttemptStart)) {
-            sAttemptReady = false;
+            // Balloons returns to its exact start scene without restarting
+            // QFT. Keep the parent attempt armed for the spawned Shine.
+            sAttemptReady = isPinnaEightReturn(scene);
             sAttemptSerial = gQFTTimer.attemptSerial();
             if (isPlazaEntry(sSelectedEntry)) {
                 applyPlazaOverlay(sSelectedEntry);

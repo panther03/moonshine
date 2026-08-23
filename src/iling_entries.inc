@@ -51,7 +51,7 @@ PINNA_EYG("Pinna Park EYG", 121)
 SHINE_SECRET("Pinna 6 (Secret)", 0x29, 0, 5, 35, GROUP_PINNA, 75)
 SHINE_SET("Pinna 6 Reds", 0x29, 0, 5, 39, GROUP_PINNA, 35)
 SHINE("Pinna 7", 0x0D, 4, 6, 36, GROUP_PINNA)
-SHINE("Pinna 8", 0x0D, 5, 7, 37, GROUP_PINNA)
+SHINE_CLEAR("Pinna 8", 0x0D, 5, 7, 37, GROUP_PINNA)
 SHINE("Pinna 100 (E8)", 5, 7, 7, 103, GROUP_PINNA)
 
 SHINE("Sirena 1", 6, 0, 0, 40, GROUP_SIRENA)

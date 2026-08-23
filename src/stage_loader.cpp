@@ -31,6 +31,8 @@ enum SessionState {
     STATE_RUNNING,
     STATE_RETRY_DELAY,
     STATE_RETRY_PENDING,
+    STATE_RETRY_SAVEBOX,
+    STATE_WAITING_POST_SAVE,
     STATE_COMPLETE,
     STATE_BLOCKED,
 };
@@ -584,6 +586,27 @@ bool requestCurrent() {
     return true;
 }
 
+bool requestCurrentPostSave() {
+    const int entry = expectedStartEntry();
+    if (entry < 0 || entry >= ILing::count()) return false;
+
+    sRuntime.state = STATE_REQUESTING;
+    if (!WarpWheel::requestILStart(entry)) {
+        sRuntime.state = STATE_BLOCKED;
+        sRuntime.outcome = OUTCOME_WARPS_DISABLED;
+        sRuntime.lastEntry = (u8)entry;
+        sRuntime.lastQf = -1;
+        sRuntime.displayFrames = kResultDisplayFrames;
+        sRuntime.holdingDeparture = 0;
+        return false;
+    }
+    if (sRuntime.state == STATE_REQUESTING) {
+        sRuntime.state = STATE_WAITING_POST_SAVE;
+    }
+    sRuntime.holdingDeparture = 0;
+    return true;
+}
+
 void beginAttempt(u32 serial) {
     sRuntime.attemptSerial = serial;
     clearShinePublishLatch();
@@ -669,8 +692,14 @@ void queueSuccess(int resultEntry, s32 qf) {
             sRuntime.modalWaitForShineDemo = normalShine;
             sRuntime.modalState = MODAL_PENDING;
         } else {
-            sRuntime.retryFrames = kRetryDelayFrames;
-            sRuntime.state = STATE_RETRY_DELAY;
+            if (normalShine &&
+                !gSettings.getBool(SETTING_STREAK_AUTO_RESET)) {
+                sRuntime.retryFrames = 0;
+                sRuntime.state = STATE_RETRY_SAVEBOX;
+            } else {
+                sRuntime.retryFrames = kRetryDelayFrames;
+                sRuntime.state = STATE_RETRY_DELAY;
+            }
         }
         return;
     }
@@ -1348,7 +1377,9 @@ bool retryOwnsDeparture() {
     return sRuntime.state == STATE_REQUESTING ||
            sRuntime.state == STATE_WAITING ||
            sRuntime.state == STATE_RETRY_DELAY ||
-           sRuntime.state == STATE_RETRY_PENDING;
+           sRuntime.state == STATE_RETRY_PENDING ||
+           sRuntime.state == STATE_RETRY_SAVEBOX ||
+           sRuntime.state == STATE_WAITING_POST_SAVE;
 }
 
 bool holdGameModeBeforeUpdate(TMarDirector *director) {
@@ -1378,6 +1409,13 @@ bool holdGameModeBeforeUpdate(TMarDirector *director) {
     return false;
 }
 
+bool holdPostSaveDeparture() {
+    if (sRuntime.state == STATE_RETRY_SAVEBOX) {
+        return requestCurrentPostSave();
+    }
+    return sRuntime.state == STATE_WAITING_POST_SAVE;
+}
+
 bool copyDeathRetryDest(LevelWarp::Dest *out) {
     if (!out || sRuntime.state != STATE_RUNNING ||
         sRuntime.activeIndex >= sRuntime.activeCount ||
@@ -1391,6 +1429,18 @@ bool copyDeathRetryDest(LevelWarp::Dest *out) {
 
 void update() {
     pollPlaylistSave();
+    if (gSettings.getBool(SETTING_DISABLE_WARPS) &&
+        (sRuntime.state == STATE_RETRY_SAVEBOX ||
+         sRuntime.state == STATE_WAITING_POST_SAVE)) {
+        const int entry = expectedStartEntry();
+        sRuntime.state = STATE_BLOCKED;
+        sRuntime.outcome = OUTCOME_WARPS_DISABLED;
+        if (entry >= 0) sRuntime.lastEntry = (u8)entry;
+        sRuntime.lastQf = -1;
+        sRuntime.displayFrames = kResultDisplayFrames;
+        sRuntime.holdingDeparture = 0;
+        return;
+    }
     const bool shinePending = shinePublishPending();
     if (sRuntime.modalState == MODAL_VISIBLE) {
         updateModal();
@@ -1440,7 +1490,8 @@ void onILAttemptStarted(int entry) {
     if (entry != expectedStartEntry()) {
         if (sRuntime.state == STATE_RUNNING) {
             queueFailure(OUTCOME_WRONG_ROUTE, -1);
-        } else if (sRuntime.state == STATE_WAITING) {
+        } else if (sRuntime.state == STATE_WAITING ||
+                   sRuntime.state == STATE_WAITING_POST_SAVE) {
             sRuntime.state = STATE_RETRY_PENDING;
         }
         return;
@@ -1456,7 +1507,8 @@ void onILAttemptStarted(int entry) {
 void onILAttemptEnded() {
     if (sRuntime.state == STATE_RUNNING) {
         queueFailure(OUTCOME_ENDED, liveQf());
-    } else if (sRuntime.state == STATE_WAITING) {
+    } else if (sRuntime.state == STATE_WAITING ||
+               sRuntime.state == STATE_WAITING_POST_SAVE) {
         sRuntime.state = STATE_RETRY_PENDING;
     }
 }
@@ -1484,7 +1536,8 @@ void onILResult(int entry, s32 qf, bool eligible) {
 }
 
 void onILWarpCancelled() {
-    if (sRuntime.state == STATE_WAITING) {
+    if (sRuntime.state == STATE_WAITING ||
+        sRuntime.state == STATE_WAITING_POST_SAVE) {
         sRuntime.retryFrames = 0;
         sRuntime.state = STATE_RETRY_PENDING;
     }

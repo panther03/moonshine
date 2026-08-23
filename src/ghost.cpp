@@ -15,6 +15,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/actions.hxx"
 #include "susamune/binds.hxx"
+#include "susamune/checksum.hxx"
 #include "susamune/ghost_format.h"
 #include "susamune/ghost_model.hxx"
 #include "susamune/iling.hxx"
@@ -1599,26 +1600,6 @@ u8 runningRegion() {
 #endif
 }
 
-u32 crc32(const void *data, u32 size, u32 zeroOffset = 0,
-          u32 zeroSize = 0) {
-    static const u32 table[16] = {
-        0x00000000u, 0x1DB71064u, 0x3B6E20C8u, 0x26D930ACu,
-        0x76DC4190u, 0x6B6B51F4u, 0x4DB26158u, 0x5005713Cu,
-        0xEDB88320u, 0xF00F9344u, 0xD6D6A3E8u, 0xCB61B38Cu,
-        0x9B64C2B0u, 0x86D3D2D4u, 0xA00AE278u, 0xBDBDF21Cu,
-    };
-    const u8 *bytes = static_cast<const u8 *>(data);
-    u32 crc = SUSAMUNE_GHOST_CRC32_INIT;
-    for (u32 i = 0; i < size; i++) {
-        const u8 value = i >= zeroOffset && i - zeroOffset < zeroSize
-            ? 0
-            : bytes[i];
-        crc = (crc >> 4) ^ table[(crc ^ value) & 0x0fu];
-        crc = (crc >> 4) ^ table[(crc ^ (value >> 4)) & 0x0fu];
-    }
-    return crc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT;
-}
-
 bool validText(const char *text, u32 capacity, u8 length, bool required) {
     if (!text || length > capacity || (required && length == 0)) return false;
     for (u32 i = 0; i < capacity; i++) {
@@ -2041,18 +2022,20 @@ bool validCanonicalFile(const void *data, u32 size,
         }
     }
     if (extension.segmentTableChecksum !=
-        crc32(bytes + extension.segmentTableOffset,
-              extension.segmentTableSize)) {
+        Checksum::crc32(bytes + extension.segmentTableOffset,
+                        extension.segmentTableSize)) {
         return false;
     }
 
     if (header.headerChecksum !=
-            crc32(bytes, header.headerSize,
-                  SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8) ||
+            Checksum::crc32(bytes, header.headerSize,
+                            SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8) ||
         header.fileChecksum !=
-            crc32(bytes, size, SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4) ||
+            Checksum::crc32(bytes, size,
+                            SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4) ||
         header.payloadChecksum !=
-            crc32(bytes + header.headerSize, header.payloadSize)) {
+            Checksum::crc32(bytes + header.headerSize,
+                            header.payloadSize)) {
         return false;
     }
 
@@ -2817,7 +2800,7 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     extension.segmentTableSize = SUSAMUNE_GHOST_V4_SEGMENT_TABLE_SIZE;
     extension.sampleDataOffset = SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET;
     extension.sampleDataSize = sampleDataSize;
-    extension.segmentTableChecksum = crc32(
+    extension.segmentTableChecksum = Checksum::crc32(
         bytes + extension.segmentTableOffset,
         extension.segmentTableSize);
     extension.attachmentCount = track->attachmentCount;
@@ -2842,14 +2825,14 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     header.profileNameLength = copyText(
         header.profileName, sizeof(header.profileName), profileName);
     header.checksumKind = SUSAMUNE_GHOST_CHECKSUM_CRC32;
-    header.payloadChecksum = crc32(
+    header.payloadChecksum = Checksum::crc32(
         bytes + SUSAMUNE_GHOST_FILE_HEADER_SIZE, payloadSize);
 
     memcpy(bytes, &header, sizeof(header));
-    header.headerChecksum = crc32(
+    header.headerChecksum = Checksum::crc32(
         bytes, sizeof(header), SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8);
     memcpy(bytes, &header, sizeof(header));
-    header.fileChecksum = crc32(
+    header.fileChecksum = Checksum::crc32(
         bytes, fileSize, SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4);
     memcpy(bytes, &header, sizeof(header));
 

@@ -44,9 +44,9 @@ def main():
         }
 
         bnr = BNR(in_root / "files" / "opening.bnr", region=VERS_TO_REGION[args.vers])
-        bnr.gameName = "susamune practice mod"
+        bnr.gameName = "Moonshine practice mod"
         bnr.gameDescription = "adds practice feature(s) to sunshine"
-        bnr.gameTitle = "susamune!"
+        bnr.gameTitle = "Moonshine!"
         bnr.developerName = "2026   J"
         bnr.developerTitle = "2026   J"
         bnr.rawImage = Image.open(str(sms_bmp))

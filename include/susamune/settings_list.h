@@ -165,7 +165,10 @@
     /* -- PB ghost save policy (append-only persisted id) -- */                \
     X(SETTING_PB_GHOST_SAVE_POLICY,      "pb_ghost_save_policy")             \
     /* -- Additional timer event freeze (append-only persisted id) -- */       \
-    X(SETTING_TIMER_FREEZE_MOVING_PLATFORM, "timer_freeze_moving_platform")
+    X(SETTING_TIMER_FREEZE_MOVING_PLATFORM, "timer_freeze_moving_platform")   \
+    /* -- V2.1.1 presentation/session controls (append-only persisted ids) -- */ \
+    X(SETTING_LEVEL_SPLITS,                 "level_splits")                   \
+    X(SETTING_STREAK_AUTO_RESET,            "streak_auto_reset")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

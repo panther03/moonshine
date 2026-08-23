@@ -306,8 +306,8 @@ static void EmitNintendontSection(FIL *f, int *err)
 }
 
 static const char kIniBanner[] =
-	"; susamune settings\r\n"
-	"; [nintendont] is written by the susamune launcher and is regenerated\r\n"
+	"; Moonshine settings\r\n"
+	"; [nintendont] is written by the Moonshine Launcher and is regenerated\r\n"
 	"; whenever you leave one of its menus with changes pending, so comments\r\n"
 	"; added inside it are lost. Everything else in this file is preserved.\r\n"
 	";\r\n"

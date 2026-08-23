@@ -18,6 +18,7 @@
 #include "SMS/Strategic/Strategy.hxx"
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/addresses.hxx"
+#include "susamune/checksum.hxx"
 #include "susamune/ghost.hxx"
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ghost_storage.h"
@@ -188,19 +189,6 @@ u32 readBig32(const u8 *bytes) {
            static_cast<u32>(bytes[3]);
 }
 
-u32 crc32(const void *data, u32 size) {
-    const u8 *bytes = static_cast<const u8 *>(data);
-    u32 crc = SUSAMUNE_GHOST_CRC32_INIT;
-    for (u32 i = 0; i < size; ++i) {
-        crc ^= bytes[i];
-        for (u32 bit = 0; bit < 8; ++bit) {
-            const u32 mask = 0u - (crc & 1u);
-            crc = (crc >> 1) ^ (SUSAMUNE_GHOST_CRC32_POLY & mask);
-        }
-    }
-    return crc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT;
-}
-
 bool validBmdHeader(const void *resource, u32 size) {
     const u8 *bytes = static_cast<const u8 *>(resource);
     return bytes && memcmp(bytes, "J3D2bmd3", 8) == 0 &&
@@ -209,7 +197,7 @@ bool validBmdHeader(const void *resource, u32 size) {
 
 bool validBmd(const void *resource, u32 size, u32 checksum) {
     return validBmdHeader(resource, size) &&
-           crc32(resource, size) == checksum;
+           Checksum::crc32(resource, size) == checksum;
 }
 
 #if !defined(IS_EMULATOR) || !IS_EMULATOR
@@ -229,7 +217,7 @@ const u8 *validateMaster(void *raw, u32 bufferSize, u32 magic,
         return nullptr;
     }
     const u8 *payload = static_cast<const u8 *>(raw) + bmdOffset;
-    return crc32(payload, totalSize - bmdOffset) == payloadChecksum
+    return Checksum::crc32(payload, totalSize - bmdOffset) == payloadChecksum
         ? payload
         : nullptr;
 }
@@ -261,7 +249,7 @@ const void *stageLocalBmd(const char *path, u32 size, u32 checksum,
                           bool allowTextureMutation) {
     const void *resource = JKRFileLoader::getGlbResource(path);
     if (!validBmdHeader(resource, size)) return nullptr;
-    return allowTextureMutation || crc32(resource, size) == checksum
+    return allowTextureMutation || Checksum::crc32(resource, size) == checksum
         ? resource
         : nullptr;
 }
@@ -837,7 +825,7 @@ void entryAttachment(AttachmentModel &attachment) {
 
 class GhostView : public JDrama::TViewObj {
 public:
-    GhostView() : JDrama::TViewObj("Susamune Ghost Models") {}
+    GhostView() : JDrama::TViewObj("Moonshine Ghost Models") {}
 
     virtual void perform(u32 cue, JDrama::TGraphics *) override {
         if ((cue & (kCueCalcView | kCueEntry)) == 0) return;

@@ -49,6 +49,12 @@
 #include "susamune/wallkick_display.hxx"
 #include "susamune/gameplay_polish.hxx"
 
+namespace {
+// The mod reservation is fixed, so BSS storage costs no additional game heap.
+// Keep this persistent controller out of Sunshine's pressured system heap.
+alignas(SavestateManager) u8 sSavestateManagerStorage[sizeof(SavestateManager)];
+}
+
 SavestateManager* gSavestateMgr = nullptr;
 
 // Replaces the game's OSGetArenaLo. The mod is linked into the bottom of the
@@ -227,7 +233,7 @@ extern "C" void onSetup(TMarDirector* director) {
 
     JKRHeap *oldHeap = JKRHeap::sSystemHeap->becomeCurrentHeap();
     menuInit();
-    gSavestateMgr = new SavestateManager();
+    gSavestateMgr = new (sSavestateManagerStorage) SavestateManager();
     
     if (oldHeap) {
         oldHeap->becomeCurrentHeap();

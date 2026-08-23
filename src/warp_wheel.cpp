@@ -1127,6 +1127,9 @@ s32 onDirected(s32 appState) {
     // A protected-PB decision may outlive the fade. Keep the completed retail
     // death director until the exact restart action is ready to arm.
     if (sDeathSequence && restartPromptPending()) return 0;
+    const bool holdPostSave =
+        appState > TApplication::CONTEXT_DIRECT_MAIN_LOOP &&
+        StageLoader::holdPostSaveDeparture();
     sWaitForRetailDeathTail = false;
     sQueuedSessionDeathRestart = false;
     // Ordinary returns still respect the save UI. At a true app handoff that
@@ -1145,10 +1148,15 @@ s32 onDirected(s32 appState) {
     if (sArmed) {
         sWaitForSave = false;
         if (sCourseGuard) {
-            // A retail departure won the race with the queued course warp.
-            // It is too late to open a confirmation at this handoff.
-            cancelArmedCourseWarp();
-            if (gMenu) gMenu->toast("Course warp cancelled");
+            if (holdPostSave) {
+                // This departure is the requested post-save retry itself.
+                prepareArmedDeparture();
+            } else {
+                // A retail departure won the race with the queued course warp.
+                // It is too late to open a confirmation at this handoff.
+                cancelArmedCourseWarp();
+                if (gMenu) gMenu->toast("Course warp cancelled");
+            }
         } else {
             prepareArmedDeparture();
         }
@@ -1176,6 +1184,7 @@ s32 onDirected(s32 appState) {
         ILing::onWarpTail();
         return TApplication::CONTEXT_DIRECT_STAGE;
     }
+    if (holdPostSave) return 0;
 
     // Original Level Select: while an ordinary file/stage departure finishes,
     // a held chart combination redirects the next scene. Instant Level Select

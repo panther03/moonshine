@@ -170,14 +170,10 @@ void AttemptCounter::update(bool observerFrame) {
 
     // A serial (rather than a bool) cannot lose a second event should two
     // callbacks occur before this once-per-frame poll.
-    const u32 shineEvents = serial - mLastShineSerial;
+    u32 successEvents = serial - mLastShineSerial;
     mLastShineSerial = serial;
-    if (shineEvents != 0) {
-        u32 room = 0xFFFFu - mSuccessCount;
-        mSuccessCount = (u16)(mSuccessCount +
-                              (shineEvents < room ? shineEvents : room));
+    if (successEvents != 0) {
         mGotShine = true;
-        show();
     }
 
     // This serial is published at moveStage+0x3c, before the application
@@ -186,9 +182,12 @@ void AttemptCounter::update(bool observerFrame) {
     const u32 departureEvents = departures - mLastDepartureSerial;
     mLastDepartureSerial = departures;
     if (departureEvents != 0 && !mGotShine) {
-        u32 room = 0xFFFFu - mSuccessCount;
+        successEvents = departureEvents;
+    }
+    if (successEvents != 0) {
+        const u32 room = 0xFFFFu - mSuccessCount;
         mSuccessCount = (u16)(mSuccessCount +
-                              (departureEvents < room ? departureEvents : room));
+                              (successEvents < room ? successEvents : room));
         show();
     }
 

@@ -78,12 +78,14 @@ namespace {
   bool sResetRequested;
   bool sFinalConsumed;
   bool sBigShown;
+  bool sBigRaised;
   bool sRetailTimerOwned;
   u32 sAttemptSerial;
   TMarDirector *sStageDirector;
   TimerState sSavedState;
   bool sHaveSavedState;
   bool sSavedFinalConsumed;
+  bool sSavedBigRaised;
   bool sSavedRetailTimerOwned;
   u32 sSavedAttemptSerial;
   s32 sSectionQf[kSectionHistoryCount];
@@ -94,6 +96,8 @@ namespace {
   u8 sSectionNext;
   u8 sSavedSectionCount;
   u8 sSavedSectionNext;
+  J2DPane *sBigTimerPane;
+  u8 sBigUpdatePass;
 
 // PowerPC address materialisation for fixed scratch. D-form offsets are
 // signed, so use @ha/@l rather than a plain high half.
@@ -571,11 +575,19 @@ namespace {
     return clampQf(sState->offsetQf + gpMarDirector->unk5C);
   }
 
+  s32 frozenDisplayQf() {
+    // Demo freezes can overwrite freezeQf on the loading-zone frame. The
+    // dedicated transition pair stays authoritative until it is consumed.
+    if (*sTransitionTarget != 0xFFFF)
+      return clampQf(sState->offsetQf + *sTransitionQf - 4);
+    return clampQf(sState->offsetQf + sState->freezeQf);
+  }
+
   s32 compactQf() {
     if (sState->stopped)
       return clampQf(sState->offsetQf);
     if (sState->freezeFrames != 0) {
-      return clampQf(sState->offsetQf + sState->freezeQf);
+      return frozenDisplayQf();
     }
     if (!gpMarDirector || gpMarDirector != sStageDirector) {
       return clampQf(sState->offsetQf);
@@ -586,8 +598,8 @@ namespace {
 
   s32 sunshineQf() {
     // Loading zones hold the visible split while the real clock carries on.
-    if (!sState->stopped && sState->freezeFrames == -1)
-      return clampQf(sState->offsetQf + sState->freezeQf);
+    if (!sState->stopped && *sTransitionTarget != 0xFFFF)
+      return frozenDisplayQf();
     return liveQf();
   }
 
@@ -602,7 +614,7 @@ namespace {
   void captureSection() {
     if (!sStageReady || sState->freezeFrames == 0)
       return;
-    const s32 current = clampQf(sState->offsetQf + sState->freezeQf);
+    const s32 current = frozenDisplayQf();
     if (current <= sLastSectionQf)
       return;
     sSectionQf[sSectionNext] = current - sLastSectionQf;
@@ -623,6 +635,54 @@ namespace {
 
   bool finalStop() { return sState->stopped && sState->stopReason != STOP_NONE; }
 
+  J2DPane *hudPane(const TGCConsole2 *console, u32 tag) {
+    if (!console || !console->mMainScreen)
+      return nullptr;
+    return console->mMainScreen->search(tag);
+  }
+
+  bool paneOnScreen(const J2DPane *pane) {
+    if (!pane || !pane->mIsVisible)
+      return false;
+    const JUTRect &rect = pane->mRect;
+    return rect.mY1 < 448 && rect.mY2 > 0;
+  }
+
+  bool missionCounterOnScreen(const TGCConsole2 *console) {
+    return paneOnScreen(hudPane(console, '\0b_0')) ||
+           paneOnScreen(hudPane(console, '\0r_0'));
+  }
+
+  J2DPane *bigTimerPane(const TGCConsole2 *console) {
+    return hudPane(console, '\0t_0');
+  }
+
+  void restoreBigTimerPosition() {
+    if (!sBigRaised) {
+      sBigTimerPane = nullptr;
+      return;
+    }
+
+    TGCConsole2 *console = gpMarDirector ? gpMarDirector->mGCConsole : nullptr;
+    J2DPane *pane = bigTimerPane(console);
+    if (pane && pane == sBigTimerPane)
+      pane->add(0, 60);
+    sBigTimerPane = nullptr;
+    sBigRaised = false;
+  }
+
+  void raiseBigTimer(TGCConsole2 *console) {
+    J2DPane *pane = bigTimerPane(console);
+    if (!pane || sBigRaised)
+      return;
+
+    // Apply after retail's pane animation and undo before the next update.
+    // That keeps the shift out of TExPane's regional private layout.
+    pane->add(0, -60);
+    sBigTimerPane = pane;
+    sBigRaised = true;
+  }
+
   void hideBigTimer() {
     if (!gpMarDirector || !gpMarDirector->mGCConsole)
       return;
@@ -630,7 +690,7 @@ namespace {
     sBigShown = false;
   }
 
-  void updateBigTimer() {
+  void updateBigTimer(bool afterDirect) {
     if (!sStageReady || !gpMarDirector || gpMarDirector != sStageDirector ||
         !gpMarDirector->mGCConsole) {
       return;
@@ -662,6 +722,8 @@ namespace {
       sBigShown = true;
     }
     gpMarDirector->mGCConsole->setTimer(qfToRoundedCentis(sunshineQf()));
+    if (afterDirect && missionCounterOnScreen(console))
+      raiseBigTimer(console);
   }
 
 }  // namespace
@@ -685,9 +747,12 @@ void QFTTimer::init() {
   sResetRequested = true;
   sFinalConsumed = false;
   sBigShown       = false;
+  sBigRaised      = false;
   sRetailTimerOwned = false;
   sAttemptSerial  = 0;
   sStageDirector  = nullptr;
+  sBigTimerPane   = nullptr;
+  sBigUpdatePass  = 0;
   sHaveSavedState = false;
   resetSections();
 
@@ -730,6 +795,9 @@ void QFTTimer::init() {
 }
 
 void QFTTimer::beginFrame() {
+  restoreBigTimerPosition();
+  sBigUpdatePass = 0;
+
   if (sStagePending && gpMarDirector == sStageDirector && gpMarDirector->_260 != 0 &&
       gpMarDirector->mCurState >= TMarDirector::STATE_GAME_STARTING) {
     sStagePending = false;
@@ -770,8 +838,11 @@ void QFTTimer::onStageSetup(TMarDirector *director) {
   sStageReady    = false;
   sStagePending  = true;
   sBigShown      = false;
+  sBigRaised     = false;
   sRetailTimerOwned = false;
   sStageDirector = director;
+  sBigTimerPane  = nullptr;
+  sBigUpdatePass = 0;
   // Cross-area continuation proved unreliable. Start a fresh section list at
   // every loaded area while leaving the underlying full-level QFT untouched.
   resetSections();
@@ -779,7 +850,7 @@ void QFTTimer::onStageSetup(TMarDirector *director) {
     sLastSectionQf = clampQf(sState->offsetQf);
 }
 
-void QFTTimer::update() { updateBigTimer(); }
+void QFTTimer::update() { updateBigTimer(sBigUpdatePass++ != 0); }
 
 void QFTTimer::draw(Menu *menu) const {
   if (!menu || !sStageReady || !gpMarDirector || gpMarDirector != sStageDirector) {
@@ -877,6 +948,17 @@ bool QFTTimer::currentQf(s32 *qf, bool *stopped) const {
   return true;
 }
 
+bool QFTTimer::transitionEntryQf(s32 *qf, u16 *target) const {
+  if (!qf || !target || *sTransitionTarget == 0xFFFF) {
+    return false;
+  }
+  // The transition cave rounds director QF to the following whole frame for
+  // IL finishes. A loading-zone checkpoint ends at the preceding entry edge.
+  *qf = frozenDisplayQf();
+  *target = *sTransitionTarget;
+  return true;
+}
+
 bool QFTTimer::consumeTransition(s32 *qf, u16 *target) {
   if (!qf || !target || *sTransitionTarget == 0xFFFF) {
     return false;
@@ -940,6 +1022,7 @@ void QFTTimer::onSavestateSaved() {
   sSavedState.freezeQf     = sState->freezeQf;
   sSavedState.freezeFrames = sState->freezeFrames;
   sSavedFinalConsumed      = sFinalConsumed;
+  sSavedBigRaised          = sBigRaised;
   sSavedRetailTimerOwned    = sRetailTimerOwned;
   sSavedAttemptSerial      = sAttemptSerial;
   sSavedLastSectionQf      = sLastSectionQf;
@@ -961,7 +1044,11 @@ void QFTTimer::onSavestateLoaded() {
   sState->freezeQf     = sSavedState.freezeQf;
   sState->freezeFrames = sSavedState.freezeFrames;
   sFinalConsumed       = sSavedFinalConsumed;
+  sBigRaised           = sSavedBigRaised;
   sRetailTimerOwned     = sSavedRetailTimerOwned;
+  sBigTimerPane         = sBigRaised && gpMarDirector
+                              ? bigTimerPane(gpMarDirector->mGCConsole)
+                              : nullptr;
   sAttemptSerial       = sSavedAttemptSerial;
   sLastSectionQf       = sSavedLastSectionQf;
   sSectionCount        = sSavedSectionCount;

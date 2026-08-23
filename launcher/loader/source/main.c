@@ -27,7 +27,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <wupc/wupc.h>
 #include <di/di.h>
 #include <unistd.h>
-#include <locale.h>
 
 #include "exi.h"
 #include "dip.h"
@@ -85,6 +84,73 @@ static u8 multAddr = 0;
 #define STATUS_DRIVE	(*(float*)(0x9000410C))
 #define STATUS_GB_MB	(*(volatile unsigned int*)(0x90004100 + 16))
 #define STATUS_ERROR	(*(volatile unsigned int*)(0x90004100 + 20))
+
+static bool BuildDevicePathN(char *out, size_t outSize, const char *path,
+	size_t pathLength, const char *suffix)
+{
+	const char *device;
+	size_t deviceLength;
+	size_t suffixLength;
+	size_t used;
+
+	if (out == NULL || outSize == 0 || path == NULL || suffix == NULL)
+		return false;
+	device = GetRootDevice();
+	if (device == NULL)
+		return false;
+	deviceLength = strlen(device);
+	suffixLength = strlen(suffix);
+	if (deviceLength >= outSize || outSize - deviceLength <= 1)
+		return false;
+	used = deviceLength + 1;
+	if (pathLength >= outSize - used)
+		return false;
+	used += pathLength;
+	if (suffixLength >= outSize - used)
+		return false;
+
+	memcpy(out, device, deviceLength);
+	out[deviceLength] = ':';
+	memcpy(out + deviceLength + 1, path, pathLength);
+	memcpy(out + used, suffix, suffixLength + 1);
+	return true;
+}
+
+static bool BuildDevicePath(char *out, size_t outSize, const char *path,
+	const char *suffix)
+{
+	if (path == NULL)
+		return false;
+	return BuildDevicePathN(out, outSize, path, strlen(path), suffix);
+}
+
+static bool BuildSiblingPath(char *out, size_t outSize, const char *gamePath,
+	const char *name)
+{
+	const char *slash;
+
+	if (gamePath == NULL)
+		return false;
+	slash = strrchr(gamePath, '/');
+	if (slash == NULL)
+		return false;
+	return BuildDevicePathN(out, outSize, gamePath,
+		(size_t)(slash - gamePath) + 1, name);
+}
+
+static void __attribute__((noinline)) LoadIplFonts(void)
+{
+	u8 chunk[0x100] ATTRIBUTE_ALIGN(32);
+	u32 offset;
+
+	// EXI DMA needs MEM1. Copy each DMA-sized chunk to the final MEM2 alias.
+	for (offset = 0; offset < 0x50000u; offset += sizeof(chunk))
+	{
+		__SYS_ReadROM(chunk, sizeof(chunk), 0x1AFF00u + offset);
+		memcpy((void*)(0xD3100000u + offset), chunk, sizeof(chunk));
+	}
+	DCInvalidateRange((void*)0x93100000, 0x50000u);
+}
 
 #define HW_DIFLAGS		0xD800180
 #define MEM_PROT		0xD8B420A
@@ -733,22 +799,12 @@ void SetFilePatches(void)
 	DCFlushRange((void*)patch_cntAddr, sizeof(*patch_cntAddr));
 	
 	//TODO: check for extracted fst format
-	char cheatPath[255];
-	snprintf(cheatPath, sizeof(cheatPath), "%s:%s", GetRootDevice(), ncfg->GamePath);
+	char cheatPath[260];
 	u32 i;
-	//const char* DiscName = (const char *)patchID;
-	//search the string backwards for '/'
-	for (i = strlen(cheatPath); i > 0; --i)
-	{
-		if( cheatPath[i] == '/' )
-			break;
-	}
-	i++;
-	//memcpy(cheatPath, DiscName, i);
-	snprintf(cheatPath+i, sizeof(cheatPath), "patch.bin");
-	
 	FIL CodeFD;
-	if( f_open_char( &CodeFD, cheatPath, FA_READ|FA_OPEN_EXISTING ) == FR_OK )
+	if (BuildSiblingPath(cheatPath, sizeof(cheatPath), ncfg->GamePath,
+		"patch.bin") &&
+	    f_open_char(&CodeFD, cheatPath, FA_READ | FA_OPEN_EXISTING) == FR_OK)
 	{
 		if( CodeFD.obj.objsize > NIN_MEM2_FILE_PATCH_SIZE )
 		{
@@ -758,66 +814,82 @@ void SetFilePatches(void)
 		{
 			void *patchbuf = (void*)NIN_MEM2_FILE_PATCH_PPC_BASE;
 			UINT read;
-			f_read(&CodeFD, patchbuf, CodeFD.obj.objsize, &read);
-			DCFlushRange(patchbuf, read);
+			FRESULT result = f_read(&CodeFD, patchbuf,
+				(UINT)CodeFD.obj.objsize, &read);
+			if (result == FR_OK && read == (UINT)CodeFD.obj.objsize)
+				DCFlushRange(patchbuf, read);
+			else
+			{
+				*patch_cntAddr = 0;
+				DCFlushRange((void*)patch_cntAddr,
+					sizeof(*patch_cntAddr));
+			}
 		}
 		f_close( &CodeFD );
 	}
-	else
+	else if (BuildSiblingPath(cheatPath, sizeof(cheatPath), ncfg->GamePath,
+		"patch.txt") &&
+	         f_open_char(&CodeFD, cheatPath,
+			 FA_READ | FA_OPEN_EXISTING) == FR_OK)
 	{
-		snprintf(cheatPath+i, sizeof(cheatPath), "patch.txt");
-		if( f_open_char( &CodeFD, cheatPath, FA_READ|FA_OPEN_EXISTING ) == FR_OK )
+		if (CodeFD.obj.objsize <= NIN_MEM2_FILE_PATCH_SIZE)
 		{
-			if( CodeFD.obj.objsize > NIN_MEM2_FILE_PATCH_SIZE )
+			u8 *CMem = memalign(32, (u32)CodeFD.obj.objsize);
+			if (CMem != NULL)
 			{
-				;//dbgprintf("Patch:File is too large, can't be larger than 6 MiB!\r\n");
+				UINT read;
+				FRESULT result = f_read(&CodeFD, CMem,
+					(UINT)CodeFD.obj.objsize, &read);
+				if (result == FR_OK && read == (UINT)CodeFD.obj.objsize)
+				{
+					u32 numnonascii = 0;
+					for (i = 0; i < read; i++)
+					{
+						if (CMem[i] < 9 || CMem[i] > 126)
+							numnonascii++;
+						else
+							CMem[i - numnonascii] = CMem[i];
+					}
+					app_loadgameconfig(CMem, read - numnonascii);
+				}
+				free(CMem);
 			}
-			else
+		}
+		f_close(&CodeFD);
+	}
+	
+	// Check for global patch.txt in apps/gc_devo/patch.txt
+	// this can be used to make every game use the kabuki jingle for example
+#if 1
+	if (BuildDevicePath(cheatPath, sizeof(cheatPath),
+		"/apps/gc_devo/patch.txt", "") &&
+	    f_open_char(&CodeFD, cheatPath, FA_READ | FA_OPEN_EXISTING) == FR_OK)
+	{
+		if( CodeFD.obj.objsize < 1*1024*1024 )
+		{
+			u8 *CMem = memalign(32, (u32)CodeFD.obj.objsize);
+			UINT read;
+			FRESULT result;
+			if (CMem == NULL)
 			{
-				u8 *CMem = memalign(32, CodeFD.obj.objsize);
-				u32 read;
-				f_read(&CodeFD, CMem, CodeFD.obj.objsize, &read);
-				
+				f_close(&CodeFD);
+				return;
+			}
+			result = f_read(&CodeFD, CMem, (UINT)CodeFD.obj.objsize,
+				&read);
+			if (result == FR_OK && read == (UINT)CodeFD.obj.objsize)
+			{
 				u32 numnonascii = 0;
-				for (i = 0; i < CodeFD.obj.objsize; i++)
+				for (i = 0; i < read; i++)
 				{
 					if (CMem[i] < 9 || CMem[i] > 126)
 						numnonascii++;
 					else
 						CMem[i - numnonascii] = CMem[i];
 				}
-				CodeFD.obj.objsize -= numnonascii;
-				
-				app_loadgameconfig(CMem, CodeFD.obj.objsize);
-				free( CMem );
+				app_loadgameconfig(CMem, read - numnonascii);
 			}
-			f_close( &CodeFD );
-		}
-	}
-	
-	// Check for global patch.txt in apps/gc_devo/patch.txt
-	// this can be used to make every game use the kabuki jingle for example
-#if 1
-	snprintf(cheatPath, sizeof(cheatPath), "%s:%s", GetRootDevice(), "/apps/gc_devo/patch.txt");
-	if( f_open_char( &CodeFD, cheatPath, FA_READ|FA_OPEN_EXISTING ) == FR_OK )
-	{
-		if( CodeFD.obj.objsize < 1*1024*1024 )
-		{
-			u8 *CMem = memalign(32, CodeFD.obj.objsize);
-			u32 read;
-			f_read(&CodeFD, CMem, CodeFD.obj.objsize, &read);
-			u32 numnonascii = 0;
-			for (i = 0; i < CodeFD.obj.objsize; i++)
-			{
-				if (CMem[i] < 9 || CMem[i] > 126)
-					numnonascii++;
-				else
-					CMem[i - numnonascii] = CMem[i];
-			}
-			CodeFD.obj.objsize -= numnonascii;
-			
-			app_loadgameconfig(CMem, CodeFD.obj.objsize);
-			free( CMem );
+			free(CMem);
 		}
 		f_close( &CodeFD );
 	}
@@ -827,24 +899,15 @@ void SetFilePatches(void)
 
 void SMC_ROM(void)
 {
+	char cheatPath[260];
+	FIL f;
+
 	if(strncmp((const char *)patchID, "GSOE", 4))
 		return;
-	
-	char cheatPath[255];
-	snprintf(cheatPath, sizeof(cheatPath), "%s:%s", GetRootDevice(), ncfg->GamePath);
-	u32 i;
-	//const char* DiscName = (const char *)patchID;
-	//search the string backwards for '/'
-	for (i = strlen(cheatPath); i > 0; --i)
-	{
-		if( cheatPath[i] == '/' )
-			break;
-	}
-	i++;
-	//memcpy(cheatPath, DiscName, i);
 	*(u32*)0x91200000 = 0;
-	snprintf(cheatPath+i, sizeof(cheatPath), "rom.bin");
-	FIL f;
+	if (!BuildSiblingPath(cheatPath, sizeof(cheatPath), ncfg->GamePath,
+		"rom.bin"))
+		return;
 	if( f_open_char( &f, cheatPath, FA_READ|FA_OPEN_EXISTING ) == FR_OK )
 	{
 		if( f.obj.objsize > 4*1024*1024 )
@@ -853,16 +916,21 @@ void SMC_ROM(void)
 		}
 		else
 		{
-			*(u32*)0x91200000 = f.obj.objsize;
 			void *patchbuf = (void*)0x91200010;
 			UINT read;
-			f_read(&f, patchbuf, f.obj.objsize, &read); //up to 0x400000
+			FRESULT result = f_read(&f, patchbuf, (UINT)f.obj.objsize,
+				&read);
+			if (result == FR_OK && read == (UINT)f.obj.objsize)
+			{
+				*(u32*)0x91200000 = read;
+				DCFlushRange((void*)0x91200000, 0x10 + read);
+			}
 		}
 		f_close( &f );
 	}
 }
 
-static char SMC_TITLES[14][16] =
+static const char SMC_TITLES[14][16] =
 {
 	"meanbean.bin",
 	"flicky.bin",
@@ -882,7 +950,12 @@ static char SMC_TITLES[14][16] =
 
 void SMC_ScanROM(u8 title)
 {
+	char cheatPath[260];
+	FIL f;
+
 	if(strncmp((const char *)patchID, "GSOE", 4))
+		return;
+	if (title >= sizeof(SMC_TITLES) / sizeof(SMC_TITLES[0]))
 		return;
 	
 	vu32* patch_cntAddr = (vu32*)NIN_MEM2_FILE_PATCH_PPC_BASE; //amount of writes
@@ -897,21 +970,9 @@ void SMC_ScanROM(u8 title)
 		*patch_cntAddr += 1;
 	}
 	
-	char cheatPath[255];
-	snprintf(cheatPath, sizeof(cheatPath), "%s:%s", GetRootDevice(), ncfg->GamePath);
-	u32 i;
-	//const char* DiscName = (const char *)patchID;
-	//search the string backwards for '/'
-	for (i = strlen(cheatPath); i > 0; --i)
-	{
-		if( cheatPath[i] == '/' )
-			break;
-	}
-	i++;
-	//memcpy(cheatPath, DiscName, i);
-	//*(u32*)0x91200000 = 0;
-	snprintf(cheatPath+i, sizeof(cheatPath), SMC_TITLES[title]);
-	FIL f;
+	if (!BuildSiblingPath(cheatPath, sizeof(cheatPath), ncfg->GamePath,
+		SMC_TITLES[title]))
+		return;
 	if( f_open_char( &f, cheatPath, FA_READ|FA_OPEN_EXISTING ) == FR_OK )
 	{
 		if( f.obj.objsize > 4*1024*1024 )
@@ -1007,10 +1068,18 @@ bool wiiVCInternal = false;
 static void updateMetaXml(void)
 {
 	char filepath[MAXPATHLEN];
-	bool dir_argument_exists = strlen(launch_dir);
-	
-	snprintf(filepath, sizeof(filepath), "%smeta.xml",
-		dir_argument_exists ? launch_dir : "/apps/Nintendont/");
+	char new_meta[1024];
+	const bool dir_argument_exists = launch_dir[0] != '\0';
+	const char *metaDir =
+		dir_argument_exists ? launch_dir : "/apps/Nintendont/";
+	size_t metaDirLength = strlen(metaDir);
+	int len;
+	FIL meta;
+
+	if (metaDirLength + sizeof("meta.xml") > sizeof(filepath))
+		return;
+	memcpy(filepath, metaDir, metaDirLength);
+	memcpy(filepath + metaDirLength, "meta.xml", sizeof("meta.xml"));
 
 	if (!dir_argument_exists) {
 		gprintf("Creating new directory\r\n");
@@ -1018,8 +1087,7 @@ static void updateMetaXml(void)
 		f_mkdir_char("/apps/Nintendont");
 	}
 
-	char new_meta[1024];
-	int len = snprintf(new_meta, sizeof(new_meta),
+	len = snprintf(new_meta, sizeof(new_meta),
 		META_XML "\r\n<app version=\"1\">\r\n"
 		"\t<name>" META_NAME "</name>\r\n"
 		"\t<coder>" META_AUTHOR "</coder>\r\n"
@@ -1036,11 +1104,10 @@ static void updateMetaXml(void)
 		""
 #endif
   			);
-	if (len > sizeof(new_meta))
-		len = sizeof(new_meta);
+	if (len < 0 || (size_t)len >= sizeof(new_meta))
+		return;
 
 	// Check if the file already exists.
-	FIL meta;
 	if (f_open_char(&meta, filepath, FA_READ|FA_OPEN_EXISTING) == FR_OK)
 	{
 		// File exists. If it's the same as the new meta.xml,
@@ -1137,6 +1204,8 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 	FIL f;
 	UINT read;
 	FRESULT fres = FR_DISK_ERR;
+	if (MultiHdr == NULL)
+		return 1;
 
 	if(CurDICMD)
 		ReadRealDisc(MultiHdr, 0, 0x800, CurDICMD);
@@ -1153,7 +1222,12 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 		}
 		else
 		{
-			snprintf(GamePath, sizeof(GamePath), "%s:%s", GetRootDevice(), ncfg->GamePath);
+			if (!BuildDevicePath(GamePath, sizeof(GamePath),
+				ncfg->GamePath, ""))
+			{
+				free(MultiHdr);
+				return 1;
+			}
 			fres = f_open_char(&f, GamePath, FA_READ|FA_OPEN_EXISTING);
 			if (fres != FR_OK)
 			{
@@ -1248,7 +1322,7 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 				{
 					WDVD_FST_LSeek(0x8458);
 					read = WDVD_FST_Read(wdvdTmpBuf, sizeof(*BI2region));
-					memcpy(&BI2region, wdvdTmpBuf, sizeof(*BI2region));
+					memcpy(BI2region, wdvdTmpBuf, sizeof(*BI2region));
 				}
 				else
 				{
@@ -1282,7 +1356,12 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 		}
 
 		// Get the bi2.bin region code.
-		snprintf(GamePath, sizeof(GamePath), "%s:%ssys/bi2.bin", GetRootDevice(), ncfg->GamePath);
+		if (!BuildDevicePath(GamePath, sizeof(GamePath), ncfg->GamePath,
+			"sys/bi2.bin"))
+		{
+			free(MultiHdr);
+			return 4;
+		}
 		fres = f_open_char(&f, GamePath, FA_READ|FA_OPEN_EXISTING);
 		if (fres != FR_OK)
 		{
@@ -1303,7 +1382,12 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 		}
 
 		// Get the internal title from boot.bin
-		snprintf(GamePath, sizeof(GamePath), "%s:%ssys/boot.bin", GetRootDevice(), ncfg->GamePath);
+		if (!BuildDevicePath(GamePath, sizeof(GamePath), ncfg->GamePath,
+			"sys/boot.bin"))
+		{
+			free(MultiHdr);
+			return 4;
+		}
 		fres = f_open_char(&f, GamePath, FA_READ|FA_OPEN_EXISTING);
 		if (fres != FR_OK)
 		{
@@ -1364,73 +1448,84 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 	u32 Offsets[15]; // 34-bit, rshifted by 2
 	u32 BI2region_codes[15];
 	gameinfo gi[15];
+	char gameNames[15][66];
 
 	// Games must be aligned to 4-byte boundaries, since
 	// we're using 34-bit rsh2 (Wii) offsets.
 	u8 gameIsUnaligned[15];
 	memset(gameIsUnaligned, 0, sizeof(gameIsUnaligned));
 
-	u8 *GameHdr = memalign(32, 0x800);
 	// GCOPDV(D9) uses Wii-style 34-bit shifted addresses.
 	// FIXME: Needs 64-bit offsets.
 	const u32 *hdr32 = (const u32*)MultiHdr;
 	bool IsShifted = (hdr32[1] == 0x44564439);
-	for (i = 0x10; i < 0x40 && gamecount < 15; i++)
+	u32 candidateCount = 0;
+	for (i = 0x10; i < 0x40 && candidateCount < 15; i++)
 	{
-		const u32 TmpOffset = hdr32[i];
-		if (TmpOffset > 0)
-		{
-			u64 RealOffset;
-			if (IsShifted)
-			{
-				// Disc uses 34-bit shifted offsets.
-				Offsets[gamecount] = TmpOffset;
-				RealOffset = (u64)TmpOffset << 2;
-			}
-			else
-			{
-				// Disc uses 32-bit unshifted offsets.
-				// If the value isn't a multiple of 4, it's unusable.
-				// TODO: Fix this, or will this "never" happen?
-				gameIsUnaligned[gamecount] = !!(TmpOffset & 3);
-				Offsets[gamecount] = TmpOffset >> 2;
-				RealOffset = TmpOffset;
-			}
-
-			if(CurDICMD)
-				ReadRealDisc(GameHdr, RealOffset, 0x800, CurDICMD);
-			else
-			{
-				if(wiiVCInternal)
-				{
-					WDVD_FST_LSeek(RealOffset);
-					read = WDVD_FST_Read(GameHdr, 0x800);
-				}
-				else
-				{
-					f_lseek(&f, RealOffset);
-					f_read(&f, GameHdr, 0x800, &read);
-				}
-			}
-
-			// Make sure the title in the header is NULL terminated.
-			GameHdr[0x20+65] = 0;
-
-			// BI2.bin is at 0x440.
-			// Region code is at 0x458.
-			BI2region_codes[gamecount] = *(u32*)(&GameHdr[0x458]);
-
-			// TODO: titles.txt support?
-			memcpy(gi[gamecount].ID, GameHdr, 6);
-			gi[gamecount].Revision = GameHdr[0x07];
-			gi[gamecount].Flags = GIFLAG_NAME_ALLOC;
-			gi[gamecount].Name = strdup((char*)&GameHdr[0x20]);
-			gi[gamecount].Path = NULL;
-			gamecount++;
-		}
+		if (hdr32[i] > 0)
+			Offsets[candidateCount++] = hdr32[i];
 	}
 
-	free(GameHdr);
+	// The offset table is captured, so its buffer can hold each game header.
+	u8 *GameHdr = MultiHdr;
+	for (i = 0; i < candidateCount; i++)
+	{
+		const u32 TmpOffset = Offsets[i];
+		u64 RealOffset;
+		if (IsShifted)
+		{
+			// Disc uses 34-bit shifted offsets.
+			Offsets[gamecount] = TmpOffset;
+			RealOffset = (u64)TmpOffset << 2;
+		}
+		else
+		{
+			// Disc uses 32-bit unshifted offsets.
+			// If the value isn't a multiple of 4, it's unusable.
+			// TODO: Fix this, or will this "never" happen?
+			gameIsUnaligned[gamecount] = !!(TmpOffset & 3);
+			Offsets[gamecount] = TmpOffset >> 2;
+			RealOffset = TmpOffset;
+		}
+
+		if(CurDICMD)
+			ReadRealDisc(GameHdr, RealOffset, 0x800, CurDICMD);
+		else
+		{
+			if(wiiVCInternal)
+			{
+				WDVD_FST_LSeek(RealOffset);
+				read = WDVD_FST_Read(GameHdr, 0x800);
+			}
+			else
+			{
+				f_lseek(&f, RealOffset);
+				f_read(&f, GameHdr, 0x800, &read);
+			}
+			if (read != 0x800)
+			{
+				if(wiiVCInternal)
+					WDVD_FST_Close();
+				else
+					f_close(&f);
+				free(MultiHdr);
+				return 2;
+			}
+		}
+
+		// BI2.bin is at 0x440; its region code is at 0x458.
+		BI2region_codes[gamecount] = *(u32*)(&GameHdr[0x458]);
+
+		memcpy(gi[gamecount].ID, GameHdr, 6);
+		gi[gamecount].Revision = GameHdr[0x07];
+		gi[gamecount].Flags = 0;
+		memcpy(gameNames[gamecount], &GameHdr[0x20], 65);
+		gameNames[gamecount][65] = 0;
+		gi[gamecount].Name = gameNames[gamecount];
+		gi[gamecount].Path = NULL;
+		gamecount++;
+	}
+
 	free(MultiHdr);
 	if (!CurDICMD)
 	{
@@ -1439,6 +1534,8 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 		else
 			f_close(&f);
 	}
+	if (gamecount == 0)
+		return 6;
 
 	// TODO: Share code with menu.c.
 	bool redraw = true;
@@ -1508,13 +1605,6 @@ static u32 CheckForMultiGameAndRegion(u32 CurDICMD, u32 *ISOShift, u32 *BI2regio
 		}
 	}
 
-	// Free the allocated names.
-	for (i = 0; i < gamecount; ++i)
-	{
-		if (gi[i].Flags & GIFLAG_NAME_ALLOC)
-			free(gi[i].Name);
-	}
-
 	// Set the ISOShift and BI2region values.
 	if (ISOShift)
 	{
@@ -1546,9 +1636,6 @@ int main(int argc, char **argv)
 	DCInvalidateRange(loader_stub, 0x1800);
 	memcpy(loader_stub, (void*)0x80001800, 0x1800);
 	RAMInit();
-	//tell devkitPPC r29 that we use UTF-8
-	setlocale(LC_ALL,"C.UTF-8");
-
 	// Command-line configuration is gone: susamune.ini is the only place
 	// launcher settings live, and a second way to set them was a second
 	// source of truth. argv[0] is still read further down for launch_dir,
@@ -1697,13 +1784,17 @@ int main(int argc, char **argv)
 	ShowMessageScreen("Preparing Nintendont Kernel...");
 
 	//inject nintendont thread
-	void *kernel_bin = NULL;
 	unsigned int kernel_bin_size = 0;
-	unzip_data(kernel_zip, kernel_zip_size, &kernel_bin, &kernel_bin_size);
-	gprintf("Decompressed kernel.bin with %i bytes\r\n", kernel_bin_size);
-	memcpy((void*)0x92F00000,kernel_bin,kernel_bin_size);
-	DCFlushRange((void*)0x92F00000,kernel_bin_size);
-	free(kernel_bin);
+	if (!unzip_data_into(kernel_zip, kernel_zip_size,
+		(void*)NIN_MEM2_KERNEL_PPC_BASE, NIN_MEM2_KERNEL_IMAGE_SIZE,
+		&kernel_bin_size))
+	{
+		ShowMessageScreen("Embedded Nintendont kernel is invalid.");
+		ExitToLoader(1);
+	}
+	gprintf("Decompressed kernel.bin directly with %i bytes\r\n",
+		kernel_bin_size);
+	DCFlushRange((void*)NIN_MEM2_KERNEL_PPC_BASE, kernel_bin_size);
 	//inject kernelboot
 	memcpy((void*)0x92FFFE00,kernelboot_bin,kernelboot_bin_size);
 	DCFlushRange((void*)0x92FFFE00,kernelboot_bin_size);
@@ -1783,12 +1874,8 @@ int main(int argc, char **argv)
 	if (CONF_GetDisplayOffsetH(&hoffset) == 0)
 		ncfg->SramOffset = hoffset;
 
-	/* Read IPL Font before doing any patches */
-	void *fontbuffer = memalign(32, 0x50000);
-	__SYS_ReadROM((void*)fontbuffer,0x50000,0x1AFF00);
-	memcpy((void*)0xD3100000, fontbuffer, 0x50000);
-	DCInvalidateRange( (void*)0x93100000, 0x50000 );
-	free(fontbuffer);
+	/* Read IPL Font before doing any patches. */
+	LoadIplFonts();
 	//gprintf("Font: 0x1AFF00 starts with %.4s, 0x1FCF00 with %.4s\n", (char*)0x93100000, (char*)0x93100000 + 0x4D000);
 
 	// An early device may have been unavailable until after the IOS reload.
@@ -2166,11 +2253,12 @@ int main(int argc, char **argv)
 	WUPC_Shutdown();
 	WPAD_Shutdown();
 
-	#define GCN_IPL_SIZE 2097152
+	#define GCN_IPL_SIZE SUSAMUNE_LAUNCHER_GCN_IPL_SIZE
 	#define TRI_IPL_SIZE NIN_MEM2_SEGABOOT_SIZE
-	void *iplbuf = NULL;
+	void *iplbuf = (void*)SUSAMUNE_LAUNCHER_GCN_IPL_PPC_BASE;
 	bool useipl = false;
 	bool useipltri = false;
+	ncfg->Config &= ~NIN_CFG_GCN_IPL_STAGED;
 
 	//Check if game is Triforce game
 	u32 IsTRIGame = 0;
@@ -2214,10 +2302,14 @@ int main(int argc, char **argv)
 			{
 				if (f.obj.objsize == GCN_IPL_SIZE)
 				{
-					iplbuf = malloc(GCN_IPL_SIZE);
 					UINT read;
-					f_read(&f, iplbuf, GCN_IPL_SIZE, &read);
-					useipl = (read == GCN_IPL_SIZE);
+					DCInvalidateRange(iplbuf, GCN_IPL_SIZE);
+					FRESULT result = f_read(&f, iplbuf, GCN_IPL_SIZE,
+						&read);
+					DCFlushRange(iplbuf, GCN_IPL_SIZE);
+					useipl = (result == FR_OK && read == GCN_IPL_SIZE);
+					if (useipl)
+						ncfg->Config |= NIN_CFG_GCN_IPL_STAGED;
 				}
 				f_close(&f);
 			}
@@ -2348,6 +2440,8 @@ int main(int argc, char **argv)
 			break;
 
 		{
+			// Replace the retained EFB only when a new status frame is ready.
+			ClearScreen();
 			PrintInfo();
 
 			PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*6, "Loading patched kernel... %d", STATUS_LOADING);
@@ -2465,23 +2559,18 @@ int main(int argc, char **argv)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*15, "Init CARD...");
 			if(abs(STATUS_LOADING) > 10 && abs(STATUS_LOADING) < 20)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*15, "Init CARD... Done!");
-			GRRLIB_Screen2Texture(0, 0, screen_buffer, GX_FALSE); // Copy all status messages
-			GRRLIB_Render();
-			ClearScreen();
+			GRRLIB_RenderPreserve();
 		}
 		while((STATUS_LOADING < -1) && (STATUS_LOADING > -20)) //displaying a fatal error
 				; //do nothing wait for shutdown
 	}
-	DrawBuffer(); // Draw all status messages
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*17, "Nintendont kernel looping, loading game...");
 	GRRLIB_Render();
-	DrawBuffer(); // Draw all status messages
 //	memcpy( (void*)0x80000000, (void*)0x90140000, 0x1200000 );
 	SusamuneMusicShutdown();
 	SusamuneThemeShutdown(&background);
 	GRRLIB_FreeTexture(background);
-	GRRLIB_FreeTexture(screen_buffer);
-	GRRLIB_FreeTTF(myFont);
+	FreeLauncherFont();
 	GRRLIB_Exit();
 
 	gprintf("GameRegion:");
@@ -2702,6 +2791,7 @@ int main(int argc, char **argv)
 		}
 		
 		load_ipl(iplbuf, progressive, sharp, jingle, tvtype);
+		DCInvalidateRange(iplbuf, GCN_IPL_SIZE);
 		*(vu32*)0xD3003420 = 0x5DEA;
 		while(*(vu32*)0xD3003420 == 0x5DEA) ;
 		/* Patches */
@@ -2713,7 +2803,6 @@ int main(int argc, char **argv)
 		/* Seems to boot more stable this way */
 		//gprintf("Using 32kHz DSP (No Resample)\n");
 		write32(0xCD806C00, 0x68);
-		free(iplbuf);
 	}
 	else //use our own loader
 	{

@@ -1,10 +1,10 @@
-# A romhack for Super Mario Sunshine practice
+# Moonshine — a Super Mario Sunshine practice mod
 
 It implements most of the [GCT generator](https://gct.zint.ch/) practice codes, adds emulator-like savestates to console (Wii through Nintendont), and more. It supports JP 1.0, US, and PAL versions.
 
 <p align="center">
   <a href="doc/showcase.webp">
-    <img src="doc/showcase.webp" alt="Susamune menus and practice features">
+    <img src="doc/showcase.webp" alt="Moonshine menus and practice features">
   </a>
 </p>
 
@@ -25,13 +25,15 @@ Features:
 - And much more.
 
 > [!WARNING]
-> While the mod will generally boot with the GCT generator practice codes installed, and supports Gecko codes in principle, we strongly advise against loading the mod with Gecko codes enabled, as they will either break or be broken by Susamune's features. For example, 'Level Select' is known to cause Susamune's instant restart to break in unpredictable/nondeterministic ways.
+> While the mod will generally boot with the GCT generator practice codes installed, and supports Gecko codes in principle, we strongly advise against loading the mod with Gecko codes enabled, as they will either break or be broken by Moonshine's features. For example, 'Level Select' is known to cause Moonshine's instant restart to break in unpredictable/nondeterministic ways.
 
 ## Installation
 
 ### Console (wii)
 
-Download the launcher zip from the Releases page, and extract it to your `apps/` folder on your SD card, so that you have `apps:/susamune_launcher/{boot.dol,meta.xml,icon.png,mod_jp.bin,mod_us.bin,mod_pal.bin}`. You can then launch from the "Susamune Launcher" channel on the Homebrew Channel. It will load into a GUI that lets you select which region game you want to boot from (with configurable paths for each: SD, USB,  real disc), and configure some standard Nintendont options like progressive setting, PAL language, etc. 
+Download `moonshine_launcher.zip` from the Releases page and extract it to your `apps/` folder on your SD card, so that you have `apps:/moonshine_launcher/{boot.dol,meta.xml,icon.png,mod_jp.bin,mod_us.bin,mod_pal.bin}`. It opens a GUI that lets you select which region game you want to boot from (with configurable paths for each: SD, USB, or a real disc), and configure standard Nintendont options such as progressive scan and PAL language.
+
+When upgrading an existing installation, rename `apps/susamune_launcher` to `apps/moonshine_launcher` before extracting the new ZIP over it. This keeps any custom launcher theme and BGM in place and avoids a duplicate Homebrew Channel entry. Do not rename the root-level `susamune.ini` or `susamune_*` data files.
 
 Settings and binds are stored per region in `susamune.ini` at the root of the SD card, in `[settings_jp]` / `[binds_jp]` sections and their `us` / `pal` counterparts.
 
@@ -40,13 +42,13 @@ Settings and binds are stored per region in `susamune.ini` at the root of the SD
 Download the BPS for your region from the Releases page and apply it to a clean
 ISO with a BPS patcher such as
 [Floating IPS](https://github.com/Alcaro/Flips/releases). The patch verifies
-the source image before writing the Susamune ISO.
+the source image before writing the Moonshine ISO.
 
 | Region | Patch | Clean CRC32 | Clean MD5 |
 | --- | --- | --- | --- |
-| JP 1.0 (`GMSJ01`) | `susamune_jp.bps` | `C3B17583` | `3B07A4BB22DB926B177E207F9D7F0D87` |
-| US (`GMSE01`) | `susamune_us.bps` | `771AD977` | `0C6D2EDAE9FDF40DFC410FF1623E4119` |
-| PAL (`GMSP01`) | `susamune_pal.bps` | `4C1D3641` | `72C4860D8555D5E790628E348ABC244D` |
+| JP 1.0 (`GMSJ01`) | `moonshine_emu_jp_<version>.bps` | `C3B17583` | `3B07A4BB22DB926B177E207F9D7F0D87` |
+| US (`GMSE01`) | `moonshine_emu_us_<version>.bps` | `771AD977` | `0C6D2EDAE9FDF40DFC410FF1623E4119` |
+| PAL (`GMSP01`) | `moonshine_emu_pal_<version>.bps` | `4C1D3641` | `72C4860D8555D5E790628E348ABC244D` |
 
 > [!IMPORTANT]
 > Saving and loading the goop with savestates is broken in Dolphin unless 'Texture Cache Accuracy' it set to Safe. You can find this option in the 'Hacks' tab of 'Graphics' in the game's config:

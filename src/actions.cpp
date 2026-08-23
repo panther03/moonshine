@@ -127,7 +127,7 @@ void regrabLastHeldObject() {
 // spawned and counted down at the end of actionsApply(): TEggYoshi::control
 // runs inside director->direct(), i.e. *before* the next actionsApply(), so the
 // arm has to survive one full frame.
-int gEggKillFrames = 0;
+u8 gEggKillFrames = 0;
 
 // TEggYoshi::control+0x1C, replacing `lhz r0, 0xFC(r31)`. The site sits on the
 // instruction after `bl TMapObjBase::control()`, so every volatile register

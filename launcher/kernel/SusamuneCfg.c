@@ -4952,8 +4952,8 @@ static void EmitCreationSection(FIL *f, int *err,
 }
 
 static const char kIniBanner[] =
-	"; susamune settings\r\n"
-	"; Written by the susamune launcher. Values are edited in-game from the\r\n"
+	"; Moonshine settings\r\n"
+	"; Written by the Moonshine Launcher. Values are edited in-game from the\r\n"
 	"; mod menu; the section for the game version you are running is rewritten\r\n"
 	"; whenever the menu is closed with changes pending, so comments added\r\n"
 	"; inside it are lost. Everything else in this file is preserved.\r\n"

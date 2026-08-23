@@ -24,13 +24,14 @@
 //                   <launch_dir>/mod_<region>.bin into the MEM2 window below
 //                   and flushes it. Writes a zeroed header if there is none.
 //   kernel (ARM) -- PatchSusamune() validates the header against the running
-//                   GAME_ID, memcpy's the code to baseAddr, applies the
-//                   writes. SusamuneCfg.c also reads gameId from it to pick
-//                   which susamune.ini sections belong to this run.
+//                   GAME_ID, copies the initialized prefix to baseAddr,
+//                   zeroes its BSS tail, and applies the writes.
+//                   SusamuneCfg.c also reads gameId from it to pick which
+//                   susamune.ini sections belong to this run.
 // =====================================================================
 
 #define SUSAMUNE_MOD_MAGIC   0x534D4F44u  // 'SMOD'
-#define SUSAMUNE_MOD_VERSION 1u
+#define SUSAMUNE_MOD_VERSION 2u
 
 // Disc header bytes 0..3 of each supported revision.
 #define SUSAMUNE_MOD_GAME_ID_JP  0x474D534Au  // "GMSJ"
@@ -58,18 +59,19 @@
      : (gameId) == SUSAMUNE_MOD_GAME_ID_PAL ? SUSAMUNE_MOD_BASE_PAL  \
                                              : 0u)
 
-// File layout: this header, then codeSize bytes of code, then writeCount
-// pairs of (addr, val). codeSize is a multiple of 4, so the write list is
-// word-aligned relative to the header.
+// File layout: this header, then codeSize initialized bytes, then writeCount
+// pairs of (addr, val). memSize is the complete zero-initialized runtime image;
+// omitting its trailing BSS from the file saves I/O without moving an address.
+// codeSize is a multiple of 4, so the write list stays word-aligned.
 struct SusamuneModHeader {
     unsigned int magic;         // SUSAMUNE_MOD_MAGIC
     unsigned int version;       // SUSAMUNE_MOD_VERSION
     unsigned int gameId;        // SUSAMUNE_MOD_GAME_ID_*
     unsigned int baseAddr;      // MEM1 address the code is linked at
-    unsigned int codeSize;
+    unsigned int codeSize;      // initialized bytes present in the file
     unsigned int writeCount;
     unsigned int arenaReserve;  // what getArenaLo() adds; see PatchSusamuneGeckoCodes
-    unsigned int fileSize;      // header + code + writes, for bounds checking
+    unsigned int memSize;       // full MEM1 image after zero-filling BSS
 };
 
 #define SUSAMUNE_MOD_HEADER_SIZE 32u

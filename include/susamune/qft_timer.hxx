@@ -41,6 +41,12 @@ class QFTTimer {
   // exact final result from an attempt-boundary rebase.
   bool currentQf(s32 *qf, bool *stopped = nullptr) const;
 
+  // Read the entry edge behind the stage-loading transition capture without
+  // consuming the transition. The retail completion hook runs one game frame
+  // after Mario enters the loading zone; level checkpoints belong to the
+  // entry frame while transition-finish ILs retain the completion timestamp.
+  bool transitionEntryQf(s32 *qf, u16 *target) const;
+
   // Consume the exact QF captured by the stage-loading transition hook.
   // Returns once per stage transition.
   bool consumeTransition(s32 *qf, u16 *target);

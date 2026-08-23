@@ -15,14 +15,16 @@ MEM2
 0x91900000-0x91E7F000=patch.bin / patch.txt loader-to-kernel handoff
 0x91E7F000-0x91EDE000=Susamune mod_<region>.bin immutable staging (reused by PatchGame after reset)
 0x91EDE000-0x91F00000=Susamune ghost model asset vault (published after the mod copy)
-0x91F00000-0x92EF0000=Susamune savestate snapshot (dedicated)
+0x91F00000-0x92300000=launcher theme MP3 staging (boot only, overlays snapshot)
+0x91F00000-0x92EF0000=Susamune savestate snapshot (dedicated during gameplay)
 0x92EF0000-0x92EFF800=Susamune settings block (susamune.ini/PB handoff + save doorbells)
 0x92EF4400-0x92EF5400=Susamune exception capture mailbox (inside the settings-block runtime gap)
+0x92EF5940-0x92EF5B40=Susamune JP font-conversion scratch
 0x92EFF800-0x92F00000=Susamune PPC-only live PB profiles
 
 0x92F00000-0x93000000=Nintendont kernel
 
-Memory-card emulation is disabled in the Susamune launcher. Its stock buffer
+Memory-card emulation is disabled in the Moonshine Launcher. Its stock buffer
 starts at 0x91000000 and is incompatible with the dedicated layout above.
 
 0x93000000-0x93003000=padread gc bin

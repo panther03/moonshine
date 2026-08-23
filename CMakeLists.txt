@@ -76,6 +76,7 @@ string(TOUPPER "${VERS_PRIMARY}" VERS_PRIMARY_UPPER)
 set(LAUNCHER_DEFAULT_SOURCE "di" CACHE STRING "Where to load the iso from by default in meta.xml")
 set_property(CACHE LAUNCHER_DEFAULT_SOURCE PROPERTY STRINGS di sd usb)
 if(LAUNCHER_VERSION STREQUAL "V1.2.0" OR
+   LAUNCHER_VERSION STREQUAL "V2.1.1" OR
    LAUNCHER_VERSION STREQUAL "V2.0.0 \"Ghosts of Delfino\"" OR
    LAUNCHER_VERSION STREQUAL "V2.0.1 \"Ghosts of Delfino\"" OR
    LAUNCHER_VERSION STREQUAL "V2.0.2 \"Ghosts of Delfino\"" OR
@@ -84,10 +85,11 @@ if(LAUNCHER_VERSION STREQUAL "V1.2.0" OR
    LAUNCHER_VERSION MATCHES "^V2\\.0\\.0 .*Pre-release [0-9]+$" OR
    LAUNCHER_VERSION MATCHES "^V2\\.0\\.0 .*Release Candidate [0-9]+$" OR
    LAUNCHER_VERSION MATCHES "^V2\\.1\\.0 Pre-Release [0-9]+" OR
-   LAUNCHER_VERSION MATCHES "^V2\\.1\\.0 Release Candidate [0-9]+")
+   LAUNCHER_VERSION MATCHES "^V2\\.1\\.0 Release Candidate [0-9]+" OR
+   LAUNCHER_VERSION MATCHES "^V2\\.2\\.0 Pre-Release [0-9]+")
     unset(LAUNCHER_VERSION CACHE)
 endif()
-set(LAUNCHER_VERSION "V2.1.0 Release Candidate 2 \"Hot Streak\"" CACHE STRING
+set(LAUNCHER_VERSION "V2.2.0 Pre-Release 1 \"The House Always Wins\"" CACHE STRING
     "Version shown in the packaged launcher meta.xml")
 
 option(IS_EMULATOR "Target Dolphin (ON) instead of Wii/Nintendont (OFF)" OFF)
@@ -96,6 +98,9 @@ option(ENABLE_MEM_DIAGNOSTICS "Enable the MEM1 safety overlay and canaries" OFF)
 option(ENABLE_DEBUG_WARPS "Enable debug warp menu tabs and stage warping" OFF)
 option(UPDATE_ISO_METADATA "Update ISO metadata (game code 01 -> 02, change picture, name, etc.)" OFF)
 option(LAUNCHER_DISABLE_SUSAMUNE_PATCH "Disable the Susamune patch in the launcher kernel" OFF)
+set(SUSAMUNE_LOADER_OPTIMIZATION "-Os" CACHE STRING
+    "PPC loader optimization (default -Os; -O3 is the speed override)")
+set_property(CACHE SUSAMUNE_LOADER_OPTIMIZATION PROPERTY STRINGS "-O3" "-Os")
 
 set(ISO_CODE_jp GMSJ01)
 set(ISO_CODE_us GMSE01)
@@ -192,10 +197,10 @@ set(OUT_ISO_DIR "${CMAKE_BINARY_DIR}/out_iso")
 set(IN_ISO_STAMP "${CMAKE_BINARY_DIR}/in_iso.stamp")
 set(OUT_ISO_STAMP "${CMAKE_BINARY_DIR}/out_iso.stamp")
 set(PATCHED_DOL "${CMAKE_BINARY_DIR}/main.dol")
-set(GECKO_TXT "${CMAKE_BINARY_DIR}/susamune.txt")
-set(FINAL_ISO "${CMAKE_BINARY_DIR}/susamune_${VERS_PRIMARY}.iso")
+set(GECKO_TXT "${CMAKE_BINARY_DIR}/moonshine.txt")
+set(FINAL_ISO "${CMAKE_BINARY_DIR}/moonshine_${VERS_PRIMARY}.iso")
 # One launcher for every disc revision -- the mod is no longer compiled into it.
-set(LAUNCHER_ZIP "${CMAKE_BINARY_DIR}/susamune_launcher.zip")
+set(LAUNCHER_ZIP "${CMAKE_BINARY_DIR}/moonshine_launcher.zip")
 
 add_custom_command(
     OUTPUT "${IN_ISO_STAMP}"
@@ -239,6 +244,9 @@ foreach(_v IN LISTS VERS)
         DEPENDS susamune_obj_${_v} "${CMAKE_SOURCE_DIR}/maps/${_v}.ld"
                 "${CMAKE_SOURCE_DIR}/scripts/patches.py"
                 "${CMAKE_SOURCE_DIR}/scripts/link_mod.py"
+                "${CMAKE_SOURCE_DIR}/scripts/dol_c_kit/devkit_tools.py"
+                "${CMAKE_SOURCE_DIR}/include/susamune/mod_bin.h"
+                "${CMAKE_SOURCE_DIR}/include/susamune/mem2_map.h"
         COMMENT "Generating ${_v} mod manifest"
         VERBATIM)
     add_custom_command(
@@ -246,6 +254,8 @@ foreach(_v IN LISTS VERS)
         COMMAND "${VENV_PYTHON}" "${CMAKE_SOURCE_DIR}/scripts/gen_mod_bin.py"
             "${_manifest}" -o "${_bin}"
         DEPENDS "${_manifest}" "${CMAKE_SOURCE_DIR}/scripts/gen_mod_bin.py"
+                "${CMAKE_SOURCE_DIR}/include/susamune/mod_bin.h"
+                "${CMAKE_SOURCE_DIR}/include/susamune/mem2_map.h"
         COMMENT "Packing mod_${_v}.bin"
         VERBATIM)
     list(APPEND MOD_BINS "${_bin}")
@@ -261,7 +271,7 @@ elseif(IS_EMULATOR)
     set(EMULATOR_BPS_FILES "")
     foreach(_v IN LISTS VERS)
         set(_layout "${CMAKE_SOURCE_DIR}/data/iso_layout_${_v}.json")
-        set(_bps "${CMAKE_BINARY_DIR}/susamune_${_v}.bps")
+        set(_bps "${CMAKE_BINARY_DIR}/moonshine_${_v}.bps")
         if(EXISTS "${_layout}")
             add_custom_command(
                 OUTPUT "${_bps}"
@@ -301,6 +311,9 @@ add_custom_command(
     DEPENDS susamune_obj_${VERS_PRIMARY} "${IN_ISO_STAMP}" "${OUT_ISO_STAMP}" "${LD_SCRIPT}"
             "${CMAKE_SOURCE_DIR}/scripts/patches.py"
             "${CMAKE_SOURCE_DIR}/scripts/link_mod.py"
+            "${CMAKE_SOURCE_DIR}/scripts/dol_c_kit/devkit_tools.py"
+            "${CMAKE_SOURCE_DIR}/include/susamune/mod_bin.h"
+            "${CMAKE_SOURCE_DIR}/include/susamune/mem2_map.h"
     COMMENT "Patching main.dol"
     VERBATIM)
 add_custom_target(dol DEPENDS "${PATCHED_DOL}")
@@ -318,6 +331,9 @@ add_custom_command(
     DEPENDS susamune_obj_${VERS_PRIMARY} "${LD_SCRIPT}"
             "${CMAKE_SOURCE_DIR}/scripts/patches.py"
             "${CMAKE_SOURCE_DIR}/scripts/link_mod.py"
+            "${CMAKE_SOURCE_DIR}/scripts/dol_c_kit/devkit_tools.py"
+            "${CMAKE_SOURCE_DIR}/include/susamune/mod_bin.h"
+            "${CMAKE_SOURCE_DIR}/include/susamune/mem2_map.h"
     COMMENT "Generating Gecko code list"
     VERBATIM)
 add_custom_target(gecko DEPENDS "${GECKO_TXT}")
@@ -373,9 +389,10 @@ ExternalProject_Add(nintendont_launcher
         "-DLAUNCHER_OUTPUT_ZIP=${LAUNCHER_ZIP}"
         "-DLAUNCHER_DEFAULT_SOURCE=${LAUNCHER_DEFAULT_SOURCE}"
         "-DLAUNCHER_VERSION=${LAUNCHER_VERSION}"
-        "-DLAUNCHER_TEST_LOG=${CMAKE_SOURCE_DIR}/doc/v2.1.0-rc2-testing.md"
-        "-DLAUNCHER_CHANGELOG=${CMAKE_SOURCE_DIR}/doc/v2.1.0-rc2-changelog.md"
+        "-DLAUNCHER_TEST_LOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-pr1-testing.md"
+        "-DLAUNCHER_CHANGELOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-pr1-changelog.md"
         "-DLAUNCHER_DISABLE_SUSAMUNE_PATCH=${LAUNCHER_DISABLE_SUSAMUNE_PATCH}"
+        "-DSUSAMUNE_LOADER_OPTIMIZATION:STRING=${SUSAMUNE_LOADER_OPTIMIZATION}"
     DEPENDS mod_bins launcher_build_id
     BUILD_ALWAYS ON
     INSTALL_COMMAND ""

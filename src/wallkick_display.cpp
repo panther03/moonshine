@@ -15,13 +15,11 @@ u8 sWallFrames;
 u8 sResult;
 u8 sPopupFrames;
 bool sWasWallslide;
-bool sWallslideBefore;
 
 void resetTracking() {
     sMario = gpMarioOriginal;
     sWallFrames = 0;
     sWasWallslide = false;
-    sWallslideBefore = false;
 }
 
 }  // namespace
@@ -50,7 +48,6 @@ void beforeDirect(bool active) {
         sWallFrames = 0;
     }
     sWasWallslide = wallslide;
-    sWallslideBefore = wallslide;
 }
 
 void afterDirect(bool active) {
@@ -68,14 +65,13 @@ void afterDirect(bool active) {
          sMario->mState == TMario::STATE_JUMPSPINL) &&
         (sMario->mPrevState == TMario::STATE_WALLSLIDE ||
          sMario->mPrevState == TMario::STATE_WALLJUMP);
-    const bool trackedWall = sWallslideBefore ||
+    const bool trackedWall = sWasWallslide ||
         (sWallFrames && sMario->mPrevState == TMario::STATE_WALLJUMP);
     if (trackedWall && (walljump || instantDive || spin)) {
         sResult = sWallFrames > 6 ? 7 : sWallFrames;
         sPopupFrames = kPopupFrames;
     }
     if (sMario->mState != TMario::STATE_WALLSLIDE) sWallFrames = 0;
-    sWallslideBefore = false;
 }
 
 void draw(Menu *menu) {

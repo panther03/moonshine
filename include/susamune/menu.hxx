@@ -62,6 +62,11 @@ public:
     // Draw one line of text with the shared textbox. No allocation: `s` is
     // borrowed (a const literal or a caller-owned scratch buffer).
     void drawText(const char *s, int x, int y, int sizeX, int sizeY, JUtility::TColor color);
+#if ENABLE_SAVESTATE_DBG
+    // Same renderer with `y` already expressed as J2D's text baseline.
+    void drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
+                          JUtility::TColor color);
+#endif
     // Draw a filled rectangle. Re-asserts the flat 2D GX vertex state first:
     // J2DFillBox relies on the current vertex descriptor, which text drawing
     // (JUTResFont) reconfigures, so a bare J2DFillBox after any text renders as

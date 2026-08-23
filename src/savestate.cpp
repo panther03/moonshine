@@ -69,18 +69,11 @@
 #include "susamune/warp_wheel.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/settings.hxx"
-#if ENABLE_SAVESTATE_DBG
-#endif
-
 #include "Dolphin/CARD.h"
 #include "Dolphin/GX.h"
 #include "Dolphin/mem.h"
 #include "Dolphin/OS.h"
 #include "Dolphin/string.h"
-#if ENABLE_SAVESTATE_DBG
-#include "J2D/J2DOrthoGraph.hxx"
-#include "J2D/J2DTextBox.hxx"
-#endif
 #include "JKernel/JKRHeap.hxx"
 #include "JUtility/JUTGamePad.hxx"
 #include "SMS/GC2D/SmplFader.hxx"
@@ -346,23 +339,6 @@ SavestateManager::SavestateManager() {
     mLoadPending = false;
 
 #if ENABLE_SAVESTATE_DBG
-    mInfoText                  = new J2DTextBox(gpSystemFont->mFont, "ready");
-    mInfoText->mCharSizeX      = 18;
-    mInfoText->mCharSizeY      = 18;
-    mInfoText->mGradientBottom = { 255, 200, 0, 255 };
-    mInfoText->mGradientTop    = { 255, 200, 0, 255 };
-
-    // J2DTextBox::setString does `delete[] mStrPtr; mStrPtr = new char[...]` on
-    // whatever heap is current -- which during gameplay is the stage heap. That
-    // buffer then gets freed on the next stage transition, leaving mStrPtr
-    // dangling so draw() renders garbage. Instead we own a fixed BSS buffer and
-    // point mStrPtr at it once; setStatus() just copies into it, never
-    // reallocating (and never touching the pressured system heap). Free the
-    // tiny buffer the ctor allocated for "ready" first.
-    if (mInfoText->mStrPtr) {
-        delete[] mInfoText->mStrPtr;
-    }
-    mInfoText->mStrPtr = sStatusBuf;
     setStatus("ready");
 #endif
 
@@ -702,9 +678,9 @@ void SavestateManager::processPendingLoad() {
 void SavestateManager::draw(Menu *menu) {
     if (mFeedbackFrames > 0) mFeedbackFrames--;
 #if ENABLE_SAVESTATE_DBG
-    if (mInfoText) {
-        mInfoText->draw(20, 60);
-    }
+    if (menu)
+        menu->drawTextBaseline(sStatusBuf, 20, 60, 18, 18,
+                               JUtility::TColor(255, 200, 0, 255));
 #endif
     if (!menu || menu->shown() || mFeedbackFrames <= 0 ||
         !gSettings.getBool(SETTING_SAVESTATE_FEEDBACK)) return;

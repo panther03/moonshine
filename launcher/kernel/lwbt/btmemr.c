@@ -62,7 +62,7 @@ void* btmemr_malloc(u32 size)
 
 	if(size==0) return NULL;
 
-	if(size%MEM_ALIGNMENT) size += MEM_ALIGNMENT - ((size+SIZEOF_STRUCT_MEM)%SIZEOF_STRUCT_MEM);
+	if(size%MEM_ALIGNMENT) size += MEM_ALIGNMENT - ((size+SIZEOF_STRUCT_MEM)%MEM_ALIGNMENT);
 	if(size>MEM_SIZE) return NULL;
 
 	for(ptr = (u8_t*)ram_free - ram_block;ptr<MEM_SIZE;ptr=((struct mem*)(ram_block+ptr))->next) {

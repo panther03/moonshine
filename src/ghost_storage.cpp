@@ -123,11 +123,6 @@ u8 activeProfile() {
         ? static_cast<u8>(profile) : 0;
 }
 
-bool validSlot(int slot) {
-    return slot >= 0 &&
-           slot < (int)SUSAMUNE_GHOST_PROFILE_WRITABLE_ENTRIES;
-}
-
 void clearCatalog() {
     memset(sCatalog, 0, kCatalogBytes);
     sCatalogReady = false;
@@ -684,9 +679,7 @@ void pollResponse() {
 }
 #endif
 
-bool requestAllowed(u16 profile, int slot, bool requirePresent,
-                    bool allowUnsafe = false) {
-    observeProfile();
+__attribute__((noinline)) bool requestIdle() {
     if (!sAvailable) {
         sStatus = IS_EMULATOR ? kDolphinUnavailable : kUnavailable;
         return false;
@@ -695,6 +688,13 @@ bool requestAllowed(u16 profile, int slot, bool requirePresent,
         sStatus = sTimedOut ? kTimeout : kBusy;
         return false;
     }
+    return true;
+}
+
+bool requestAllowed(u16 profile, int slot, bool requirePresent,
+                    bool allowUnsafe = false) {
+    observeProfile();
+    if (!requestIdle()) return false;
     const bool imported = profile == SUSAMUNE_GHOST_IMPORTED_PROFILE;
     const int slotLimit = imported
         ? static_cast<int>(SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES)
@@ -725,6 +725,56 @@ bool requestAllowed(u16 profile, int slot, bool requirePresent,
     return true;
 }
 
+__attribute__((noinline)) bool requestImportedRefresh(u16 command) {
+    if (!requestIdle()) return false;
+    sImportedRefreshQueued = false;
+    return beginImportedRefresh(command);
+}
+
+__attribute__((noinline)) bool loadTrack(bool imported, int slot,
+                                         u8 destination) {
+    if (!imported) observeProfile();
+    const u16 profile = imported ? SUSAMUNE_GHOST_IMPORTED_PROFILE : sProfile;
+    if (!requestAllowed(profile, slot, true)) return false;
+#if !IS_EMULATOR
+    sPendingLoadDestination = destination;
+    beginRequest(SUSAMUNE_GHOST_CMD_LOAD, profile,
+                 static_cast<u16>(slot), 0, 0, kLoading);
+    sPendingExpectedGeneration =
+        imported ? 0 : sCatalog[slot].generation;
+    return true;
+#else
+    (void)destination;
+    return false;
+#endif
+}
+
+__attribute__((noinline)) bool requestPersonalCommand(int slot, u16 command,
+                                                       const char *status) {
+    if (!requestAllowed(sProfile, slot, true)) return false;
+#if !IS_EMULATOR
+    beginRequest(command, sProfile, static_cast<u16>(slot), 0, 0, status);
+    return true;
+#else
+    (void)command;
+    (void)status;
+    return false;
+#endif
+}
+
+__attribute__((noinline)) const SusamuneGhostSlotInfo *catalogEntry(
+    bool imported, int slot) {
+    if (slot < 0 ||
+        slot >= (imported
+                     ? static_cast<int>(SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES)
+                     : static_cast<int>(
+                           SUSAMUNE_GHOST_PROFILE_WRITABLE_ENTRIES)) ||
+        (imported ? !sImportedCatalogReady : !sCatalogReady)) {
+        return nullptr;
+    }
+    return imported ? &sImportedCatalog[slot] : &sCatalog[slot];
+}
+
 bool copyLiteral(char *out, u32 size, const char *text, u32 length) {
     if (!out || size == 0) return false;
     u32 count = length;
@@ -740,6 +790,19 @@ bool copyVisibleName(char *out, u32 size, const char *text, u32 length) {
     }
     // Printable catalog validation admits spaces; never show a live row blank.
     return copyLiteral(out, size, kUnnamedName, sizeof(kUnnamedName) - 1);
+}
+
+__attribute__((noinline)) bool copyCatalogName(bool imported, int slot,
+                                                char *out, u32 size) {
+    if (!out || size == 0) return false;
+    out[0] = '\0';
+    const SusamuneGhostSlotInfo *info = catalogEntry(imported, slot);
+    if (!info) return false;
+    if ((info->flags & SUSAMUNE_GHOST_SLOT_UNSAFE) != 0)
+        return copyLiteral(out, size, kUnsafeName, sizeof(kUnsafeName) - 1);
+    if ((info->flags & SUSAMUNE_GHOST_SLOT_PRESENT) == 0)
+        return copyLiteral(out, size, kEmptyName, sizeof(kEmptyName) - 1);
+    return copyVisibleName(out, size, info->name, info->nameLength);
 }
 
 }  // namespace
@@ -832,42 +895,17 @@ void onSavestateLoaded() {
 
 bool refresh() {
     observeProfile();
-    if (!sAvailable) {
-        sStatus = IS_EMULATOR ? kDolphinUnavailable : kUnavailable;
-        return false;
-    }
-    if (sPendingCommand != SUSAMUNE_GHOST_CMD_NONE) {
-        sStatus = sTimedOut ? kTimeout : kBusy;
-        return false;
-    }
+    if (!requestIdle()) return false;
     sRefreshQueued = false;
     return beginRefresh();
 }
 
 bool refreshImported() {
-    if (!sAvailable) {
-        sStatus = IS_EMULATOR ? kDolphinUnavailable : kUnavailable;
-        return false;
-    }
-    if (sPendingCommand != SUSAMUNE_GHOST_CMD_NONE) {
-        sStatus = sTimedOut ? kTimeout : kBusy;
-        return false;
-    }
-    sImportedRefreshQueued = false;
-    return beginImportedRefresh(SUSAMUNE_GHOST_CMD_LIST);
+    return requestImportedRefresh(SUSAMUNE_GHOST_CMD_LIST);
 }
 
 bool scanImports() {
-    if (!sAvailable) {
-        sStatus = IS_EMULATOR ? kDolphinUnavailable : kUnavailable;
-        return false;
-    }
-    if (sPendingCommand != SUSAMUNE_GHOST_CMD_NONE) {
-        sStatus = sTimedOut ? kTimeout : kBusy;
-        return false;
-    }
-    sImportedRefreshQueued = false;
-    return beginImportedRefresh(SUSAMUNE_GHOST_CMD_IMPORT_SCAN);
+    return requestImportedRefresh(SUSAMUNE_GHOST_CMD_IMPORT_SCAN);
 }
 
 bool save(int slot) { return save(slot, 0); }
@@ -922,58 +960,22 @@ bool save(int slot, u32 expectedSelectionToken) {
 }
 
 bool load(int slot) {
-    if (!requestAllowed(sProfile, slot, true)) return false;
-#if !IS_EMULATOR
-    sPendingLoadDestination = LOAD_DESTINATION_RACE;
-    beginRequest(SUSAMUNE_GHOST_CMD_LOAD, sProfile,
-                 static_cast<u16>(slot), 0, 0, kLoading);
-    sPendingExpectedGeneration = sCatalog[slot].generation;
-    return true;
-#else
-    (void)slot;
-    return false;
-#endif
+    return loadTrack(false, slot, LOAD_DESTINATION_RACE);
 }
 
 bool loadObserver(int slot, bool secondary) {
-    if (!requestAllowed(sProfile, slot, true)) return false;
-#if !IS_EMULATOR
-    sPendingLoadDestination = secondary
-        ? LOAD_DESTINATION_OBSERVER_SECONDARY
-        : LOAD_DESTINATION_OBSERVER_PRIMARY;
-    beginRequest(SUSAMUNE_GHOST_CMD_LOAD, sProfile,
-                 static_cast<u16>(slot), 0, 0, kLoading);
-    sPendingExpectedGeneration = sCatalog[slot].generation;
-    return true;
-#else
-    (void)slot;
-    (void)secondary;
-    return false;
-#endif
+    return loadTrack(false, slot,
+                     secondary ? LOAD_DESTINATION_OBSERVER_SECONDARY
+                               : LOAD_DESTINATION_OBSERVER_PRIMARY);
 }
 
 bool remove(int slot) {
-    if (!requestAllowed(sProfile, slot, true)) return false;
-#if !IS_EMULATOR
-    beginRequest(SUSAMUNE_GHOST_CMD_DELETE, sProfile,
-                 static_cast<u16>(slot), 0, 0, kDeleting);
-    return true;
-#else
-    (void)slot;
-    return false;
-#endif
+    return requestPersonalCommand(slot, SUSAMUNE_GHOST_CMD_DELETE, kDeleting);
 }
 
 bool exportShare(int slot) {
-    if (!requestAllowed(sProfile, slot, true)) return false;
-#if !IS_EMULATOR
-    beginRequest(SUSAMUNE_GHOST_CMD_EXPORT, sProfile,
-                 static_cast<u16>(slot), 0, 0, kExportingShare);
-    return true;
-#else
-    (void)slot;
-    return false;
-#endif
+    return requestPersonalCommand(slot, SUSAMUNE_GHOST_CMD_EXPORT,
+                                  kExportingShare);
 }
 
 bool importShare(int slot) {
@@ -982,38 +984,14 @@ bool importShare(int slot) {
 }
 
 bool loadImported(int slot) {
-    if (!requestAllowed(SUSAMUNE_GHOST_IMPORTED_PROFILE, slot, true))
-        return false;
-#if !IS_EMULATOR
-    sPendingLoadDestination = LOAD_DESTINATION_RACE;
-    beginRequest(SUSAMUNE_GHOST_CMD_LOAD,
-                 SUSAMUNE_GHOST_IMPORTED_PROFILE,
-                 static_cast<u16>(slot), 0, 0, kLoading);
-    sPendingExpectedGeneration = 0;
-    return true;
-#else
-    (void)slot;
-    return false;
-#endif
+    return loadTrack(true, slot,
+                     LOAD_DESTINATION_RACE);
 }
 
 bool loadImportedObserver(int slot, bool secondary) {
-    if (!requestAllowed(SUSAMUNE_GHOST_IMPORTED_PROFILE, slot, true))
-        return false;
-#if !IS_EMULATOR
-    sPendingLoadDestination = secondary
-        ? LOAD_DESTINATION_OBSERVER_SECONDARY
-        : LOAD_DESTINATION_OBSERVER_PRIMARY;
-    beginRequest(SUSAMUNE_GHOST_CMD_LOAD,
-                 SUSAMUNE_GHOST_IMPORTED_PROFILE,
-                 static_cast<u16>(slot), 0, 0, kLoading);
-    sPendingExpectedGeneration = 0;
-    return true;
-#else
-    (void)slot;
-    (void)secondary;
-    return false;
-#endif
+    return loadTrack(true, slot,
+                     secondary ? LOAD_DESTINATION_OBSERVER_SECONDARY
+                               : LOAD_DESTINATION_OBSERVER_PRIMARY);
 }
 
 bool removeImported(int slot) {
@@ -1072,40 +1050,19 @@ u32 importedOverflowCount() { return sImportedOverflow; }
 const char *statusText() { return sStatus; }
 
 bool copySlotName(int slot, char *out, u32 size) {
-    if (!out || size == 0) return false;
-    out[0] = '\0';
-    if (!sCatalogReady || !validSlot(slot)) return false;
-    const SusamuneGhostSlotInfo &info = sCatalog[slot];
-    if ((info.flags & SUSAMUNE_GHOST_SLOT_UNSAFE) != 0)
-        return copyLiteral(out, size, kUnsafeName, sizeof(kUnsafeName) - 1);
-    if ((info.flags & SUSAMUNE_GHOST_SLOT_PRESENT) == 0)
-        return copyLiteral(out, size, kEmptyName, sizeof(kEmptyName) - 1);
-    return copyVisibleName(out, size, info.name, info.nameLength);
+    return copyCatalogName(false, slot, out, size);
 }
 
 bool copyImportedSlotName(int slot, char *out, u32 size) {
-    if (!out || size == 0) return false;
-    out[0] = '\0';
-    if (!sImportedCatalogReady || slot < 0 ||
-        slot >= static_cast<int>(SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES)) {
-        return false;
-    }
-    const SusamuneGhostSlotInfo &info = sImportedCatalog[slot];
-    if ((info.flags & SUSAMUNE_GHOST_SLOT_UNSAFE) != 0)
-        return copyLiteral(out, size, kUnsafeName, sizeof(kUnsafeName) - 1);
-    if ((info.flags & SUSAMUNE_GHOST_SLOT_PRESENT) == 0)
-        return copyLiteral(out, size, kEmptyName, sizeof(kEmptyName) - 1);
-    return copyVisibleName(out, size, info.name, info.nameLength);
+    return copyCatalogName(true, slot, out, size);
 }
 
 const SusamuneGhostSlotInfo *slot(int slot) {
-    return sCatalogReady && validSlot(slot) ? &sCatalog[slot] : 0;
+    return catalogEntry(false, slot);
 }
 
 const SusamuneGhostSlotInfo *importedSlot(int slot) {
-    return sImportedCatalogReady && slot >= 0 &&
-                   slot < static_cast<int>(SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES)
-        ? &sImportedCatalog[slot] : 0;
+    return catalogEntry(true, slot);
 }
 
 }  // namespace GhostStorage

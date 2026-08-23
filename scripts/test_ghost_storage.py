@@ -328,9 +328,11 @@ class StorageEnvelopeTests(unittest.TestCase):
         visible = source_function(ppc, "copyVisibleName")
         self.assertIn("text[i] != ' '", visible)
         self.assertIn("kUnnamedName", visible)
+        catalog_name = source_function(ppc, "copyCatalogName")
+        self.assertIn("copyVisibleName", catalog_name)
         for function in ("copySlotName", "copyImportedSlotName"):
             self.assertIn(
-                "copyVisibleName", source_function(ppc, function)
+                "copyCatalogName", source_function(ppc, function)
             )
 
     def test_quarantined_import_stays_visible_and_deletable(self) -> None:

@@ -2,13 +2,16 @@
 #ifndef _FATFS_UTF8
 #define _FATFS_UTF8
 
+#include <stdint.h>
+
 #include "ff.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "ff.h"
+/** Decode one strict UTF-8 scalar and advance input on success. */
+int ff_utf8_decode_next(const char **input, uint32_t *codepoint);
 
 /**
  * Convert a 16-bit WCHAR string to UTF-8.

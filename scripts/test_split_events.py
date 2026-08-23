@@ -248,7 +248,7 @@ class SplitEventContractTests(unittest.TestCase):
             restored.index("sAttemptInvalid = true;"),
         )
 
-    def test_demo_wrapper_uses_the_retail_indirect_flag_abi(self) -> None:
+    def test_demo_wrapper_uses_the_accepted_qft_edge(self) -> None:
         text = source_text()
         self.assertGreaterEqual(
             text.count("const JDrama::TFlagT<u16> *demoFlag"), 2
@@ -259,30 +259,17 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertNotIn("JDrama::TActor *, u16 demoFlag", text)
         wrapper = text.rsplit('extern "C" void susamuneSplitStartDemo', 1)[1]
         wrapper = wrapper.split('extern "C" void susamuneSplitOpenTalk', 1)[0]
-        capture = text.split("bool captureDemoEvent", 1)[1].split(
-            "void updateTransitions", 1
-        )[0]
-        self.assertIn("TMarDirector *director", capture)
-        self.assertIn("director != gpMarDirector", capture)
-        self.assertIn(
-            "SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2)", capture
-        )
-        self.assertIn("Ghost::observerStatsSuppressed()", capture)
-        self.assertIn("*event = 1;", capture)
-        self.assertNotIn("stageIdentityValid()", capture)
-        self.assertNotIn("sRetailDirectOpen", capture)
-        self.assertNotIn("ROUTE_CORONA", capture)
-        self.assertIn(
-            "captureDemoEvent(\n        director, &candidateRoute", wrapper
-        )
-        self.assertLess(wrapper.index("captureDemoEvent("),
-                        wrapper.index("sStartDemoTrampoline"))
         self.assertIn("+ 0x24C", wrapper)
         self.assertIn("if (after == before) return;", wrapper)
         self.assertLess(wrapper.index("if (after == before) return;"),
                         wrapper.index("gQFTTimer.freezeEvent();"))
         self.assertLess(wrapper.index("if (after == before) return;"),
-                        wrapper.index("publishEventAt(candidateRoute"))
+                        wrapper.index("gQFTTimer.currentQf(&acceptedQf)"))
+        self.assertLess(wrapper.index("gQFTTimer.currentQf(&acceptedQf)"),
+                        wrapper.index("publishEventAt(sActiveRoute, 1, acceptedQf)"))
+        self.assertIn("sActiveRoute == SplitStats::ROUTE_BIANCO_2", wrapper)
+        self.assertIn("Ghost::observerStatsSuppressed()", wrapper)
+        self.assertNotIn("captureDemoEvent", text)
         self.assertNotIn("DIRECT(SETTING_TIMER_FREEZE_DEMO", source_text(QFT))
         setup = text[text.index("void beforeStageSetup()") :]
         setup = setup[:setup.index("void onStageSetup(")]
@@ -309,10 +296,42 @@ class SplitEventContractTests(unittest.TestCase):
         publish = text.split("bool publishTransition", 1)[1].split(
             "bool isSpinStatus", 1
         )[0]
+        self.assertIn(
+            "gQFTTimer.transitionEntryQf(&qf, &capturedTarget)", publish
+        )
+        self.assertNotIn("SUSAMUNE_ADDR_QFT_TRANSITION_QF", publish)
+        self.assertNotIn("gQFTTimer.currentQf", publish)
         self.assertLess(
             publish.index("publishEventAt(route, event, qf)"),
             publish.index("sArmedCarryRoute = route"),
         )
+        qft = source_text(QFT)
+        entry = qft.split("bool QFTTimer::transitionEntryQf", 1)[1].split(
+            "bool QFTTimer::consumeTransition", 1
+        )[0]
+        self.assertIn("*qf = frozenDisplayQf();", entry)
+        frozen = qft.split("s32 frozenDisplayQf()", 1)[1].split(
+            "s32 compactQf()", 1
+        )[0]
+        self.assertIn("*sTransitionTarget != 0xFFFF", frozen)
+        self.assertIn(
+            "sState->offsetQf + *sTransitionQf - 4", frozen
+        )
+        self.assertIn("sState->offsetQf + sState->freezeQf", frozen)
+        compact = qft.split("s32 compactQf()", 1)[1].split(
+            "s32 qfToMillis", 1
+        )[0]
+        self.assertGreaterEqual(compact.count("frozenDisplayQf()"), 2)
+        self.assertIn("*sTransitionTarget != 0xFFFF", compact)
+        capture = qft.split("void captureSection()", 1)[1].split(
+            "s32 qfToRoundedCentis", 1
+        )[0]
+        self.assertIn("const s32 current = frozenDisplayQf();", capture)
+        finish = qft.split("bool QFTTimer::consumeTransition", 1)[1].split(
+            "static bool consumeStop", 1
+        )[0]
+        self.assertIn("sState->offsetQf + *sTransitionQf", finish)
+        self.assertNotIn("- 4", finish)
         self.assertIn("sBlockNextAttempt = true;", text)
         self.assertIn("sAttemptInvalid = sBlockNextAttempt;", text)
         self.assertIn("void armCarryTransition()", text)

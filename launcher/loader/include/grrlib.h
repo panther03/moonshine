@@ -281,6 +281,7 @@ void  GRRLIB_DrawPart (const f32 xpos, const f32 ypos, const f32 partx, const f3
 void  GRRLIB_DrawTileQuad (const guVector pos[4], GRRLIB_texImg *tex, const u32 color, const int frame);
 
 void  GRRLIB_Render  (void);
+void  GRRLIB_RenderPreserve (void);
 
 //------------------------------------------------------------------------------
 // GRRLIB_snapshot.c - Create a texture containing a snapshot of a part of the framebuffer
@@ -332,9 +333,7 @@ void GRRLIB_SetLightOff(void);
 GRRLIB_ttfFont* GRRLIB_LoadTTF(const u8* file_base, s32 file_size);
 void GRRLIB_FreeTTF(GRRLIB_ttfFont *myFont);
 void GRRLIB_PrintfTTF(int x, int y, GRRLIB_ttfFont *myFont, const char *string, unsigned int fontSize, const u32 color);
-void GRRLIB_PrintfTTFW(int x, int y, GRRLIB_ttfFont *myFont, const wchar_t *string, unsigned int fontSize, const u32 color);
 unsigned int GRRLIB_WidthTTF(GRRLIB_ttfFont *myFont, const char *, unsigned int);
-unsigned int GRRLIB_WidthTTFW(GRRLIB_ttfFont *myFont, const wchar_t *, unsigned int);
 
 #endif // __GRRLIB_FNLIB_H__
 
@@ -1086,4 +1085,4 @@ u8  GRRLIB_ClampVar8 (f32 Value) {
 int GRRLIB_InitTTF();
 void GRRLIB_ExitTTF();
 
-#endif // __GRRLIB_PRIVATE_H__ 
+#endif // __GRRLIB_PRIVATE_H__

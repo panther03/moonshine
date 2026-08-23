@@ -1144,6 +1144,23 @@ class SplitContractTests(unittest.TestCase):
         creation = CREATION.read_text(encoding="utf-8")
         self.assertIn("return splitTextWidth(text, size, &count);", creation)
 
+    def test_split_display_toggle_and_jp_plus_are_presentation_only(self) -> None:
+        source = SPLITS.read_text(encoding="utf-8")
+        draw = source[source.index("void draw(Menu *menu)") :]
+        self.assertIn(
+            "!gSettings.getBool(SETTING_LEVEL_SPLITS)", draw
+        )
+        capture = source[
+            source.index("bool captureSegment("):
+            source.index("bool validMailbox(")
+        ]
+        self.assertNotIn("SETTING_LEVEL_SPLITS", capture)
+        self.assertIn("const bool customPlus = sState->overlayText[0] == '+';", draw)
+        self.assertIn("layoutText[0] = 'P';", draw)
+        self.assertIn("drawJpPositiveDelta", draw)
+        self.assertIn("menu->fillBox(cx - arm / 2", source)
+        self.assertIn("menu->fillBox(cx - stroke / 2", source)
+
     def test_delta_geometry_stays_strictly_right_or_suppresses(self) -> None:
         def place(anchor_x: int, anchor_width: int, pad: int,
                   delta_widths: dict[int, int], size: int) -> tuple[int, int] | None:

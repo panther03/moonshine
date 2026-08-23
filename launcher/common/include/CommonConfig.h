@@ -61,6 +61,7 @@ enum ninconfigbitpos
 	// second volume for the ini rather than making the user keep two copies.
 	NIN_CFG_BIT_CFG_ON_USB	= (19),
 	NIN_CFG_BIT_DISABLE_RUMBLE = SUSAMUNE_NIN_CFG_BIT_DISABLE_RUMBLE,
+	NIN_CFG_BIT_GCN_IPL_STAGED = SUSAMUNE_NIN_CFG_BIT_GCN_IPL_STAGED,
 
 	// Internal kernel settings.
 	NIN_CFG_BIT_MC_SLOTB	= (31),	// Slot B image is loaded
@@ -91,6 +92,7 @@ enum ninconfig
 	NIN_CFG_SKIP_IPL	= (1<<NIN_CFG_BIT_SKIP_IPL),
 	NIN_CFG_CFG_ON_USB	= (1<<NIN_CFG_BIT_CFG_ON_USB),
 	NIN_CFG_DISABLE_RUMBLE = SUSAMUNE_NIN_CFG_DISABLE_RUMBLE,
+	NIN_CFG_GCN_IPL_STAGED = SUSAMUNE_NIN_CFG_GCN_IPL_STAGED,
 
 	NIN_CFG_MC_SLOTB	= (1<<NIN_CFG_BIT_MC_SLOTB),
 };
