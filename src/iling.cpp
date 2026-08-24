@@ -222,6 +222,15 @@ constexpr bool sameLabel(const char *a, const char *b) {
     return *a == *b;
 }
 
+constexpr int regularDisplayEpisode(int parent, int result, int group,
+                                    int flags) {
+    // Bianco 2 deliberately practices in physical Bianco 1.
+    return group == GROUP_BIANCO && result == 1 && parent == 0 &&
+                   flags == ENTRY_NONE
+               ? 1
+               : parent;
+}
+
 constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
                                   int group, int flags) {
     if (group >= GROUP_AIRSTRIP) {
@@ -232,7 +241,9 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
         return false;
     }
     char generated[kRegularLabelSize] = {};
-    makeRegularLabel(derivedGroup, parent, result, flags, generated);
+    makeRegularLabel(derivedGroup,
+                     regularDisplayEpisode(parent, result, group, flags),
+                     result, flags, generated);
     return sameLabel(expected, generated);
 }
 
@@ -908,9 +919,6 @@ bool acceptsSkipOrigin(const Entry &item) {
     if ((hidden || hundred) && sAttemptStart.area == item.start.area) {
         return true;
     }
-    if (item.result == 1 && item.start.area == 2 && item.start.episode == 1) {
-        return sAttemptStart.area == 2 && sAttemptStart.episode == 0;
-    }
     return false;
 }
 
@@ -1414,6 +1422,8 @@ const char *label(int entry) {
         const bool hundred = item.result >= 100;
         const int group = hundred ? item.result - 100 : item.result / 10;
         const u8 flags = item.flags & ENTRY_FLAG_MASK;
+        const int episode = regularDisplayEpisode(
+            item.start.gameInt3, item.result, group, flags);
         int formatOffset = LABEL_FORMAT_NORMAL;
         const char *suffix = regularSuffix(flags);
         if (hundred) {
@@ -1422,7 +1432,7 @@ const char *label(int entry) {
             formatOffset = LABEL_FORMAT_HIDDEN;
         }
         sprintf(sGeneratedLabel, kRegularLabelFormats + formatOffset,
-                regularGroupName(group), item.start.gameInt3 + 1, suffix);
+                regularGroupName(group), episode + 1, suffix);
         return sGeneratedLabel;
     }
 
@@ -1444,6 +1454,8 @@ const char *shortLabel(int entry) {
     const int group = hundred ? item.result - 100 : item.result / 10;
     const char *prefix = kRegularShortGroupNames + group * 3;
     const u8 flags = item.flags & ENTRY_FLAG_MASK;
+    const int episode = regularDisplayEpisode(
+        item.start.gameInt3, item.result, group, flags);
     if (hundred) {
         const bool longPrefix = group == GROUP_PINNA || group == GROUP_PIANTA;
         sGeneratedShortLabel[0] =
@@ -1460,7 +1472,7 @@ const char *shortLabel(int entry) {
     } else {
         sGeneratedShortLabel[0] = prefix[0];
         sGeneratedShortLabel[1] = prefix[1];
-        sGeneratedShortLabel[2] = '1' + item.start.gameInt3;
+        sGeneratedShortLabel[2] = '1' + episode;
         const int suffix = regularSuffixType(flags);
         sGeneratedShortLabel[3] = suffix == 2 ? 'F' : suffix == 3 ? 'S'
                                     : suffix ? 'R' : '\0';
@@ -1655,6 +1667,14 @@ bool start(int entry, u32 approvedDiscardToken) {
         const LevelWarp::Dest source = {item.start.gameInt3, 0, 0};
         const LevelWarp::Dest destination = {item.start.area, item.start.episode, 0};
         LevelWarp::warpFromGuarded(source, destination,
+                                   approvedDiscardToken, true);
+        return true;
+    }
+
+    if (entry == kEntryPinna8) {
+        // Pinna 8 reuses the park scene for its entrance and post-coaster
+        // phases. A synthetic self-source resets retail's entrance selector.
+        LevelWarp::warpFromGuarded(item.start, item.start,
                                    approvedDiscardToken, true);
         return true;
     }

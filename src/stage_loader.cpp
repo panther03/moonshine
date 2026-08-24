@@ -67,7 +67,7 @@ enum {
 };
 
 constexpr u8 kFastAny[] = {
-    0, 2, 5, 6, 121, 34, 78, 79, 80, 81, 82, 85, 86, 38, 39, 42, 43,
+    1, 2, 5, 6, 121, 34, 78, 79, 80, 81, 82, 85, 86, 38, 39, 42, 43,
     46, 49, 13, 14, 16, 17, 20, 21, 22, 7, 10, 52, 53, 56, 57, 60, 61,
     62, 65, 66, 67, 68, 70, 71, 74, 92,
 };
@@ -77,7 +77,6 @@ constexpr u8 kRedsWorldTour[] = {
     55, 59, 63, 67, 73, 75, 84, 87, 91, 98, 95, 97,
 };
 enum {
-    kFastAnyBiancoPosition = 0,
     kFastAnyPv5Position = 10,
     kInvalidPlaylistId = 0xff,
 };
@@ -225,9 +224,7 @@ bool builtinDefinition(int preset, const u8 **entries, u8 *count) {
 }
 
 bool builtinActionAt(int preset, int position) {
-    return preset == 0 &&
-           (position == kFastAnyBiancoPosition ||
-            position == kFastAnyPv5Position);
+    return preset == 0 && position == kFastAnyPv5Position;
 }
 
 u32 builtinContentHash(int preset) {
@@ -619,6 +616,11 @@ void beginAttempt(u32 serial) {
 }
 
 void queueFailure(Outcome outcome, s32 qf) {
+    const bool waitForSavebox =
+        outcome == OUTCOME_TARGET_MISS &&
+        sRuntime.mode == StageLoader::MODE_STREAKING && gpMarioOriginal &&
+        gpMarioOriginal->mState == kMarioWinDemoState &&
+        !gSettings.getBool(SETTING_STREAK_AUTO_RESET);
     clearShinePublishLatch();
     sRuntime.modalWaitForShineDemo = 0;
     const int entry = expectedStartEntry();
@@ -630,10 +632,10 @@ void queueFailure(Outcome outcome, s32 qf) {
     if (sRuntime.mode == StageLoader::MODE_STREAKING) {
         sRuntime.progress = 0;
     }
-    sRuntime.retryFrames = kRetryDelayFrames;
+    sRuntime.retryFrames = waitForSavebox ? 0 : kRetryDelayFrames;
     sRuntime.displayFrames = kResultDisplayFrames;
     sRuntime.holdingDeparture = 0;
-    sRuntime.state = STATE_RETRY_DELAY;
+    sRuntime.state = waitForSavebox ? STATE_RETRY_SAVEBOX : STATE_RETRY_DELAY;
 }
 
 void finishPlaylistBest() {
@@ -1144,7 +1146,6 @@ bool loadBuiltinPlaylist(int preset) {
     memcpy(sQueues.draft, entries, count);
     sRuntime.draftCount = (u8)count;
     if (preset == 0) {
-        setAction(sQueues.draftActions, kFastAnyBiancoPosition, true);
         setAction(sQueues.draftActions, kFastAnyPv5Position, true);
     }
     sRuntime.draftPlaylistId = (u8)preset;

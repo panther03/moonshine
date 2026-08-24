@@ -1,5 +1,5 @@
 SHINE("Bianco 1", 2, 0, 0, 0, GROUP_BIANCO)
-SHINE("Bianco 2", 2, 1, 1, 1, GROUP_BIANCO)
+SHINE("Bianco 2", 2, 0, 0, 1, GROUP_BIANCO)
 SHINE_FULL("Bianco 3 (Full)", 2, 2, 2, 2, GROUP_BIANCO)
 SHINE_SECRET("Bianco 3 (Secret)", 0x2F, 0, 2, 2, GROUP_BIANCO, 70)
 SHINE_SET("Bianco 3 Reds", 0x2F, 0, 2, 8, GROUP_BIANCO, 2)

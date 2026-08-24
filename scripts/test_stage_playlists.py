@@ -413,7 +413,7 @@ def identity_change_valid(current: V2Payload, staged: V2Payload) -> bool:
 
 
 class PlaylistFormatTests(unittest.TestCase):
-    def test_streak_auto_reset_can_wait_for_the_savebox(self) -> None:
+    def test_streak_auto_reset_off_waits_for_success_and_target_miss(self) -> None:
         stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
         wheel = WARP_WHEEL.read_text(encoding="utf-8")
         menu = MENU.read_text(encoding="utf-8")
@@ -437,6 +437,19 @@ class PlaylistFormatTests(unittest.TestCase):
             r"SETTING_STREAK_AUTO_RESET\)",
         )
         self.assertIn("sRuntime.state = STATE_RETRY_SAVEBOX;", success)
+        failure = stage_loader[
+            stage_loader.index("void queueFailure"):
+            stage_loader.index("void finishPlaylistBest")
+        ]
+        self.assertIn("outcome == OUTCOME_TARGET_MISS", failure)
+        self.assertIn("gpMarioOriginal->mState == kMarioWinDemoState", failure)
+        self.assertIn(
+            "!gSettings.getBool(SETTING_STREAK_AUTO_RESET)", failure
+        )
+        self.assertIn(
+            "waitForSavebox ? STATE_RETRY_SAVEBOX : STATE_RETRY_DELAY",
+            failure,
+        )
         post_save = stage_loader[
             stage_loader.index("bool holdPostSaveDeparture()"):
             stage_loader.index("bool copyDeathRetryDest")
@@ -684,14 +697,17 @@ class PlaylistFormatTests(unittest.TestCase):
         self.assertEqual(
             entries,
             (
-                0, 2, 5, 6, 121, 34, 78, 79, 80, 81, 82, 85, 86, 38, 39,
+                1, 2, 5, 6, 121, 34, 78, 79, 80, 81, 82, 85, 86, 38, 39,
                 42, 43, 46, 49, 13, 14, 16, 17, 20, 21, 22, 7, 10, 52, 53,
                 56, 57, 60, 61, 62, 65, 66, 67, 68, 70, 71, 74, 92,
             ),
         )
-        self.assertIn("kFastAnyBiancoPosition = 0", source)
+        self.assertNotIn("kFastAnyBiancoPosition", source)
         self.assertNotIn("kFastAnyGelatoPosition", source)
         self.assertIn("kFastAnyPv5Position = 10", source)
+        self.assertIn(
+            "return preset == 0 && position == kFastAnyPv5Position;", source
+        )
         self.assertIn(
             "if (entry == SUSAMUNE_STAGE_PLAYLIST_ACTION_BIANCO_1) return 1;",
             source,

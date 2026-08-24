@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ENTRIES = ROOT / "src" / "iling_entries.inc"
 ILING = ROOT / "src" / "iling.cpp"
+WARP_WHEEL = ROOT / "src" / "warp_wheel.cpp"
 
 
 class PinnaEightContracts(unittest.TestCase):
@@ -63,6 +64,40 @@ class PinnaEightContracts(unittest.TestCase):
         self.assertIn(
             "sAttemptReady = isPinnaEightReturn(scene);",
             start_scene.group(1),
+        )
+
+    def test_instant_reset_after_the_coaster_uses_the_park_entrance(self) -> None:
+        source = WARP_WHEEL.read_text(encoding="utf-8")
+        restart = source.split("void restart(bool keepSpawn)", 1)[1].split(
+            "void restartFull()", 1
+        )[0]
+        self.assertIn("cur.mAreaID == TGameSequence::AREA_PINNAPARCO", restart)
+        self.assertIn("cur.mEpisodeID == 5", restart)
+        self.assertNotIn("mPrevScene", restart)
+        self.assertIn("keepSpawn && !pinnaEight", restart)
+        self.assertIn("armWarp(dest, keepSpawn && !pinnaEight, pinnaEight)", restart)
+        self.assertIn("if (pinnaEight) sSource = dest;", restart)
+
+    def test_selected_pinna_eight_starts_with_a_default_self_source(self) -> None:
+        source = ILING.read_text(encoding="utf-8")
+        start = source.split("bool start(int entry, u32 approvedDiscardToken)", 1)[1]
+        start = start.split("bool start(int entry)", 1)[0]
+        self.assertIn("if (entry == kEntryPinna8)", start)
+        self.assertIn(
+            "LevelWarp::warpFromGuarded(item.start, item.start,", start
+        )
+
+    def test_every_mod_owned_pinna_eight_warp_clears_the_coaster_phase(self) -> None:
+        source = WARP_WHEEL.read_text(encoding="utf-8")
+        apply_dest = source.split("void applyDest", 1)[1].split(
+            "void overrideSourceForDefaultSpawn", 1
+        )[0]
+        self.assertIn("kPinnaEightCompleteFlag = 0x30005", source)
+        self.assertIn("dest.area == TGameSequence::AREA_PINNAPARCO", apply_dest)
+        self.assertIn("dest.episode == 5", apply_dest)
+        self.assertIn("== 7", apply_dest)
+        self.assertIn(
+            "flags->setBool(false, kPinnaEightCompleteFlag);", apply_dest
         )
 
 

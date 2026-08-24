@@ -708,10 +708,7 @@ void notePetey(u32 nerveBefore, s32 nerveTimerBefore, u32 nerveAfter) {
                                         nerveAfter,
                                         kPeteyBreakSleepVtable)) {
         sPeteyWakeSeen = true;
-        if (routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0) ||
-            routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1))
-            publishEvent(sActiveRoute, 1);
-        else if (routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4))
+        if (sActiveRoute == SplitStats::ROUTE_BIANCO_5)
             publishEvent(sActiveRoute, 0);
     }
 }
@@ -747,7 +744,6 @@ bool routeUsesSpine(u16 route) {
     case SplitStats::ROUTE_AIRSTRIP_1:
     case SplitStats::ROUTE_BIANCO_PLANT:
     case SplitStats::ROUTE_DELFINO_SHADOW_MARIO:
-    case SplitStats::ROUTE_BIANCO_2:
     case SplitStats::ROUTE_TRAVEL_SKIP:
     case SplitStats::ROUTE_BIANCO_5:
     case SplitStats::ROUTE_BIANCO_7:
@@ -782,7 +778,6 @@ bool spineActorRelevant(u16 route, u32 vtable) {
     case SplitStats::ROUTE_TRAVEL_SKIP:
     case SplitStats::ROUTE_GELATO_PLANT:
         return vtable == kGatekeeperVtable;
-    case SplitStats::ROUTE_BIANCO_2:
     case SplitStats::ROUTE_BIANCO_5:
         return vtable == kPeteyVtable;
     case SplitStats::ROUTE_PIANTA_1:
@@ -967,6 +962,19 @@ void noteTalk(TBaseNPC *npc) {
         if (routeScene(sActiveRoute, 9, 4)) publishEvent(sActiveRoute, 0);
         break;
     }
+}
+
+bool captureDemoEvent(TMarDirector *director, u16 *route, u8 *event, s32 *qf) {
+    if (!route || !event || !qf || director != gpMarDirector ||
+        !SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2) ||
+        Ghost::observerStatsSuppressed())
+        return false;
+    if (director->mAreaID != 2 || director->mEpisodeID != 0 ||
+        !gQFTTimer.currentQf(qf))
+        return false;
+    *route = SplitStats::ROUTE_BIANCO_2;
+    *event = 1;
+    return true;
 }
 
 void updateTransitions() {
@@ -1451,6 +1459,11 @@ extern "C" void susamuneSplitStartDemo(
     u32 callbackArg, JDrama::TActor *actor,
     const JDrama::TFlagT<u16> *demoFlag) {
     // This accepted queue edge is the single owner of demo-event freezes.
+    u16 candidateRoute = SplitStats::ROUTE_INVALID;
+    u8 candidateEvent = 0;
+    s32 candidateQf = 0;
+    const bool hasCandidate = captureDemoEvent(
+        director, &candidateRoute, &candidateEvent, &candidateQf);
     const u8 before = *(reinterpret_cast<const u8 *>(director) + 0x24C);
     // Retail passes the non-trivial by-value flag through an indirect pointer.
     reinterpret_cast<StartDemoFn>(sStartDemoTrampoline)(
@@ -1460,6 +1473,8 @@ extern "C" void susamuneSplitStartDemo(
     if (after == before) return;
     if (gSettings.getBool(SETTING_TIMER_FREEZE_DEMO))
         gQFTTimer.freezeEvent();
+    if (hasCandidate)
+        SplitStats::onRouteEvent(candidateRoute, candidateEvent, candidateQf);
 }
 
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc) {
@@ -1512,8 +1527,7 @@ extern "C" void susamuneSplitPeteyHipDrop(void *petey) {
     const u8 before = enemy->mHealth;
     reinterpret_cast<PeteyHipDropFn>(sPeteyHipDropTrampoline)(petey);
     if (!sRetailDirectOpen || !stageIdentityValid()) return;
-    const bool b2 = sActiveRoute == SplitStats::ROUTE_BIANCO_2 &&
-        (routeScene(sActiveRoute, 2, 0) || routeScene(sActiveRoute, 2, 1));
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0);
     const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
     if (b2 || b5) notePeteyDamage(before, enemy->mHealth);
 }

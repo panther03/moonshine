@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "split_events.cpp"
 HEADER = ROOT / "include" / "susamune" / "split_events.hxx"
 SPLIT_STATS = ROOT / "src" / "split_stats.cpp"
+ILING_ENTRIES = ROOT / "src" / "iling_entries.inc"
 GAMEPLAY = ROOT / "src" / "gameplay_polish.cpp"
 MAIN = ROOT / "src" / "main.cpp"
 SAVESTATE = ROOT / "src" / "savestate.cpp"
@@ -248,7 +249,7 @@ class SplitEventContractTests(unittest.TestCase):
             restored.index("sAttemptInvalid = true;"),
         )
 
-    def test_demo_wrapper_owns_only_the_accepted_qft_edge(self) -> None:
+    def test_demo_wrapper_freezes_only_after_retail_accepts_it(self) -> None:
         text = source_text()
         self.assertGreaterEqual(
             text.count("const JDrama::TFlagT<u16> *demoFlag"), 2
@@ -263,19 +264,21 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn("if (after == before) return;", wrapper)
         self.assertLess(wrapper.index("if (after == before) return;"),
                         wrapper.index("gQFTTimer.freezeEvent();"))
-        self.assertNotIn("ROUTE_BIANCO_2", wrapper)
+        self.assertIn("captureDemoEvent(", wrapper)
+        self.assertIn(
+            "SplitStats::onRouteEvent(candidateRoute, candidateEvent, candidateQf)",
+            wrapper,
+        )
         self.assertNotIn("publishEvent", wrapper)
-
-        petey = text.split("void notePetey(", 1)[1].split(
-            "void noteBossGesso", 1
+        capture = text.split("bool captureDemoEvent", 1)[1].split(
+            "void updateTransitions", 1
         )[0]
-        self.assertIn("kPeteyBreakSleepVtable", petey)
-        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0)", petey)
-        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1)", petey)
-        self.assertIn("publishEvent(sActiveRoute, 1)", petey)
-        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", petey)
-        self.assertIn("publishEvent(sActiveRoute, 0)", petey)
-        self.assertNotIn("captureDemoEvent", text)
+        self.assertIn(
+            "SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2)", capture
+        )
+        self.assertIn("director->mAreaID != 2", capture)
+        self.assertIn("director->mEpisodeID != 0", capture)
+        self.assertIn("*event = 1;", capture)
         self.assertNotIn("DIRECT(SETTING_TIMER_FREEZE_DEMO", source_text(QFT))
         setup = text[text.index("void beforeStageSetup()") :]
         setup = setup[:setup.index("void onStageSetup(")]
@@ -426,10 +429,24 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn("status == kMarioRolloutStatus", b2)
         self.assertIn("mario->mTranslation.y >= 3200.0f", b2)
         self.assertIn("publishEvent(sActiveRoute, 0)", b2)
+        entries = ILING_ENTRIES.read_text(encoding="utf-8")
+        self.assertIn(
+            'SHINE("Bianco 1", 2, 0, 0, 0, GROUP_BIANCO)', entries
+        )
+        self.assertIn(
+            'SHINE("Bianco 2", 2, 0, 0, 1, GROUP_BIANCO)', entries
+        )
+        self.assertNotIn("promoteBiancoTwo", text)
         petey = text.split("void notePeteyDamage", 1)[1].split(
             "void notePetey(", 1
         )[0]
         self.assertIn("publishEvent(sActiveRoute, sPeteyHits + 1)", petey)
+        wake = text.split("void notePetey(", 1)[1].split(
+            "void noteBossGesso", 1
+        )[0]
+        self.assertIn("kPeteyBreakSleepVtable", wake)
+        self.assertNotIn("ROUTE_BIANCO_2", wake)
+        self.assertIn("publishEvent(sActiveRoute, 0)", wake)
         for threshold in (2, 5, 7, 10):
             self.assertIn(f"sCleanedPiantaCount == {threshold}", text)
         self.assertIn("count == 1", text)
