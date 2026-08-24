@@ -18,8 +18,7 @@ void rngControlOnSavestateLoaded();
 void rngControlApply();
 
 // Boss steering makes the current attempt ineligible for leaderboard credit.
-// Crane speed is deliberately excluded: it is a practice setup, not a boss
-// outcome override.
+// Crane and Skeeter controls are ordinary practice setup and stay eligible.
 bool rngControlInvalidatesIl();
 
 extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);
@@ -27,5 +26,6 @@ extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);
 // These arrays are executable two-word tail shims targeted by patches.py.
 extern "C" u32 gCraneUpDownRandShim[];
 extern "C" u32 gCraneRotYRandShim[];
+extern "C" u32 gBiancoSkeeterRandShim[];
 
 #endif  // SUSAMUNE_RNG_CONTROL_HXX

@@ -86,6 +86,10 @@ patches = [
      'sym': 'gCraneUpDownRandShim', 'type': PatchType.BL},
     {'jp': 0x801a625c, 'us': 0x801ce6a4, 'pal': 0x801c655c,
      'sym': 'gCraneRotYRandShim', 'type': PatchType.BL},
+    # Bianco 1/2 route Skeeter: forward the live TAmenbo from r31 while still
+    # consuming the retail rand call exactly once.
+    {'jp': 0x8033dfa4, 'us': 0x8012c6c8, 'pal': 0x80125bcc,
+     'sym': 'gBiancoSkeeterRandShim', 'type': PatchType.BL},
     # Ricco fruit launcher: one shared shim identifies the three selection
     # calls and first velocity call by LR. Every reached site still calls
     # retail rand exactly once; the velocity result is never substituted.

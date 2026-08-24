@@ -708,7 +708,10 @@ void notePetey(u32 nerveBefore, s32 nerveTimerBefore, u32 nerveAfter) {
                                         nerveAfter,
                                         kPeteyBreakSleepVtable)) {
         sPeteyWakeSeen = true;
-        if (sActiveRoute == SplitStats::ROUTE_BIANCO_5)
+        if (routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0) ||
+            routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1))
+            publishEvent(sActiveRoute, 1);
+        else if (routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4))
             publishEvent(sActiveRoute, 0);
     }
 }
@@ -1455,15 +1458,8 @@ extern "C" void susamuneSplitStartDemo(
         actor, demoFlag);
     const u8 after = *(reinterpret_cast<const u8 *>(director) + 0x24C);
     if (after == before) return;
-    s32 acceptedQf;
-    const bool timed = gQFTTimer.currentQf(&acceptedQf);
     if (gSettings.getBool(SETTING_TIMER_FREEZE_DEMO))
         gQFTTimer.freezeEvent();
-    // Expected-event ordering rejects opening and unrelated demos before the
-    // rollout, so the split can share the exact queue edge that QFT accepted.
-    if (timed && sActiveRoute == SplitStats::ROUTE_BIANCO_2 &&
-        !Ghost::observerStatsSuppressed())
-        publishEventAt(sActiveRoute, 1, acceptedQf);
 }
 
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc) {

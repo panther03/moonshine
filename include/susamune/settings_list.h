@@ -174,7 +174,12 @@
     X(SETTING_PETEY_NO_TORNADO,             "petey_no_tornado")               \
     X(SETTING_PETEY_ROUTE,                  "petey_route")                    \
     X(SETTING_RICCO_CRANE_SPEED,            "ricco_crane_speed")             \
-    X(SETTING_RICCO_FRUIT_MACHINE,          "ricco_fruit_machine")
+    X(SETTING_RICCO_FRUIT_MACHINE,          "ricco_fruit_machine")           \
+    /* -- V2.2 PR2 controls (append-only persisted ids) -- */                  \
+    X(SETTING_BIANCO_SKEETER_ROUTE,         "bianco_skeeter_route")          \
+    X(SETTING_ROLLOUT_DISPLAY,              "rollout_display")               \
+    X(SETTING_DUST_DISPLAY,                 "dust_display")                  \
+    X(SETTING_TIMER_FREEZE_AIRGRAB,         "timer_freeze_airgrab")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

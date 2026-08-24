@@ -338,6 +338,7 @@ namespace {
   constexpr u32 kDoubleStatuses[]    = {0x02000881u};
   constexpr u32 kDiveRolloutStatuses[] = {0x02000889u};
   constexpr u32 kDiveGetupStatuses[]   = {0x000008A6u};
+  constexpr u32 kAirgrabStatuses[]     = {0x00000384u};
 
   struct StatusFreeze {
     SettingId setting;
@@ -360,12 +361,13 @@ namespace {
     STATUS(SETTING_TIMER_FREEZE_DOUBLE_JUMP, kDoubleStatuses),
     STATUS(SETTING_TIMER_FREEZE_DIVE_ROLLOUT, kDiveRolloutStatuses),
     STATUS(SETTING_TIMER_FREEZE_DIVE_GETUP, kDiveGetupStatuses),
+    STATUS(SETTING_TIMER_FREEZE_AIRGRAB, kAirgrabStatuses),
   };
 
 #undef STATUS
 
   const u32 kStatusSite    = SUSAMUNE_MEM1_ADDR(0x801335B8u, 0x802541C8u, 0x8024BF54u);
-  const int kStatusCaveMax = 48;
+  const int kStatusCaveMax = 52;
 
   template <u32 N>
   constexpr int statusValueWords(const u32 (&statuses)[N]) {
@@ -383,7 +385,8 @@ namespace {
     sizeof(kBounceStatuses) / sizeof(u32) + sizeof(kJumpStatuses) / sizeof(u32) +
     sizeof(kDiveStatuses) / sizeof(u32) + sizeof(kDoubleStatuses) / sizeof(u32) +
     sizeof(kDiveRolloutStatuses) / sizeof(u32) +
-    sizeof(kDiveGetupStatuses) / sizeof(u32);
+    sizeof(kDiveGetupStatuses) / sizeof(u32) +
+    sizeof(kAirgrabStatuses) / sizeof(u32);
   constexpr int kStatusMaxWords =
     statusValueWords(kPutStatuses) + statusValueWords(kTripleStatuses) +
     statusValueWords(kSpinStatuses) + statusValueWords(kLedgeStatuses) +
@@ -391,6 +394,7 @@ namespace {
     statusValueWords(kBounceStatuses) + statusValueWords(kJumpStatuses) +
     statusValueWords(kDiveStatuses) + statusValueWords(kDoubleStatuses) +
     statusValueWords(kDiveRolloutStatuses) + statusValueWords(kDiveGetupStatuses) +
+    statusValueWords(kAirgrabStatuses) +
     (kStatusCount - 1) + 6;
   static_assert(kStatusMaxWords <= kStatusCaveMax,
                 "enabled QFT status freezes exceed their generated cave");

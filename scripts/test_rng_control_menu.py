@@ -47,10 +47,11 @@ class RngControlMenuTests(unittest.TestCase):
         self.assertIn("id == SETTING_PETEY_ROUTE", menu)
         self.assertIn("id == SETTING_RICCO_CRANE_SPEED", menu)
         self.assertIn("id == SETTING_RICCO_FRUIT_MACHINE", menu)
+        self.assertIn("id == SETTING_BIANCO_SKEETER_ROUTE", menu)
         self.assertIn(
             "FEEDBACK\\0KING BOO\\0PETEY\\0RICCO CRANE\\0", menu
         )
-        self.assertIn('"RICCO FRUIT MACHINE"', menu)
+        self.assertIn('"RICCO FRUIT MACHINE\\0BIANCO SKEETER', menu)
         self.assertIn("practice, savestate, timer, gameplay, rng,", menu)
         self.assertIn(
             "return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;",

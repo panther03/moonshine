@@ -35,6 +35,7 @@
 #include "susamune/stage_targets.hxx"
 #include "susamune/susamune_cfg.h"
 #include "susamune/wallkick_display.hxx"
+#include "susamune/movement_display.hxx"
 #include "susamune/warp_wheel.hxx"
 #if ENABLE_DEBUG_WARPS
 #include "susamune/debug_warp.hxx"
@@ -2658,7 +2659,7 @@ private:
         drawValueRow(menu, x, ry, w, "Unlock popup & chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR1",
+        menu->drawText("Moonshine V2.2.0 PR2",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3097,13 +3098,16 @@ const u8 kSettingSectionStarts[] = {
     SETTING_PETEY_NO_TORNADO,
     SETTING_RICCO_CRANE_SPEED,
     SETTING_RICCO_FRUIT_MACHINE,
+    SETTING_BIANCO_SKEETER_ROUTE,
+    SETTING_ROLLOUT_DISPLAY,
+    SETTING_TIMER_FREEZE_AIRGRAB,
 };
 const char kSettingSectionNames[] =
     "GENERAL\0SKIPS & UNLOCKS\0YOSHI EGGS\0WORLD RULES\0SAVE PROMPTS\0"
     "LEVEL RULES\0PRACTICE TOOLS\0PATTERNS\0BOX GAMES\0PRESENTATION\0WORLD\0"
     "DIAGNOSTICS\0PRACTICE FEEDBACK\0DISPLAY\0FREEZE EVENTS\0"
     "SECTION HISTORY\0STATE\0FEEDBACK\0KING BOO\0PETEY\0RICCO CRANE\0"
-    "RICCO FRUIT MACHINE";
+    "RICCO FRUIT MACHINE\0BIANCO SKEETER\0MOVEMENT FEEDBACK\0FREEZE EVENTS";
 
 }  // namespace
 
@@ -3308,7 +3312,8 @@ private:
                       id == SETTING_PETEY_NO_TORNADO ||
                       id == SETTING_PETEY_ROUTE ||
                       id == SETTING_RICCO_CRANE_SPEED ||
-                      id == SETTING_RICCO_FRUIT_MACHINE
+                      id == SETTING_RICCO_FRUIT_MACHINE ||
+                      id == SETTING_BIANCO_SKEETER_ROUTE
                 : isStarred()
                     ? Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)
@@ -5261,6 +5266,7 @@ void Menu::draw(J2DOrthoGraph *ortho) {
         gAttemptCounter.draw(this);
         gCreationExtras.draw(this);
         WallkickDisplay::draw(this);
+        MovementDisplay::draw(this);
         drawToast();  // still visible with the menu closed
         drawAchievementBanner(this);
         bgmStatsDraw(this);
@@ -5324,8 +5330,11 @@ void Menu::drawInvalidIlWarning() {
     if (!rngControlInvalidatesIl()) return;
     const char *text = "INVALID IL";
     const int size = 18;
-    const int x = 632 - textWidth(text, size);
-    const int y = 454;
+    const int visibleBottom = 448;
+    const int bottomInset = 12;
+    const int x = 616 - textWidth(text, size);
+    const int y = visibleBottom - size - bottomInset;
+    static_assert(bottomInset >= 2, "INVALID IL warning exceeds the EFB");
     fillBox(x - 4, y - 2, textWidth(text, size) + 8, size + 4,
             col(0, 0, 0, 190));
     drawText(text, x, y, size, size, col(255, 0, 0, 255));

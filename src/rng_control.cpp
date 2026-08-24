@@ -1,6 +1,5 @@
-// Narrow RNG controls for King Boo and Ricco's five cranes. Retail rand still
-// runs exactly once at every hooked call; the mod changes only the decision
-// owned by that call.
+// Narrow RNG controls for King Boo, Bianco's route Skeeter, and Ricco's five
+// cranes. Retail rand still runs exactly once at every hooked call.
 
 #include "susamune/rng_control.hxx"
 
@@ -15,6 +14,7 @@ extern "C" int rand();
 
 extern "C" int  susamuneCraneUpDownRandImpl(void *crane);
 extern "C" int  susamuneCraneRotYRandImpl(void *crane);
+extern "C" int  susamuneBiancoSkeeterRandImpl(void *skeeter);
 extern "C" void susamuneCraneUpDownControl(void *crane);
 extern "C" void susamuneCraneRotYControl(void *crane);
 
@@ -29,13 +29,25 @@ extern "C" u32 gCraneRotYRandShim[] = {
     0x7FC3F378u,  // mr r3, r30
     0x48000000u,  // b susamuneCraneRotYRandImpl
 };
+extern "C" u32 gBiancoSkeeterRandShim[] = {
+    0x7FE3FB78u,  // mr r3, r31
+    0x48000000u,  // b susamuneBiancoSkeeterRandImpl
+};
 
 namespace {
 
 const u8 kRiccoArea = 3;
+const u8 kBiancoArea = 2;
 const u8 kCraneCount = 5;
 const u8 kRotYCount = 3;
 const u16 kNoRoll = 0xFFFFu;
+
+const u32 kSkeeterInitialPosition[] = {
+    0x458641E5u, 0x450FC000u, 0xC6221F8Du,
+};
+const u16 kSkeeterRouteRolls[] = {
+    0x0000u, 0x7000u, 0x7FFFu,
+};
 
 const u32 kPeteyTornadoSite =
     SUSAMUNE_MEM1_ADDR(0x802A33ACu, 0x80090590u, 0x80089C30u);
@@ -91,6 +103,17 @@ bool sameText(const char *a, const char *b) {
 
 bool inRicco() {
     return gpMarDirector && gpMarDirector->mAreaID == kRiccoArea;
+}
+
+bool isBiancoRouteSkeeter(void *skeeter) {
+    if (!skeeter || !gpMarDirector ||
+        gpMarDirector->mAreaID != kBiancoArea ||
+        gpMarDirector->mEpisodeID > 1) return false;
+    const volatile u32 *position = reinterpret_cast<const volatile u32 *>(
+        static_cast<const u8 *>(skeeter) + 0x194);
+    for (u32 i = 0; i < sizeof(kSkeeterInitialPosition) / sizeof(u32); i++)
+        if (position[i] != kSkeeterInitialPosition[i]) return false;
+    return true;
 }
 
 int craneIndex(void *crane, bool upDown) {
@@ -157,12 +180,18 @@ void applyPeteyTornadoControl() {
 void rngControlInit() {
     const u32 upBranch = reinterpret_cast<u32>(&gCraneUpDownRandShim[1]);
     const u32 rotBranch = reinterpret_cast<u32>(&gCraneRotYRandShim[1]);
+    const u32 skeeterBranch =
+        reinterpret_cast<u32>(&gBiancoSkeeterRandShim[1]);
     writeGameCode(upBranch,
                   branchWord(upBranch,
                              reinterpret_cast<u32>(&susamuneCraneUpDownRandImpl)));
     writeGameCode(rotBranch,
                   branchWord(rotBranch,
                              reinterpret_cast<u32>(&susamuneCraneRotYRandImpl)));
+    writeGameCode(skeeterBranch,
+                  branchWord(skeeterBranch,
+                             reinterpret_cast<u32>(
+                                 &susamuneBiancoSkeeterRandImpl)));
 
     installControlWrapper(kUpDownControlSlot, kUpDownRetailControl,
                           reinterpret_cast<u32>(&susamuneCraneUpDownControl));
@@ -208,6 +237,14 @@ extern "C" int susamuneCraneRotYRandImpl(void *crane) {
     const int retail = rand();
     recordCrane(crane, retail, false);
     return retail;
+}
+
+extern "C" int susamuneBiancoSkeeterRandImpl(void *skeeter) {
+    const int retail = rand();
+    const u8 choice = gSettings.get(SETTING_BIANCO_SKEETER_ROUTE);
+    if (!isBiancoRouteSkeeter(skeeter) || choice < 1 || choice > 3)
+        return retail;
+    return kSkeeterRouteRolls[choice - 1];
 }
 
 extern "C" void susamuneCraneUpDownControl(void *crane) {

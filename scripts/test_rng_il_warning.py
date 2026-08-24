@@ -25,6 +25,7 @@ class RngIlWarningTests(unittest.TestCase):
         self.assertIn("SETTING_PETEY_ROUTE", body)
         self.assertNotIn("SETTING_RICCO_CRANE_SPEED", body)
         self.assertNotIn("SETTING_RICCO_FRUIT_MACHINE", body)
+        self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", body)
         self.assertIn(
             "if (rngControlInvalidatesIl()) ILing::invalidateForAssist();",
             source,
@@ -75,6 +76,20 @@ class RngIlWarningTests(unittest.TestCase):
         self.assertLess(
             after_draw.index("WarpWheel::draw();"),
             after_draw.index("gMenu->drawInvalidIlWarning();"),
+        )
+
+    def test_invalid_label_stays_inside_sunshines_efb(self) -> None:
+        source = (ROOT / "src/menu.cpp").read_text(encoding="utf-8")
+        warning = source.split("void Menu::drawInvalidIlWarning()", 1)[1].split(
+            "// =====================================================================", 1
+        )[0]
+        self.assertIn("const int visibleBottom = 448;", warning)
+        self.assertIn(
+            "const int y = visibleBottom - size - bottomInset;", warning
+        )
+        self.assertIn(
+            'static_assert(bottomInset >= 2, "INVALID IL warning exceeds the EFB")',
+            warning,
         )
 
     def test_successful_spawn_and_regrab_invalidate(self) -> None:

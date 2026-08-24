@@ -248,7 +248,7 @@ class SplitEventContractTests(unittest.TestCase):
             restored.index("sAttemptInvalid = true;"),
         )
 
-    def test_demo_wrapper_uses_the_accepted_qft_edge(self) -> None:
+    def test_demo_wrapper_owns_only_the_accepted_qft_edge(self) -> None:
         text = source_text()
         self.assertGreaterEqual(
             text.count("const JDrama::TFlagT<u16> *demoFlag"), 2
@@ -263,12 +263,18 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn("if (after == before) return;", wrapper)
         self.assertLess(wrapper.index("if (after == before) return;"),
                         wrapper.index("gQFTTimer.freezeEvent();"))
-        self.assertLess(wrapper.index("if (after == before) return;"),
-                        wrapper.index("gQFTTimer.currentQf(&acceptedQf)"))
-        self.assertLess(wrapper.index("gQFTTimer.currentQf(&acceptedQf)"),
-                        wrapper.index("publishEventAt(sActiveRoute, 1, acceptedQf)"))
-        self.assertIn("sActiveRoute == SplitStats::ROUTE_BIANCO_2", wrapper)
-        self.assertIn("Ghost::observerStatsSuppressed()", wrapper)
+        self.assertNotIn("ROUTE_BIANCO_2", wrapper)
+        self.assertNotIn("publishEvent", wrapper)
+
+        petey = text.split("void notePetey(", 1)[1].split(
+            "void noteBossGesso", 1
+        )[0]
+        self.assertIn("kPeteyBreakSleepVtable", petey)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0)", petey)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1)", petey)
+        self.assertIn("publishEvent(sActiveRoute, 1)", petey)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", petey)
+        self.assertIn("publishEvent(sActiveRoute, 0)", petey)
         self.assertNotIn("captureDemoEvent", text)
         self.assertNotIn("DIRECT(SETTING_TIMER_FREEZE_DEMO", source_text(QFT))
         setup = text[text.index("void beforeStageSetup()") :]

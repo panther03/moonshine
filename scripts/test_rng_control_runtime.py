@@ -20,13 +20,22 @@ class RngControlRuntimeTests(unittest.TestCase):
             SETTINGS.read_text(encoding="utf-8"),
         )
         self.assertEqual(
-            rows[-5:],
+            rows[-9:-4],
             [
                 "SETTING_KING_BOO_ALWAYS_FRUIT",
                 "SETTING_PETEY_NO_TORNADO",
                 "SETTING_PETEY_ROUTE",
                 "SETTING_RICCO_CRANE_SPEED",
                 "SETTING_RICCO_FRUIT_MACHINE",
+            ],
+        )
+        self.assertEqual(
+            rows[-4:],
+            [
+                "SETTING_BIANCO_SKEETER_ROUTE",
+                "SETTING_ROLLOUT_DISPLAY",
+                "SETTING_DUST_DISPLAY",
+                "SETTING_TIMER_FREEZE_AIRGRAB",
             ],
         )
 
@@ -36,6 +45,7 @@ class RngControlRuntimeTests(unittest.TestCase):
             "susamuneforcekingboofruit": (0x802D0F78, 0x800BE8E8, 0x800B7F88),
             "gcraneupdownrandshim": (0x801A5ED0, 0x801CE318, 0x801C61D0),
             "gcranerotyrandshim": (0x801A625C, 0x801CE6A4, 0x801C655C),
+            "gbiancoskeeterrandshim": (0x8033DFA4, 0x8012C6C8, 0x80125BCC),
         }
         for symbol, addresses in expected.items():
             self.assertIn(f"'sym': '{symbol}'", source)
@@ -44,7 +54,14 @@ class RngControlRuntimeTests(unittest.TestCase):
 
     def test_cranes_reuse_one_retail_roll_in_exact_bands(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
-        self.assertEqual(source.count("const int retail = rand();"), 2)
+        up_down = source.split(
+            'extern "C" int susamuneCraneUpDownRandImpl', 1
+        )[1].split('extern "C" int susamuneCraneRotYRandImpl', 1)[0]
+        rot_y = source.split(
+            'extern "C" int susamuneCraneRotYRandImpl', 1
+        )[1].split('extern "C" int susamuneBiancoSkeeterRandImpl', 1)[0]
+        self.assertEqual(up_down.count("const int retail = rand();"), 1)
+        self.assertEqual(rot_y.count("const int retail = rand();"), 1)
         self.assertIn("choice * 20 - 19 + ((u32)roll * 20u >> 15)", source)
         self.assertIn("0.0015f * (f32)percent", source)
         self.assertIn("retailSpeed * (f32)percent * 0.01f", source)
@@ -81,6 +98,21 @@ class RngControlRuntimeTests(unittest.TestCase):
         )
         self.assertEqual((values[3], values[10], values[8], values[12]),
                          (10, 8, 12, 16))
+
+    def test_bianco_skeeter_is_instance_scoped_and_rng_neutral(self) -> None:
+        source = RUNTIME.read_text(encoding="utf-8")
+        wrapper = source.split(
+            'extern "C" int susamuneBiancoSkeeterRandImpl', 1
+        )[1].split('extern "C" void susamuneCraneUpDownControl', 1)[0]
+        self.assertEqual(wrapper.count("const int retail = rand();"), 1)
+        self.assertIn("return retail;", wrapper)
+        self.assertIn("kSkeeterRouteRolls[choice - 1]", wrapper)
+        self.assertIn("0x458641E5u, 0x450FC000u, 0xC6221F8Du", source)
+        self.assertIn("0x0000u, 0x7000u, 0x7FFFu", source)
+        self.assertIn("gpMarDirector->mAreaID != kBiancoArea", source)
+        self.assertIn("gpMarDirector->mEpisodeID > 1", source)
+        self.assertNotIn("ILing::invalidateForAssist", wrapper)
+        self.assertNotIn("rngControlInvalidatesIl", wrapper)
 
     def test_king_boo_alternates_only_after_a_completed_result(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
