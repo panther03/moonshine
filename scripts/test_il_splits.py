@@ -1208,8 +1208,8 @@ class SplitContractTests(unittest.TestCase):
         self.assertGreaterEqual(v5_read.count("return PB_READ_UNSAFE;"), 4)
         self.assertIn("struct SusamuneSplitStatsFile, generation", v5_read)
         self.assertIn("file->checksum != SplitStatsChecksum(file)", v5_read)
-        self.assertIn("file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH",
-                      v5_read)
+        self.assertIn("!SplitStatsSchemaSupported(file->schemaHash)", v5_read)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", source)
         v4_read = source[source.index("static enum PbReadResult ReadSplitStatsV4File") :]
         v4_read = v4_read[:v4_read.index("static bool SplitStatsV4RemovedCheckpoint")]
         self.assertGreaterEqual(v4_read.count("return PB_READ_UNSAFE;"), 4)

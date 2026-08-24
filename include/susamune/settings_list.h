@@ -179,7 +179,10 @@
     X(SETTING_BIANCO_SKEETER_ROUTE,         "bianco_skeeter_route")          \
     X(SETTING_ROLLOUT_DISPLAY,              "rollout_display")               \
     X(SETTING_DUST_DISPLAY,                 "dust_display")                  \
-    X(SETTING_TIMER_FREEZE_AIRGRAB,         "timer_freeze_airgrab")
+    X(SETTING_TIMER_FREEZE_AIRGRAB,         "timer_freeze_airgrab")          \
+    /* -- Gelato 6 patterns (append-only persisted ids) -- */                 \
+    X(SETTING_GELATO_RED_COIN_FISH_PATTERN, "gelato_red_coin_fish_pattern")  \
+    X(SETTING_GELATO_BLUE_BIRD_PATTERN,     "gelato_blue_bird_pattern")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

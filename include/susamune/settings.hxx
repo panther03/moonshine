@@ -124,12 +124,15 @@ private:
     u8   mValues[SETTING_COUNT];
     bool mDirty;
     u8   mSaveState;
+    u16  mSaveWaitFrames;
     u32  mLastError;
     u32  mSaveSeq;      // the sequence number we are waiting on
-    u32  mSaveWaitFrames;
 };
 
-static_assert(sizeof(Settings) == ((SETTING_COUNT + 5) & ~3) + 12,
+// The save timeout only reaches 300. Keeping its counter before the words
+// consumes the alignment hole instead of enlarging the fixed MEM2 slot.
+static_assert(sizeof(Settings) ==
+                  (((((SETTING_COUNT + 3) & ~1) + 5) & ~3) + 8),
               "Settings live state layout changed");
 
 extern Settings &gSettings;

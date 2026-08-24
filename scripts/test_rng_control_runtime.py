@@ -11,6 +11,7 @@ SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
 RUNTIME = ROOT / "src" / "rng_control.cpp"
 PATTERN = ROOT / "src" / "pattern_selector.cpp"
 PATCHES = ROOT / "scripts" / "patches.py"
+SAVESTATE = ROOT / "src" / "savestate.cpp"
 
 
 class RngControlRuntimeTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class RngControlRuntimeTests(unittest.TestCase):
             SETTINGS.read_text(encoding="utf-8"),
         )
         self.assertEqual(
-            rows[-9:-4],
+            rows[-11:-6],
             [
                 "SETTING_KING_BOO_ALWAYS_FRUIT",
                 "SETTING_PETEY_NO_TORNADO",
@@ -30,12 +31,14 @@ class RngControlRuntimeTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            rows[-4:],
+            rows[-6:],
             [
                 "SETTING_BIANCO_SKEETER_ROUTE",
                 "SETTING_ROLLOUT_DISPLAY",
                 "SETTING_DUST_DISPLAY",
                 "SETTING_TIMER_FREEZE_AIRGRAB",
+                "SETTING_GELATO_RED_COIN_FISH_PATTERN",
+                "SETTING_GELATO_BLUE_BIRD_PATTERN",
             ],
         )
 
@@ -45,12 +48,14 @@ class RngControlRuntimeTests(unittest.TestCase):
             "susamuneforcekingboofruit": (0x802D0F78, 0x800BE8E8, 0x800B7F88),
             "gcraneupdownrandshim": (0x801A5ED0, 0x801CE318, 0x801C61D0),
             "gcranerotyrandshim": (0x801A625C, 0x801CE6A4, 0x801C655C),
-            "gbiancoskeeterrandshim": (0x8033DFA4, 0x8012C6C8, 0x80125BCC),
         }
         for symbol, addresses in expected.items():
             self.assertIn(f"'sym': '{symbol}'", source)
             for address in addresses:
                 self.assertIn(f"0x{address:08x}", source)
+        self.assertNotIn("gbiancoskeeterrandshim", source)
+        for address in (0x8033DFA4, 0x8012C6C8, 0x80125BCC):
+            self.assertNotIn(f"0x{address:08x}", source)
 
     def test_cranes_reuse_one_retail_roll_in_exact_bands(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
@@ -59,7 +64,7 @@ class RngControlRuntimeTests(unittest.TestCase):
         )[1].split('extern "C" int susamuneCraneRotYRandImpl', 1)[0]
         rot_y = source.split(
             'extern "C" int susamuneCraneRotYRandImpl', 1
-        )[1].split('extern "C" int susamuneBiancoSkeeterRandImpl', 1)[0]
+        )[1].split('extern "C" bool susamuneBiancoSkeeterSearch', 1)[0]
         self.assertEqual(up_down.count("const int retail = rand();"), 1)
         self.assertEqual(rot_y.count("const int retail = rand();"), 1)
         self.assertIn("choice * 20 - 19 + ((u32)roll * 20u >> 15)", source)
@@ -102,17 +107,57 @@ class RngControlRuntimeTests(unittest.TestCase):
     def test_bianco_skeeter_is_instance_scoped_and_rng_neutral(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
         wrapper = source.split(
-            'extern "C" int susamuneBiancoSkeeterRandImpl', 1
+            'extern "C" bool susamuneBiancoSkeeterSearch(const void *nerve, '
+            'void *spine) {', 1
         )[1].split('extern "C" void susamuneCraneUpDownControl', 1)[0]
-        self.assertEqual(wrapper.count("const int retail = rand();"), 1)
-        self.assertIn("return retail;", wrapper)
-        self.assertIn("kSkeeterRouteRolls[choice - 1]", wrapper)
-        self.assertIn("0x458641E5u, 0x450FC000u, 0xC6221F8Du", source)
+        self.assertNotIn("rand()", wrapper)
+        self.assertEqual(
+            wrapper.count("sBiancoSkeeterSearchTrampoline)(nerve, spine)"),
+            1,
+        )
+        self.assertLess(
+            wrapper.index("sBiancoSkeeterSearchTrampoline)(nerve, spine)"),
+            wrapper.index("applySkeeterRoute"),
+        )
+        self.assertIn("!sSkeeterDecisionConsumed", wrapper)
+        self.assertIn("static_cast<const u8 *>(spine) + 0x20", wrapper)
+        self.assertLess(
+            wrapper.index("sSkeeterDecisionConsumed = true;"),
+            wrapper.index("choice = gSettings.get"),
+        )
+        self.assertIn("firstDecision && choice >= 1 && choice <= 3", wrapper)
+        self.assertIn("skeeter[0x1A0] = 0", wrapper)
+        self.assertIn("skeeter + 0x1A8", wrapper)
+        self.assertIn("kSkeeterSpawnX = 4296.2368f", source)
+        self.assertIn("kSkeeterSpawnY = 2300.0f", source)
+        self.assertIn("kSkeeterSpawnZ = -10375.8877f", source)
+        self.assertIn("kSkeeterSpawnTolerance = 400.0f", source)
+        self.assertIn("static_cast<const u8 *>(skeeter) + 0x194", source)
         self.assertIn("0x0000u, 0x7000u, 0x7FFFu", source)
+        for address in (0x8033DDA4, 0x8012C4C8, 0x801259CC):
+            self.assertIn(f"0x{address:08X}u", source)
+        self.assertIn("bytes + 0x1C0", source)
+        self.assertIn("bytes + 0x1D0", source)
         self.assertIn("gpMarDirector->mAreaID != kBiancoArea", source)
         self.assertIn("gpMarDirector->mEpisodeID > 1", source)
         self.assertNotIn("ILing::invalidateForAssist", wrapper)
         self.assertNotIn("rngControlInvalidatesIl", wrapper)
+
+    def test_bianco_skeeter_one_shot_tracks_savestates(self) -> None:
+        source = RUNTIME.read_text(encoding="utf-8")
+        savestate = SAVESTATE.read_text(encoding="utf-8")
+        self.assertIn("sSkeeterDecisionConsumed = false;", source)
+        self.assertIn("void rngControlOnSavestateSaved()", source)
+        self.assertIn(
+            "sSavedSkeeterDecisionConsumed = sSkeeterDecisionConsumed;",
+            source,
+        )
+        self.assertIn(
+            "sSkeeterDecisionConsumed = sSavedSkeeterDecisionConsumed;",
+            source,
+        )
+        self.assertIn("rngControlOnSavestateSaved();", savestate)
+        self.assertIn("rngControlOnSavestateLoaded();", savestate)
 
     def test_king_boo_alternates_only_after_a_completed_result(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")

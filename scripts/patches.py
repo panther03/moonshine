@@ -76,6 +76,10 @@ patches = [
     # Chomplet / Chain Chomp graph node when Pattern Selector is enabled.
     {'jp': 0x8024f2dc, 'us': 0x8003b6ac, 'pal': 0x8003b4fc,
      'sym': 'susamuneGoToRandomNextGraphNode', 'type': PatchType.B},
+    # Gelato 6 red-coin fish: retain the one retail route roll, then select
+    # the initial direction of kaiyu16/kaiyu17. Both rails are loops after it.
+    {'jp': 0x80363e48, 'us': 0x80005ddc, 'pal': 0x80005ddc,
+     'sym': 'susamuneGelatoFishRandomNext', 'type': PatchType.BL},
     # King Boo: preserve forceStopSlot(), then optionally arm this reel's
     # targeted fruit stop. This is the unique SlotStart semantic call.
     {'jp': 0x802d0f78, 'us': 0x800be8e8, 'pal': 0x800b7f88,
@@ -86,10 +90,6 @@ patches = [
      'sym': 'gCraneUpDownRandShim', 'type': PatchType.BL},
     {'jp': 0x801a625c, 'us': 0x801ce6a4, 'pal': 0x801c655c,
      'sym': 'gCraneRotYRandShim', 'type': PatchType.BL},
-    # Bianco 1/2 route Skeeter: forward the live TAmenbo from r31 while still
-    # consuming the retail rand call exactly once.
-    {'jp': 0x8033dfa4, 'us': 0x8012c6c8, 'pal': 0x80125bcc,
-     'sym': 'gBiancoSkeeterRandShim', 'type': PatchType.BL},
     # Ricco fruit launcher: one shared shim identifies the three selection
     # calls and first velocity call by LR. Every reached site still calls
     # retail rand exactly once; the velocity result is never substituted.

@@ -233,6 +233,8 @@ public:
     virtual bool favoriteHint() const { return false; }
     virtual bool available() const { return true; }
     virtual void focus() {}
+    // Nested pages consume one Back press before their parent closes.
+    virtual bool back() { return false; }
     // Protected PB saves may need to route through a nested Ghosts page.
     virtual bool beginProtectedPBSave(Menu *, u32) { return false; }
 
@@ -2659,7 +2661,7 @@ private:
         drawValueRow(menu, x, ry, w, "Unlock popup & chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR2",
+        menu->drawText("Moonshine V2.2.0 PR3",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3075,6 +3077,80 @@ static_assert(SETTING_CAT_COUNT <= 0x100, "setting categories no longer fit in a
 const u8 kStarredCategory = SETTING_CAT_COUNT;
 const u8 kRngCategory = SETTING_CAT_COUNT + 1;
 
+struct SettingPage {
+    const char *name;
+    const u8 *ids;
+    u8 count;
+};
+
+const u8 kTimerDisplaySettings[] = {
+    SETTING_TIMER_SUNSHINE_VISIBILITY,
+    SETTING_TIMER_QFT_VISIBILITY,
+    SETTING_TIMER_SECTIONS,
+    SETTING_LEVEL_SPLITS,
+};
+const u8 kTimerFreezeSettings[] = {
+    SETTING_TIMER_FREEZE_DURATION,
+    SETTING_TIMER_FREEZE_YELLOW_COIN,
+    SETTING_TIMER_FREEZE_RED_COIN,
+    SETTING_TIMER_FREEZE_BLUE_COIN,
+    SETTING_TIMER_FREEZE_ITEM,
+    SETTING_TIMER_FREEZE_TAKE,
+    SETTING_TIMER_FREEZE_DROP,
+    SETTING_TIMER_FREEZE_PUT,
+    SETTING_TIMER_FREEZE_JUMP,
+    SETTING_TIMER_FREEZE_DOUBLE_JUMP,
+    SETTING_TIMER_FREEZE_TRIPLE_JUMP,
+    SETTING_TIMER_FREEZE_SPIN_JUMP,
+    SETTING_TIMER_FREEZE_DIVE,
+    SETTING_TIMER_FREEZE_DIVE_ROLLOUT,
+    SETTING_TIMER_FREEZE_DIVE_GETUP,
+    SETTING_TIMER_FREEZE_LEDGE_GRAB,
+    SETTING_TIMER_FREEZE_WALL_KICK,
+    SETTING_TIMER_FREEZE_ROPE_JUMP,
+    SETTING_TIMER_FREEZE_BOUNCE,
+    SETTING_TIMER_FREEZE_MOVING_PLATFORM,
+    SETTING_TIMER_FREEZE_AIRGRAB,
+    SETTING_TIMER_FREEZE_TALK,
+    SETTING_TIMER_FREEZE_DEMO,
+    SETTING_TIMER_FREEZE_CLEANED,
+    SETTING_TIMER_FREEZE_BOWSER,
+    SETTING_TIMER_FREEZE_PETEY_WAKEUP,
+    SETTING_TIMER_FREEZE_EEL_ACTIVATE,
+    SETTING_TIMER_FREEZE_EEL_TOOTH,
+    SETTING_TIMER_FREEZE_YOSHI,
+};
+const SettingPage kTimerPages[] = {
+    {"Timer & splits", kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
+    {"QFT freezes", kTimerFreezeSettings, sizeof(kTimerFreezeSettings)},
+};
+
+const u8 kRngGeneralSettings[] = {
+    SETTING_PATTERN_SELECTOR,
+    SETTING_ANY_FRUIT_YOSHI,
+};
+const u8 kRngBossSettings[] = {
+    SETTING_KING_BOO_ALWAYS_FRUIT,
+    SETTING_PETEY_NO_TORNADO,
+    SETTING_PETEY_ROUTE,
+};
+const u8 kRngBiancoSettings[] = {SETTING_BIANCO_SKEETER_ROUTE};
+const u8 kRngRiccoSettings[] = {
+    SETTING_RICCO_CRANE_SPEED,
+    SETTING_RICCO_FRUIT_MACHINE,
+};
+const u8 kRngGelatoSettings[] = {
+    SETTING_GELATO_RED_COIN_FISH_PATTERN,
+    SETTING_GELATO_BLUE_BIRD_PATTERN,
+};
+const SettingPage kRngPages[] = {
+    {"General", kRngGeneralSettings, sizeof(kRngGeneralSettings)},
+    {"Boss assists", kRngBossSettings, sizeof(kRngBossSettings)},
+    {"Bianco Hills", kRngBiancoSettings, sizeof(kRngBiancoSettings)},
+    {"Ricco Harbor", kRngRiccoSettings, sizeof(kRngRiccoSettings)},
+    {"Gelato Beach", kRngGelatoSettings, sizeof(kRngGelatoSettings)},
+};
+
 const u8 kSettingSectionStarts[] = {
     SETTING_FAST_TEXT,
     SETTING_FMV_SKIPS,
@@ -3089,55 +3165,51 @@ const u8 kSettingSectionStarts[] = {
     SETTING_VISIBLE_GOOP,
     SETTING_SHOW_BGM_SLOTS,
     SETTING_WALLKICK_DISPLAY,
-    SETTING_TIMER_SUNSHINE_VISIBILITY,
-    SETTING_TIMER_FREEZE_DURATION,
-    SETTING_TIMER_SECTIONS,
     SETTING_SAVE_RNG_STATE,
     SETTING_SAVESTATE_FEEDBACK,
-    SETTING_KING_BOO_ALWAYS_FRUIT,
-    SETTING_PETEY_NO_TORNADO,
-    SETTING_RICCO_CRANE_SPEED,
-    SETTING_RICCO_FRUIT_MACHINE,
-    SETTING_BIANCO_SKEETER_ROUTE,
     SETTING_ROLLOUT_DISPLAY,
-    SETTING_TIMER_FREEZE_AIRGRAB,
 };
 const char kSettingSectionNames[] =
     "GENERAL\0SKIPS & UNLOCKS\0YOSHI EGGS\0WORLD RULES\0SAVE PROMPTS\0"
     "LEVEL RULES\0PRACTICE TOOLS\0PATTERNS\0BOX GAMES\0PRESENTATION\0WORLD\0"
-    "DIAGNOSTICS\0PRACTICE FEEDBACK\0DISPLAY\0FREEZE EVENTS\0"
-    "SECTION HISTORY\0STATE\0FEEDBACK\0KING BOO\0PETEY\0RICCO CRANE\0"
-    "RICCO FRUIT MACHINE\0BIANCO SKEETER\0MOVEMENT FEEDBACK\0FREEZE EVENTS";
+    "DIAGNOSTICS\0PRACTICE FEEDBACK\0STATE\0FEEDBACK\0MOVEMENT FEEDBACK";
 
 }  // namespace
 
 class CategorySettingsTab : public MenuTab {
 public:
     CategorySettingsTab(u8 titleOffset, u8 cat)
-        : mSel(0), mCat(cat), mTitleOffset(titleOffset), mResetConfirm(0) {}
+        : mSel(0), mCat(cat), mTitleOffset(titleOffset), mMode(0) {}
 
     const char *title() const override { return kCategoryTitles + mTitleOffset; }
     bool favoriteHint() const override {
+        if (pageRoot()) return false;
         u8 ids[SETTING_COUNT];
         const int settings = buildList(ids);
         return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;
     }
+    bool back() override {
+        if (!hasPages() || !mMode) return false;
+        mSel = mMode - 1;
+        mMode = 0;
+        return true;
+    }
     bool grabsInput() const override {
-        return mResetConfirm ||
+        return resetConfirm() ||
                (hasVisualEditor() && gCreationExtras.editing());
     }
     bool fullScreen() const override { return grabsInput(); }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
-        if (mResetConfirm) {
+        if (resetConfirm()) {
             const u32 rapid = pad->mButtons.mRapidInput;
             if (rapid & TMarioGamePad::B) {
-                mResetConfirm = 0;
+                mMode = 0;
             } else if (rapid & TMarioGamePad::A) {
-                if (mResetConfirm & 1) mResetConfirm++;
+                if (mMode & 1) mMode++;
                 else {
-                    const bool records = mResetConfirm == 4;
-                    mResetConfirm = 0;
+                    const bool records = mMode == 4;
+                    mMode = 0;
                     if (records) {
                         RecordsPersistence::resetAll();
                         menu->toast("Records reset");
@@ -3150,6 +3222,10 @@ public:
         }
         if (hasVisualEditor() && gCreationExtras.editing()) {
             gCreationExtras.updateEditor(pad);
+            return;
+        }
+        if (pageRoot()) {
+            updatePageRoot(menu, pad);
             return;
         }
         u8  ids[SETTING_COUNT];
@@ -3177,10 +3253,14 @@ public:
             if (rapid & TMarioGamePad::A) {
                 if (hasFeedbackEditor())
                     gCreationExtras.beginSavestateFeedbackEditor();
-                else if (hasWallkickEditor())
-                    gCreationExtras.beginWallkickEditor();
+                else if (hasMovementEditors()) {
+                    const int editor = mSel - settings;
+                    if (editor == 0) gCreationExtras.beginWallkickEditor();
+                    else if (editor == 1) gCreationExtras.beginRolloutEditor();
+                    else gCreationExtras.beginDustEditor();
+                }
                 else if (hasFactoryReset())
-                    mResetConfirm = mSel == settings ? 1 : 3;
+                    mMode = mSel == settings ? 1 : 3;
             }
             return;
         }
@@ -3197,9 +3277,9 @@ public:
     }
 
     void draw(Menu *menu, int x, int y, int w, int h) override {
-        if (mResetConfirm) {
-            const bool records = mResetConfirm >= 3;
-            const bool first = mResetConfirm & 1;
+        if (resetConfirm()) {
+            const bool records = mMode >= 3;
+            const bool first = mMode & 1;
             const char *title = records
                 ? (first ? "Reset all Records progress?"
                          : "Reset Records now?")
@@ -3225,6 +3305,10 @@ public:
         }
         if (hasVisualEditor() && gCreationExtras.editing()) {
             gCreationExtras.drawEditor(menu);
+            return;
+        }
+        if (pageRoot()) {
+            drawPageRoot(menu, x, y, w, h);
             return;
         }
         u8  ids[SETTING_COUNT];
@@ -3270,7 +3354,8 @@ public:
                 val = gSettings.valueLabel(id);
             } else {
                 name = hasFeedbackEditor() ? "Feedback display"
-                     : hasWallkickEditor() ? "Wallkick display style"
+                     : hasMovementEditors()
+                           ? movementEditorName(i - settings)
                      : i == settings ? "Factory reset"
                                      : "Reset Records";
                 val = hasVisualEditor() ? "Edit" : "Reset";
@@ -3287,34 +3372,86 @@ public:
 
 private:
     bool isStarred() const { return mCat == kStarredCategory; }
+    bool isTimer() const { return mCat == SETTING_CAT_TIMER; }
     bool isRng() const { return mCat == kRngCategory; }
+    bool hasPages() const { return isTimer() || isRng(); }
+    bool pageRoot() const { return hasPages() && !mMode; }
+    bool resetConfirm() const { return hasFactoryReset() && mMode; }
     bool hasFeedbackEditor() const {
         return mCat == SETTING_CAT_SAVESTATE;
     }
-    bool hasWallkickEditor() const { return mCat == SETTING_CAT_UI; }
+    bool hasMovementEditors() const { return mCat == SETTING_CAT_UI; }
     bool hasVisualEditor() const {
-        return hasFeedbackEditor() || hasWallkickEditor();
+        return hasFeedbackEditor() || hasMovementEditors();
     }
     bool hasFactoryReset() const { return mCat == SETTING_CAT_MISC; }
     int extraRows() const {
-        return hasFactoryReset() ? 2 : hasVisualEditor() ? 1 : 0;
+        return hasFactoryReset() ? 2 : hasMovementEditors() ? 3
+             : hasFeedbackEditor() ? 1 : 0;
+    }
+
+    const SettingPage *pages() const {
+        return isTimer() ? kTimerPages : kRngPages;
+    }
+    int pageCount() const {
+        return isTimer()
+                   ? sizeof(kTimerPages) / sizeof(kTimerPages[0])
+                   : sizeof(kRngPages) / sizeof(kRngPages[0]);
+    }
+    const SettingPage &currentPage() const { return pages()[mMode - 1]; }
+
+    const char *movementEditorName(int editor) const {
+        return editor == 0 ? "Wallkick display style"
+             : editor == 1 ? "Rollout display style"
+                           : "Dust display style";
+    }
+
+    const char *pageRootSection(int page) const {
+        if (isTimer()) return page == 0 ? "TIMING & SPLITS" : "QFT";
+        if (page == 0) return "GENERAL";
+        if (page == 1) return "BOSSES";
+        return page == 2 ? "COURSES" : nullptr;
+    }
+
+    void updatePageRoot(Menu *menu, TMarioGamePad *pad) {
+        const int count = pageCount();
+        const u32 rapid = menu->navigationInput(pad);
+        if (rapid & TMarioGamePad::CSTICK_UP)
+            mSel = wrap(mSel - 1, count);
+        else if (rapid & TMarioGamePad::CSTICK_DOWN)
+            mSel = wrap(mSel + 1, count);
+        if (rapid & TMarioGamePad::A) {
+            mMode = mSel + 1;
+            mSel = 0;
+        }
+    }
+
+    void drawPageRoot(Menu *menu, int x, int y, int w, int) const {
+        int ry = y;
+        for (int page = 0; page < pageCount(); page++) {
+            const char *section = pageRootSection(page);
+            if (section) {
+                drawSectionHeader(menu, x, ry, w, section);
+                ry += ROW_H;
+            }
+            drawValueRow(menu, x, ry, w, pages()[page].name, nullptr,
+                         page == mSel, false, true);
+            ry += ROW_H;
+        }
     }
 
     int buildList(u8 *out) const {
+        if (hasPages()) {
+            if (!mMode) return 0;
+            const SettingPage &page = currentPage();
+            for (u8 i = 0; i < page.count; i++) out[i] = page.ids[i];
+            return page.count;
+        }
         int n = 0;
         const int count = isStarred() ? SETTING_FAVORITES_0 : SETTING_COUNT;
         for (int i = 0; i < count; i++) {
             const SettingId id = (SettingId)i;
-            const bool include = isRng()
-                ? id == SETTING_ANY_FRUIT_YOSHI ||
-                      id == SETTING_PATTERN_SELECTOR ||
-                      id == SETTING_KING_BOO_ALWAYS_FRUIT ||
-                      id == SETTING_PETEY_NO_TORNADO ||
-                      id == SETTING_PETEY_ROUTE ||
-                      id == SETTING_RICCO_CRANE_SPEED ||
-                      id == SETTING_RICCO_FRUIT_MACHINE ||
-                      id == SETTING_BIANCO_SKEETER_ROUTE
-                : isStarred()
+            const bool include = isStarred()
                     ? Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)
                     : Settings::category(id) == (SettingCategory)mCat;
@@ -3328,6 +3465,17 @@ private:
     const char *sectionName(const u8 *ids, int settings, int logical) const {
         if (logical < settings) {
             if (isStarred()) return nullptr;
+            if (hasPages()) {
+                if (isRng()) return logical == 0 ? currentPage().name : nullptr;
+                if (mMode == 1) {
+                    if (logical == 0) return "TIMER DISPLAY";
+                    return logical == 2 ? "HISTORY & SPLITS" : nullptr;
+                }
+                if (logical == 0) return "DURATION";
+                if (logical == 1) return "COINS & OBJECTS";
+                if (logical == 8) return "MOVEMENT";
+                return logical == 21 ? "EVENTS & BOSSES" : nullptr;
+            }
             const SettingId id = (SettingId)ids[logical];
             for (u32 i = 0; i < sizeof(kSettingSectionStarts); i++) {
                 if (kSettingSectionStarts[i] == id)
@@ -3336,7 +3484,8 @@ private:
             return nullptr;
         }
         if (hasFeedbackEditor()) return "FEEDBACK STYLE";
-        if (hasWallkickEditor()) return "DISPLAY STYLE";
+        if (hasMovementEditors())
+            return logical == settings ? "DISPLAY STYLE" : nullptr;
         if (hasFactoryReset()) return logical == settings ? "RESET" : nullptr;
         return nullptr;
     }
@@ -3367,7 +3516,7 @@ private:
     u8 mSel;
     u8 mCat;
     u8 mTitleOffset;
-    u8 mResetConfirm;
+    u8 mMode;
 };
 
 static_assert(sizeof(CategorySettingsTab) == 8, "category tab must stay one slot");
@@ -4503,6 +4652,10 @@ public:
                 return;
             }
             if (mNavInput.update() & JUTGamePad::B) {
+                if (child->back()) {
+                    mNavInput.begin(JUTGamePad::B);
+                    return;
+                }
                 mPage = -1;
                 mNavInput.begin(JUTGamePad::A);
                 return;
@@ -4552,9 +4705,8 @@ public:
         }
 
         child->draw(menu, x, y, w, h - ROW_H);
-        char hint[40];
-        snprintf(hint, sizeof(hint), SUSAMUNE_GLYPH_B " Back to %s", mName);
-        menu->drawText(hint, x + 4, y + h - FOOT_SZ,
+        menu->drawText(SUSAMUNE_GLYPH_B " Back", x + 4,
+                       y + h - FOOT_SZ,
                        FOOT_SZ, FOOT_SZ, cFooter());
     }
 
@@ -4569,9 +4721,9 @@ private:
 
     const char *sectionName(int child) const {
         if (mSectionStyle == SECTIONS_SETTINGS) {
-            if (child == 0) return "PRACTICE & GAMEPLAY";
-            if (child == 5) return "PRESENTATION";
-            if (child == 7) return "TOOLS & CONTROLS";
+            if (child == 0) return "GAME & PRACTICE";
+            if (child == 4) return "TIMING & DISPLAY";
+            if (child == 7) return "CUSTOMIZE & CONTROLS";
         } else if (mSectionStyle == SECTIONS_ILS) {
             if (child == 0) return "PRACTICE";
             if (child == 2) return "SESSIONS";
@@ -4829,8 +4981,8 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *records = new (sRecordsBuf) RecordsTab();
 
     MenuTab *settingsChildren[] = {
-        practice, savestate, timer, gameplay, rng,
-        display, cosmetics, creation, binds,
+        gameplay, practice, rng, savestate,
+        timer, display, cosmetics, creation, binds,
     };
     MenuTab *ilChildren[] = {
         iling, ghosts, stageLoader,

@@ -90,6 +90,10 @@ DYNAMIC_HOOKS = {
 }
 
 CAPTURED_HOOKS = {
+    "kStreamingMovie": (
+        "sStreamingMovieTrampoline", "susamuneSplitStreamingMovie",
+        (0x800ED5C8, 0x8029A044, 0x80291EDC),
+    ),
     "kPeteyHipDrop": (
         "sPeteyHipDropTrampoline", "susamuneSplitPeteyHipDrop",
         (0x802A8790, 0x80095A0C, 0x8008F0AC),
@@ -259,26 +263,24 @@ class SplitEventContractTests(unittest.TestCase):
         )
         self.assertNotIn("JDrama::TActor *, u16 demoFlag", text)
         wrapper = text.rsplit('extern "C" void susamuneSplitStartDemo', 1)[1]
-        wrapper = wrapper.split('extern "C" void susamuneSplitOpenTalk', 1)[0]
+        wrapper = wrapper.split(
+            'extern "C" void susamuneSplitStreamingMovie', 1
+        )[0]
         self.assertIn("+ 0x24C", wrapper)
         self.assertIn("if (after == before) return;", wrapper)
         self.assertLess(wrapper.index("if (after == before) return;"),
                         wrapper.index("gQFTTimer.freezeEvent();"))
-        self.assertIn("captureDemoEvent(", wrapper)
-        self.assertIn(
-            "SplitStats::onRouteEvent(candidateRoute, candidateEvent, candidateQf)",
-            wrapper,
-        )
+        self.assertNotIn("ROUTE_BIANCO_2", wrapper)
         self.assertNotIn("publishEvent", wrapper)
-        capture = text.split("bool captureDemoEvent", 1)[1].split(
-            "void updateTransitions", 1
+
+        petey = text.split("void notePetey(", 1)[1].split(
+            "void noteBossGesso", 1
         )[0]
-        self.assertIn(
-            "SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2)", capture
-        )
-        self.assertIn("director->mAreaID != 2", capture)
-        self.assertIn("director->mEpisodeID != 0", capture)
-        self.assertIn("*event = 1;", capture)
+        self.assertIn("kPeteyBreakSleepVtable", petey)
+        self.assertNotIn("ROUTE_BIANCO_2", petey)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", petey)
+        self.assertIn("publishEvent(sActiveRoute, 0)", petey)
+        self.assertNotIn("captureDemoEvent", text)
         self.assertNotIn("DIRECT(SETTING_TIMER_FREEZE_DEMO", source_text(QFT))
         setup = text[text.index("void beforeStageSetup()") :]
         setup = setup[:setup.index("void onStageSetup(")]
@@ -288,6 +290,27 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn(
             "const TGameSequence &current = gpApplication.mCurrentScene;", setup
         )
+
+    def test_bianco_two_second_split_owns_the_accepted_movie_edge(self) -> None:
+        text = source_text()
+        wrapper = text.rsplit(
+            'extern "C" void susamuneSplitStreamingMovie', 1
+        )[1].split('extern "C" void susamuneSplitOpenTalk', 1)[0]
+        for contract in (
+            "director == sStageDirector",
+            "movie == 6",
+            "hookScene(SplitStats::ROUTE_BIANCO_2, 2, 0)",
+            "!(director->mGameState & 0x100)",
+            "gQFTTimer.currentQf(&qf)",
+            "sStreamingMovieTrampoline",
+            "candidate && (director->mGameState & 0x100)",
+            "publishEventAt(SplitStats::ROUTE_BIANCO_2, 1, qf)",
+        ):
+            self.assertIn(contract, wrapper)
+        self.assertLess(wrapper.index("gQFTTimer.currentQf(&qf)"),
+                        wrapper.index("sStreamingMovieTrampoline"))
+        self.assertLess(wrapper.index("sStreamingMovieTrampoline"),
+                        wrapper.index("publishEventAt"))
 
     def test_carry_table_is_exact_and_known_transitions_arm_it(self) -> None:
         text = source_text()

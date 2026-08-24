@@ -32,7 +32,7 @@ CHECKPOINTS = 153
 SEGMENTS = 275
 REGIONS = 3
 PROFILES = 4
-SCHEMA_HASH = 0x4499A650
+SCHEMA_HASH = 0xB933B5AB
 PAYLOAD_SIZE = 0x6E34
 CFG_SIZE = 0x7000
 CFG_OFFSET = 0x8800
@@ -287,9 +287,30 @@ class SchemaContracts(unittest.TestCase):
                 self.assertEqual(schema.CHECKPOINTS[route],
                                  schema.V5_CHECKPOINTS[route])
         self.assertEqual(
-            schema.CHECKPOINTS[B2_ROUTE][0],
-            "scene=02:00|02:01;trigger=mario-status-enter;"
-            "status=rollout;y>=3200",
+            schema.CHECKPOINTS[B2_ROUTE],
+            (
+                "scene=02:00;trigger=mario-status-enter;"
+                "status=rollout;y>=3200",
+                "scene=02:00;trigger=streaming-movie-start;movie=6",
+                "scene=02:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=1",
+                "scene=02:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=2",
+                "scene=02:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=3",
+            ),
+        )
+        self.assertEqual(
+            schema.V5_CHECKPOINTS[B2_ROUTE],
+            (
+                "scene=02:00|02:01;trigger=demo-start",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=1",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=2",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=3",
+            ),
         )
         self.assertTrue(all(not points for points in schema.CHECKPOINTS[V5_ROUTES:]))
 
@@ -436,8 +457,10 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
         )
         self.assertIn("file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC", reader)
         self.assertIn("file->version != SUSAMUNE_SPLIT_STATS_VERSION", reader)
-        self.assertIn("file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH",
-                      reader)
+        self.assertIn("!SplitStatsSchemaSupported(file->schemaHash)", reader)
+        supported = function_block(kernel, "static bool SplitStatsSchemaSupported(")
+        self.assertIn("SUSAMUNE_SPLIT_STATS_SCHEMA_HASH", supported)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", supported)
         self.assertGreaterEqual(reader.count("return PB_READ_UNSAFE;"), 3)
 
         init = function_block(kernel, "static bool InitSplitStatsFiles(")

@@ -1628,6 +1628,12 @@ static bool SplitStatsQfValid(u32 value)
 	       value <= (u32)SUSAMUNE_ILING_PB_MAX_QF;
 }
 
+static bool SplitStatsSchemaSupported(u32 schemaHash)
+{
+	return schemaHash == SUSAMUNE_SPLIT_STATS_SCHEMA_HASH ||
+	       schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH;
+}
+
 static bool SplitStatsPayloadValid(
 	const struct SusamuneSplitStatsPayload *payload)
 {
@@ -1753,7 +1759,7 @@ static enum PbReadResult ReadSplitStatsFile(
 		if (size >= prefixSize &&
 		    file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
 		    (file->version != SUSAMUNE_SPLIT_STATS_VERSION ||
-		     file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH))
+		     !SplitStatsSchemaSupported(file->schemaHash)))
 			return PB_READ_UNSAFE;
 		return PB_READ_INVALID;
 	}
@@ -1766,7 +1772,7 @@ static enum PbReadResult ReadSplitStatsFile(
 		return PB_READ_UNSAFE;
 	if (file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
 	    file->version == SUSAMUNE_SPLIT_STATS_VERSION &&
-	    file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH)
+	    !SplitStatsSchemaSupported(file->schemaHash))
 		return PB_READ_UNSAFE;
 	if (file->magic != SUSAMUNE_SPLIT_STATS_FILE_MAGIC ||
 	    file->routeCount != SUSAMUNE_SPLIT_STATS_ROUTE_COUNT ||
@@ -1775,7 +1781,7 @@ static enum PbReadResult ReadSplitStatsFile(
 	    file->profileCount != SUSAMUNE_SPLIT_STATS_PROFILE_COUNT ||
 	    file->headerReserved != 0 ||
 	    file->payloadBytes != sizeof(file->payload) ||
-	    file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH ||
+	    !SplitStatsSchemaSupported(file->schemaHash) ||
 	    !SplitStatsBytesZero(file->reserved0, sizeof(file->reserved0)) ||
 	    !SplitStatsBytesZero(file->reserved1, sizeof(file->reserved1)) ||
 	    !SplitStatsBytesZero(file->tailPad, sizeof(file->tailPad)) ||
@@ -3092,6 +3098,31 @@ static void ResetSplitStatsPayload(struct SusamuneSplitStatsPayload *payload)
 	           __builtin_offsetof(struct SusamuneSplitStatsPayload, bestQf));
 }
 
+static void MigrateSplitStatsPreviousSchema(
+	struct SusamuneSplitStatsPayload *payload)
+{
+	const u32 route = 13;
+	const u32 first = SplitRouteFirst[route];
+	const u32 count = SplitRouteCount[route];
+	u32 region;
+	u32 profile;
+
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		payload->routeStats[region][route].golds = 0;
+		memset(&payload->bestQf[region][first], 0xff,
+		       count * sizeof(payload->bestQf[region][first]));
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			payload->pbIdentityQf[region][profile][route] =
+				SUSAMUNE_SPLIT_STATS_QF_UNSET;
+			memset(&payload->pbQf[region][profile][first], 0xff,
+			       count * sizeof(payload->pbQf[region][profile][first]));
+		}
+	}
+}
+
 static void ResetSplitStatsV4Payload(
 	struct SusamuneSplitStatsPayloadV4 *payload)
 {
@@ -3119,6 +3150,7 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 {
 	struct SusamuneSplitStatsFile *file = &SplitStatsFileScratch.current;
 	u32 fileIndex;
+	u32 selectedSchemaHash = SUSAMUNE_SPLIT_STATS_SCHEMA_HASH;
 	bool safe = true;
 	bool migrated = false;
 
@@ -3143,7 +3175,8 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 		if (SplitStatsActiveFile >= 0 &&
 		    file->generation == SplitStatsGeneration)
 		{
-			if (memcmp(&file->payload, &stats->payload,
+			if (file->schemaHash != selectedSchemaHash ||
+			    memcmp(&file->payload, &stats->payload,
 			           sizeof(file->payload)) != 0)
 				safe = false;
 			continue;
@@ -3155,6 +3188,13 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 		memcpy(&stats->payload, &file->payload, sizeof(stats->payload));
 		SplitStatsGeneration = file->generation;
 		SplitStatsActiveFile = (s32)fileIndex;
+		selectedSchemaHash = file->schemaHash;
+	}
+	if (safe && SplitStatsActiveFile >= 0 &&
+	    selectedSchemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH)
+	{
+		MigrateSplitStatsPreviousSchema(&stats->payload);
+		migrated = true;
 	}
 
 	if (safe && SplitStatsActiveFile < 0)
@@ -4400,6 +4440,62 @@ static void ApplyWallkickStyleKey(struct SusamuneWallkickStyleCfg *cfg,
 	}
 }
 
+static void ApplyMovementOverlayStyleKey(
+	struct SusamuneMovementOverlayStyleCfg *cfg, const char *prefix,
+	const char *key, const char *text, u32 colors)
+{
+	u8 rgb[3];
+	u8 v8;
+	u16 v16;
+	u32 i;
+	char expected[16];
+	const u32 prefixLen = (u32)strlen(prefix);
+	const char *field;
+
+	if (strncmp(key, prefix, prefixLen) != 0 || key[prefixLen] != '_')
+		return;
+	field = key + prefixLen + 1;
+	if (strcmp(field, "x") == 0 && ParseU16(text, &v16)) cfg->x = v16;
+	else if (strcmp(field, "y") == 0 && ParseU16(text, &v16)) cfg->y = v16;
+	else if (strcmp(field, "scale") == 0 && ParseQftU8(text, &v8))
+		cfg->scale = v8;
+	else if (strcmp(field, "text_alpha") == 0 && ParseQftU8(text, &v8))
+		cfg->textA = v8;
+	else if (strcmp(field, "background_rgb") == 0 && ParseQftRgb(text, rgb))
+	{
+		cfg->bgR = rgb[0]; cfg->bgG = rgb[1]; cfg->bgB = rgb[2];
+	}
+	else if (strcmp(field, "background_alpha") == 0 && ParseQftU8(text, &v8))
+		cfg->bgA = v8;
+	else if (strcmp(field, "text_brightness") == 0 && ParseQftU8(text, &v8))
+		cfg->textBrightness = v8;
+	else if (strcmp(field, "padding") == 0 && ParseQftU8(text, &v8))
+		cfg->padding = v8;
+	else
+	{
+		for (i = 0; i < colors; i++)
+		{
+			_sprintf(expected, "%u_rgb", i + 1);
+			if (strcmp(field, expected) == 0 && ParseQftRgb(text, rgb))
+			{
+				cfg->rgb[i][0] = rgb[0];
+				cfg->rgb[i][1] = rgb[1];
+				cfg->rgb[i][2] = rgb[2];
+				return;
+			}
+		}
+	}
+}
+
+static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
+	                              const char *key, const char *text)
+{
+	ApplyMovementOverlayStyleKey(&cfg->rollout, "rollout", key, text,
+	                             SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+	ApplyMovementOverlayStyleKey(&cfg->dust, "dust", key, text,
+	                             SUSAMUNE_DUST_STYLE_COLOR_COUNT);
+}
+
 // Whether the file already carries settings for this game version. When it does
 // not, the mod is asked to author them (SUSAMUNE_CFG_FLAG_NO_CONFIG).
 static bool SawSettingsSection = false;
@@ -4488,6 +4584,7 @@ static void ParseIni(char *text, struct SusamuneCfg *cfg)
 		{
 			ApplyCreationKey(&cfg->creation, Trim(line), Trim(eq + 1));
 			ApplyWallkickStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
+			ApplyMovementStyleKey(&cfg->movementStyle, Trim(line), Trim(eq + 1));
 		}
 
 		line = next;
@@ -4785,6 +4882,36 @@ static void EmitQftDisplaySection(FIL *f, int *err, const struct SusamuneCfg *cf
 	          SUSAMUNE_QFT_DISPLAY_LEADING_ZERO);
 }
 
+static void EmitMovementOverlayStyle(
+	FIL *f, int *err, const char *prefix,
+	const struct SusamuneMovementOverlayStyleCfg *style, u32 colors)
+{
+	char line[160];
+	u32 i;
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_x = %u\r\n", prefix, style->x));
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_y = %u\r\n", prefix, style->y));
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_scale = %u\r\n", prefix, style->scale));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_text_alpha = %u\r\n", prefix, style->textA));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_background_rgb = %u,%u,%u\r\n", prefix,
+		style->bgR, style->bgG, style->bgB));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_background_alpha = %u\r\n", prefix, style->bgA));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_text_brightness = %u\r\n", prefix,
+		style->textBrightness));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_padding = %u\r\n", prefix, style->padding));
+	for (i = 0; i < colors; i++)
+		Emit(f, err, line, (u32)_sprintf(
+			line, "%s_%u_rgb = %u,%u,%u\r\n", prefix, i + 1,
+			style->rgb[i][0], style->rgb[i][1], style->rgb[i][2]));
+}
+
 static void EmitCreationSection(FIL *f, int *err,
 	                            const struct SusamuneCfg *cfg)
 {
@@ -4918,6 +5045,12 @@ static void EmitCreationSection(FIL *f, int *err,
 		Emit(f, err, line, (u32)_sprintf(
 			line, "il_pb_popup_scale = %u\r\n", w->pbPopupScale));
 	}
+	EmitMovementOverlayStyle(
+		f, err, "rollout", &cfg->movementStyle.rollout,
+		SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+	EmitMovementOverlayStyle(
+		f, err, "dust", &cfg->movementStyle.dust,
+		SUSAMUNE_DUST_STYLE_COLOR_COUNT);
 	for (word = 0; word < SUSAMUNE_CREATION_WORD_COUNT; word++)
 	{
 		const struct SusamuneCreationWordCfg *w = &d->words[word];
@@ -5245,6 +5378,30 @@ static void InitWallkickStyleDefaults(struct SusamuneWallkickStyleCfg *cfg)
 		cfg->rgb[i][0] = cfg->rgb[i][1] = cfg->rgb[i][2] = 255;
 }
 
+static void InitMovementOverlayStyleDefaults(
+	struct SusamuneMovementOverlayStyleCfg *cfg)
+{
+	u32 i;
+	cfg->x = 300;
+	cfg->y = 106;
+	cfg->scale = 90;
+	cfg->textA = 255;
+	cfg->bgA = 185;
+	cfg->textBrightness = 100;
+	cfg->padding = 5;
+	for (i = 0; i < SUSAMUNE_MOVEMENT_STYLE_COLOR_COUNT; i++)
+		cfg->rgb[i][0] = cfg->rgb[i][1] = cfg->rgb[i][2] = 255;
+}
+
+static void InitMovementStyleDefaults(struct SusamuneMovementStyleCfg *cfg)
+{
+	memset(cfg, 0, sizeof(*cfg));
+	cfg->magic = SUSAMUNE_MOVEMENT_STYLE_MAGIC;
+	cfg->version = SUSAMUNE_MOVEMENT_STYLE_VERSION;
+	InitMovementOverlayStyleDefaults(&cfg->rollout);
+	InitMovementOverlayStyleDefaults(&cfg->dust);
+}
+
 void SusamuneCfgInit(void)
 {
 	struct SusamuneCfg *cfg = CfgBlock();
@@ -5349,6 +5506,7 @@ void SusamuneCfgInit(void)
 	cfg->inputStyle.present = 0;
 	InitCreationDefaults(&cfg->creation);
 	InitWallkickStyleDefaults(&cfg->wallkickStyle);
+	InitMovementStyleDefaults(&cfg->movementStyle);
 
 	cfg->magic     = SUSAMUNE_CFG_MAGIC;
 	cfg->version   = SUSAMUNE_CFG_VERSION;
@@ -5360,7 +5518,8 @@ void SusamuneCfgInit(void)
 	                 SUSAMUNE_CFG_FLAG_METADATA_STYLE |
 	                 SUSAMUNE_CFG_FLAG_INPUT_STYLE |
 	                 SUSAMUNE_CFG_FLAG_CREATION |
-	                 SUSAMUNE_CFG_FLAG_WALLKICK_STYLE;
+	                 SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
+	                 SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
 	if (InitPbFiles(cfg, region))
 		cfg->flags |= SUSAMUNE_CFG_FLAG_ILING_PBS |
 		              SUSAMUNE_CFG_FLAG_ILING_PROFILES;
@@ -5442,6 +5601,7 @@ void SusamuneCfgService(void)
 	                 sizeof(cfg->qftDisplay) + sizeof(cfg->metadataStyle) +
 	                 sizeof(cfg->inputStyle) + sizeof(cfg->creation) +
 	                 sizeof(cfg->wallkickStyle));
+	sync_before_read(&cfg->movementStyle, sizeof(cfg->movementStyle));
 	seq = cfg->saveSeq;
 
 	ret = WriteIniFile(cfg);

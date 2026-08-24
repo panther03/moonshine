@@ -34,6 +34,8 @@ public:
     void stageInto(volatile SusamuneCreationCfg *dst) const;
     void adoptWallkick(const volatile SusamuneWallkickStyleCfg *src);
     void stageWallkickInto(volatile SusamuneWallkickStyleCfg *dst) const;
+    void adoptMovement(const volatile SusamuneMovementStyleCfg *src);
+    void stageMovementInto(volatile SusamuneMovementStyleCfg *dst) const;
 
     void onStageSetup();
     void onSavestateLoaded();
@@ -44,6 +46,8 @@ public:
     void beginRecentIlEditor();
     void beginSavestateFeedbackEditor();
     void beginWallkickEditor();
+    void beginRolloutEditor();
+    void beginDustEditor();
     void beginAchievementBannerEditor();
     void beginToastEditor();
     void beginPbBannerEditor();
@@ -67,6 +71,8 @@ public:
     void drawSavestateFeedback(Menu *menu, const char *message) const;
     void drawWallkickDisplay(Menu *menu, const char *message,
                              int color) const;
+    void drawRolloutDisplay(Menu *menu, const char *message, int color) const;
+    void drawDustDisplay(Menu *menu, const char *message, int color) const;
     void drawToast(Menu *menu, const char *message) const;
     void drawPbBanner(Menu *menu, const char *message) const;
     void drawStageSessionCounter(Menu *menu, const char *message) const;
@@ -95,6 +101,8 @@ private:
         EDIT_RECENT_ILS,
         EDIT_SAVESTATE_FEEDBACK,
         EDIT_WALLKICK,
+        EDIT_ROLLOUT,
+        EDIT_DUST,
         EDIT_ACHIEVEMENT_BANNER,
         EDIT_TOAST,
         EDIT_PB_BANNER,
@@ -118,6 +126,8 @@ private:
     CreationStyle mRecentIlStyle;
     CreationStyle mSavestateFeedbackStyle;
     CreationStyle mWallkickStyle;
+    CreationStyle mRolloutStyle;
+    CreationStyle mDustStyle;
     CreationStyle mAchievementBannerStyle;
     CreationStyle mToastStyle;
     CreationStyle mPbBannerStyle;
@@ -135,6 +145,10 @@ private:
     u8 mSavestateFeedbackBackup[1][3];
     u8 mWallkickRgb[SUSAMUNE_WALLKICK_STYLE_COLOR_COUNT][3];
     u8 mWallkickBackup[SUSAMUNE_WALLKICK_STYLE_COLOR_COUNT][3];
+    u8 mRolloutRgb[SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT][3];
+    u8 mRolloutBackup[SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT][3];
+    u8 mDustRgb[SUSAMUNE_DUST_STYLE_COLOR_COUNT][3];
+    u8 mDustBackup[SUSAMUNE_DUST_STYLE_COLOR_COUNT][3];
     char mWords[SUSAMUNE_CREATION_WORD_COUNT]
                [SUSAMUNE_CREATION_WORD_TEXT_SIZE];
     char mTextBackup[SUSAMUNE_CREATION_WORD_TEXT_SIZE];

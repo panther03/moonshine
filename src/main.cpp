@@ -56,6 +56,44 @@ namespace {
 // The mod reservation is fixed, so BSS storage costs no additional game heap.
 // Keep this persistent controller out of Sunshine's pressured system heap.
 alignas(SavestateManager) u8 sSavestateManagerStorage[sizeof(SavestateManager)];
+
+struct RetailPadInputSnapshot {
+    u32 input;
+    u32 frameInput;
+    u32 releaseInput;
+    u32 rapidInput;
+    u32 meaning;
+    u32 frameMeaning;
+    u32 releaseMeaning;
+};
+
+void suppressRetailPad(TMarioGamePad *pad, RetailPadInputSnapshot &saved) {
+    saved.input = pad->mButtons.mInput;
+    saved.frameInput = pad->mButtons.mFrameInput;
+    saved.releaseInput = pad->mButtons._8;
+    saved.rapidInput = pad->mButtons.mRapidInput;
+    saved.meaning = pad->mMeaning;
+    saved.frameMeaning = pad->mFrameMeaning;
+    saved.releaseMeaning = pad->_D8;
+    pad->mButtons.mInput = 0;
+    pad->mButtons.mFrameInput = 0;
+    pad->mButtons._8 = 0;
+    pad->mButtons.mRapidInput = 0;
+    pad->mMeaning = 0;
+    pad->mFrameMeaning = 0;
+    pad->_D8 = 0;
+}
+
+void restoreRetailPad(TMarioGamePad *pad,
+                      const RetailPadInputSnapshot &saved) {
+    pad->mButtons.mInput = saved.input;
+    pad->mButtons.mFrameInput = saved.frameInput;
+    pad->mButtons._8 = saved.releaseInput;
+    pad->mButtons.mRapidInput = saved.rapidInput;
+    pad->mMeaning = saved.meaning;
+    pad->mFrameMeaning = saved.frameMeaning;
+    pad->_D8 = saved.releaseMeaning;
+}
 }
 
 SavestateManager* gSavestateMgr = nullptr;
@@ -287,6 +325,8 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     const bool sessionModalBeforeDirect = StageLoader::modal();
     const bool sessionResultBeforeDirect = StageLoader::resultOwnsInput();
     const bool menuOpenBeforeDirect = gMenu && gMenu->shown();
+    const bool menuOwnsRetailPad = menuOpenBeforeDirect ||
+        (gMenu && gBinds.wasPressed(BIND_MENU_TOGGLE));
     const bool wheelOpenBeforeDirect = WarpWheel::shown();
     const bool wheelOwnsInputBeforeDirect =
         wheelOpenBeforeDirect || WarpWheel::promptPending();
@@ -341,7 +381,13 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     }
     Ghost::beforeDirect();
     SplitEvents::beginFrame();
+    TMarioGamePad *const retailPad = gpApplication.mGamePads[0];
+    RetailPadInputSnapshot retailInput;
+    if (menuOwnsRetailPad && retailPad)
+        suppressRetailPad(retailPad, retailInput);
     int state = director->direct();
+    if (menuOwnsRetailPad && retailPad)
+        restoreRetailPad(retailPad, retailInput);
     if (freeze) {
         gpMarDirector->mCurState = TMarDirector::STATE_NORMAL;
         state = 0;

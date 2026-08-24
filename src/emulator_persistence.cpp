@@ -15,7 +15,7 @@ namespace EmulatorPersistence {
 namespace {
 
 constexpr u32 kRecordMagic = 0x53554346u;  // 'SUCF'
-constexpr u16 kRecordVersion = 4;
+constexpr u16 kRecordVersion = 5;
 constexpr u32 kSectorSize = 0x2000;
 constexpr u32 kFileSize = kSectorSize * 2;
 constexpr char kFileName[] = "susamune_settings";
@@ -72,6 +72,19 @@ struct RecordV3 {
 };
 static_assert(sizeof(RecordV3) == kSectorSize, "V3 card record size changed");
 
+struct RecordV4 {
+    u32 magic;
+    u16 version;
+    u16 payloadSize;
+    u32 generation;
+    u32 checksum;
+    u32 gameVersion;
+    u8 reserved[12];
+    u8 cfg[4928];
+    u8 padding[kSectorSize - 32 - 4928];
+};
+static_assert(sizeof(RecordV4) == kSectorSize, "V4 card record size changed");
+
 // Only diskID is needed. The offset and stride come from the decomp's complete
 // CARDControl definition; keep this view tied to its 0x110-byte retail layout.
 struct CardControlIdentity {
@@ -124,7 +137,8 @@ void initBlank(SusamuneCfg *cfg) {
                  SUSAMUNE_CFG_FLAG_INPUT_STYLE |
                  SUSAMUNE_CFG_FLAG_CREATION |
                  SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
-                 SUSAMUNE_CFG_FLAG_ILING_PROFILES;
+                 SUSAMUNE_CFG_FLAG_ILING_PROFILES |
+                 SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
     cfg->ilingPbs.magic = SUSAMUNE_ILING_PB_MAGIC;
     cfg->ilingPbs.version = SUSAMUNE_ILING_PB_VERSION;
     cfg->ilingPbs.count = SUSAMUNE_ILING_PB_SLOT_COUNT;
@@ -209,6 +223,16 @@ bool validV3(const Record *source) {
     Record *record = const_cast<Record *>(source);
     return record->magic == kRecordMagic && record->version == 3 &&
            record->payloadSize == 2784 &&
+           record->gameVersion == SUSAMUNE_GAME_VERSION &&
+           record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
+           record->cfg.version == SUSAMUNE_CFG_VERSION &&
+           checksum(record) == record->checksum;
+}
+
+bool validV4(const Record *source) {
+    Record *record = const_cast<Record *>(source);
+    return record->magic == kRecordMagic && record->version == 4 &&
+           record->payloadSize == 4928 &&
            record->gameVersion == SUSAMUNE_GAME_VERSION &&
            record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
            record->cfg.version == SUSAMUNE_CFG_VERSION &&
@@ -361,24 +385,27 @@ s32 loadRecords(void *mountWork, Record *record) {
                           slot * kSectorSize);
         if (result != CARD_ERROR_READY) break;
         const bool current = valid(record);
-        const bool v3 = !current && validV3(record);
-        const bool v2 = !current && !v3 && validV2(record);
-        const bool v1 = !current && !v3 && !v2 && validV1(record);
-        if ((current || v3 || v2 || v1) &&
+        const bool v4 = !current && validV4(record);
+        const bool v3 = !current && !v4 && validV3(record);
+        const bool v2 = !current && !v4 && !v3 && validV2(record);
+        const bool v1 = !current && !v4 && !v3 && !v2 && validV1(record);
+        if ((current || v4 || v3 || v2 || v1) &&
             (!haveRecord || newer(record->generation, bestGeneration))) {
             initBlank(&sState->cfg);
             memcpy(&sState->cfg, &record->cfg,
                     v1 ? sizeof(((RecordV1 *)0)->cfg)
                        : v2 ? sizeof(((RecordV2 *)0)->cfg)
                        : v3 ? sizeof(((RecordV3 *)0)->cfg)
+                       : v4 ? sizeof(((RecordV4 *)0)->cfg)
                             : sizeof(sState->cfg));
             sState->cfg.flags |= SUSAMUNE_CFG_FLAG_QFT_DISPLAY |
                                  SUSAMUNE_CFG_FLAG_METADATA_STYLE |
                                  SUSAMUNE_CFG_FLAG_INPUT_STYLE |
                                  SUSAMUNE_CFG_FLAG_CREATION |
                                  SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
-                                 SUSAMUNE_CFG_FLAG_ILING_PROFILES;
-            if (!current) migrateLegacyPBs(&sState->cfg);
+                                 SUSAMUNE_CFG_FLAG_ILING_PROFILES |
+                                 SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
+            if (v1 || v2 || v3) migrateLegacyPBs(&sState->cfg);
             bestGeneration = record->generation;
             sState->activeRecord = slot;
             sState->initialSave = !current;

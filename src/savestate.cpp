@@ -491,6 +491,7 @@ bool SavestateManager::saveState() {
     OSRestoreInterrupts(ints);
 
     gQFTTimer.onSavestateSaved();
+    rngControlOnSavestateSaved();
     ILing::onSavestateSaved();
     feedback("saved", "Savestate saved");
     return true;

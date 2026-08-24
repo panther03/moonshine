@@ -163,6 +163,12 @@ struct SusamuneInputStyleCfg {
 #define SUSAMUNE_WALLKICK_STYLE_COLOR_COUNT 7u
 #define SUSAMUNE_NOTIFICATION_STYLE_MAGIC   0x4Eu  // 'N'
 
+#define SUSAMUNE_MOVEMENT_STYLE_MAGIC        0x534D5653u  // 'SMVS'
+#define SUSAMUNE_MOVEMENT_STYLE_VERSION      1u
+#define SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT   5u
+#define SUSAMUNE_DUST_STYLE_COLOR_COUNT      7u
+#define SUSAMUNE_MOVEMENT_STYLE_COLOR_COUNT  7u
+
 struct SusamuneCreationWordCfg {
     unsigned short x;
     unsigned short y;
@@ -260,6 +266,29 @@ struct SusamuneWallkickStyleCfg {
     unsigned short pbPopupY;
     unsigned char  pbPopupScale;
     unsigned char  reserved1[11];
+};
+
+struct SusamuneMovementOverlayStyleCfg {
+    unsigned short x;
+    unsigned short y;
+    unsigned char  scale;
+    unsigned char  textA;
+    unsigned char  bgR;
+    unsigned char  bgG;
+    unsigned char  bgB;
+    unsigned char  bgA;
+    unsigned char  textBrightness;
+    unsigned char  padding;
+    unsigned char  rgb[SUSAMUNE_MOVEMENT_STYLE_COLOR_COUNT][3];
+    unsigned char  reserved[7];
+};
+
+struct SusamuneMovementStyleCfg {
+    unsigned int   magic;
+    unsigned short version;
+    unsigned short reserved0;
+    struct SusamuneMovementOverlayStyleCfg rollout;
+    struct SusamuneMovementOverlayStyleCfg dust;
 };
 
 // Metadata Display keeps a compact in-game configuration plus an optional
@@ -423,6 +452,8 @@ struct SusamuneMetadataStyleCfg {
 #define SUSAMUNE_CFG_FLAG_SPLIT_STATS 0x1000u
 // Kernel/backend exposes per-region Stage Loader target times.
 #define SUSAMUNE_CFG_FLAG_STAGE_TARGETS 0x2000u
+// Kernel/backend understands Rollout and Dust Creation styles.
+#define SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE 0x4000u
 
 // IL PBs use stable result slots: ordinary rows use retail Shine ids, while
 // independent Secret, variant and Any% rows occupy otherwise-unused ids through 124.
@@ -721,7 +752,9 @@ struct SusamuneStageTargetsFile {
 #define SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT  275u
 #define SUSAMUNE_SPLIT_STATS_REGION_COUNT   3u
 #define SUSAMUNE_SPLIT_STATS_PROFILE_COUNT  4u
-#define SUSAMUNE_SPLIT_STATS_SCHEMA_HASH    0x4499A650u
+#define SUSAMUNE_SPLIT_STATS_SCHEMA_HASH    0xB933B5ABu
+// V7 immediately before Bianco 2 moved to the correct scene/FMV endpoint.
+#define SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH 0x4499A650u
 #define SUSAMUNE_SPLIT_STATS_QF_UNSET       0xFFFFFFFFu
 #define SUSAMUNE_SPLIT_STATS_FLAG_WRITABLE  0x1u
 #define SUSAMUNE_SPLIT_STATS_FLAG_MIGRATED  0x2u
@@ -1030,6 +1063,8 @@ struct SusamuneCfg {
     struct SusamuneCreationCfg creation;
     struct SusamuneWallkickStyleCfg wallkickStyle;
     struct SusamuneILingProfilesCfg ilingProfiles;
+    // Optional tail: older launchers stop at ilingProfiles.
+    struct SusamuneMovementStyleCfg movementStyle;
 };
 
 #define SUSAMUNE_CFG_PPC_PTR  ((struct SusamuneCfg *)SUSAMUNE_MEM2_CFG_PPC_BASE)
@@ -1131,6 +1166,8 @@ typedef char susamune_stage_session_y_offset_check[(__builtin_offsetof(struct Su
 typedef char susamune_stage_session_scale_offset_check[(__builtin_offsetof(struct SusamuneCreationCfg, stageSessionScale) == 574) ? 1 : -1];
 typedef char susamune_stage_session_tail_offset_check[(__builtin_offsetof(struct SusamuneCreationCfg, stageSessionReserved) == 575) ? 1 : -1];
 typedef char susamune_wallkick_style_cfg_size_check[(sizeof(struct SusamuneWallkickStyleCfg) == 64) ? 1 : -1];
+typedef char susamune_movement_overlay_style_cfg_size_check[(sizeof(struct SusamuneMovementOverlayStyleCfg) == 40) ? 1 : -1];
+typedef char susamune_movement_style_cfg_size_check[(sizeof(struct SusamuneMovementStyleCfg) == 88) ? 1 : -1];
 typedef char susamune_notification_style_offset_check[(__builtin_offsetof(struct SusamuneWallkickStyleCfg, notificationStyleMagic) == 41) ? 1 : -1];
 typedef char susamune_notification_toast_offset_check[(__builtin_offsetof(struct SusamuneWallkickStyleCfg, toastX) == 42) ? 1 : -1];
 typedef char susamune_notification_pb_offset_check[(__builtin_offsetof(struct SusamuneWallkickStyleCfg, pbPopupX) == 48) ? 1 : -1];
@@ -1152,7 +1189,8 @@ typedef char susamune_iling_profiles_file_values_check[(__builtin_offsetof(struc
 typedef char susamune_iling_profiles_file_names_check[(__builtin_offsetof(struct SusamuneILingProfilesFile, customNames) == 2080) ? 1 : -1];
 typedef char susamune_iling_profiles_file_size_check[(sizeof(struct SusamuneILingProfilesFile) == 2112) ? 1 : -1];
 typedef char susamune_cfg_iling_profiles_check[(__builtin_offsetof(struct SusamuneCfg, ilingProfiles) == 2784) ? 1 : -1];
-typedef char susamune_cfg_expanded_size_check[(sizeof(struct SusamuneCfg) == 4928) ? 1 : -1];
+typedef char susamune_cfg_movement_style_check[(__builtin_offsetof(struct SusamuneCfg, movementStyle) == 4928) ? 1 : -1];
+typedef char susamune_cfg_expanded_size_check[(sizeof(struct SusamuneCfg) == 5016) ? 1 : -1];
 typedef char susamune_progress_cfg_ack_check[(__builtin_offsetof(struct SusamuneProgressCfg, ackSeq) == 32) ? 1 : -1];
 typedef char susamune_progress_cfg_achievements_check[(__builtin_offsetof(struct SusamuneProgressCfg, achievements) == 64) ? 1 : -1];
 typedef char susamune_progress_cfg_stats_check[(__builtin_offsetof(struct SusamuneProgressCfg, stats) == 128) ? 1 : -1];

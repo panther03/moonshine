@@ -11,7 +11,10 @@ void rngControlInit();
 // dropped before that call begins.
 void rngControlBeforeStageSetup();
 
-// Re-adopt King Boo's stage-heap phase after a same-scenario restore.
+// Mirror the one-shot Skeeter decision alongside the game snapshot.
+void rngControlOnSavestateSaved();
+
+// Re-adopt mod-side RNG state after a same-scenario restore.
 void rngControlOnSavestateLoaded();
 
 // Apply transition-based instruction controls before the director advances.
@@ -26,6 +29,5 @@ extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);
 // These arrays are executable two-word tail shims targeted by patches.py.
 extern "C" u32 gCraneUpDownRandShim[];
 extern "C" u32 gCraneRotYRandShim[];
-extern "C" u32 gBiancoSkeeterRandShim[];
 
 #endif  // SUSAMUNE_RNG_CONTROL_HXX

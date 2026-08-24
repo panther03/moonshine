@@ -111,6 +111,29 @@ class MovementDisplayContracts(unittest.TestCase):
         )
         self.assertEqual(menu.count("MovementDisplay::draw(this);"), 1)
 
+    def test_rollout_and_dust_use_independent_creation_styles(self) -> None:
+        creation = (ROOT / "src" / "creation_extras.cpp").read_text(
+            encoding="utf-8"
+        )
+        header = (ROOT / "include/susamune/creation_extras.hxx").read_text(
+            encoding="utf-8"
+        )
+        draw = function(self.source, r"void draw\(Menu \*menu\)")
+        self.assertIn("drawRolloutDisplay(menu, text, sPopupResult - 1)", draw)
+        self.assertIn("drawDustDisplay(menu, text, sPopupResult - 1)", draw)
+        for symbol in (
+            "beginRolloutEditor",
+            "beginDustEditor",
+            "drawRolloutDisplay",
+            "drawDustDisplay",
+            "mRolloutStyle",
+            "mDustStyle",
+        ):
+            self.assertIn(symbol, header)
+            self.assertIn(symbol, creation)
+        self.assertIn("SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT", creation)
+        self.assertIn("SUSAMUNE_DUST_STYLE_COLOR_COUNT", creation)
+
 
 class AirgrabFreezeContracts(unittest.TestCase):
     @classmethod

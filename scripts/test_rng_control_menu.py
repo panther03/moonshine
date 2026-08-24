@@ -40,19 +40,30 @@ class RngControlMenuTests(unittest.TestCase):
         )
         self.assertIn('"RNG Control\\0Shined"', menu)
         self.assertIn("const u8 kRngCategory = SETTING_CAT_COUNT + 1;", menu)
-        self.assertIn("id == SETTING_ANY_FRUIT_YOSHI", menu)
-        self.assertIn("id == SETTING_PATTERN_SELECTOR", menu)
-        self.assertIn("id == SETTING_KING_BOO_ALWAYS_FRUIT", menu)
-        self.assertIn("id == SETTING_PETEY_NO_TORNADO", menu)
-        self.assertIn("id == SETTING_PETEY_ROUTE", menu)
-        self.assertIn("id == SETTING_RICCO_CRANE_SPEED", menu)
-        self.assertIn("id == SETTING_RICCO_FRUIT_MACHINE", menu)
-        self.assertIn("id == SETTING_BIANCO_SKEETER_ROUTE", menu)
-        self.assertIn(
-            "FEEDBACK\\0KING BOO\\0PETEY\\0RICCO CRANE\\0", menu
-        )
-        self.assertIn('"RICCO FRUIT MACHINE\\0BIANCO SKEETER', menu)
-        self.assertIn("practice, savestate, timer, gameplay, rng,", menu)
+        for setting in (
+            "SETTING_ANY_FRUIT_YOSHI",
+            "SETTING_PATTERN_SELECTOR",
+            "SETTING_KING_BOO_ALWAYS_FRUIT",
+            "SETTING_PETEY_NO_TORNADO",
+            "SETTING_PETEY_ROUTE",
+            "SETTING_RICCO_CRANE_SPEED",
+            "SETTING_RICCO_FRUIT_MACHINE",
+            "SETTING_BIANCO_SKEETER_ROUTE",
+            "SETTING_GELATO_RED_COIN_FISH_PATTERN",
+            "SETTING_GELATO_BLUE_BIRD_PATTERN",
+        ):
+            self.assertIn(setting, menu)
+        for page in (
+            '"General"',
+            '"Boss assists"',
+            '"Bianco Hills"',
+            '"Ricco Harbor"',
+            '"Gelato Beach"',
+        ):
+            self.assertIn(page, menu)
+        self.assertIn("const SettingPage kRngPages[]", menu)
+        self.assertIn("gameplay, practice, rng, savestate,", menu)
+        self.assertIn("if (child->back())", menu)
         self.assertIn(
             "return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;",
             menu,

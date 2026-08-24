@@ -154,7 +154,7 @@ CreationStyle InputDisplay::defaultStyle() {
 
 void InputDisplay::resetDefaults() {
     mStyle              = defaultStyle();
-    mCfg.startVisible   = 0;
+    mCfg.startVisible   = 1;
     mCfg.valueMode      = SUSAMUNE_INPUT_VALUES_OFF;
     mCfg.valueSource    = SUSAMUNE_INPUT_SOURCE_RAW;
     mCfg.valuePlacement = SUSAMUNE_INPUT_VALUES_BELOW;
@@ -163,7 +163,7 @@ void InputDisplay::resetDefaults() {
     }
 
     mEditor.reset();
-    mVisible           = false;
+    mVisible           = true;
     mVisibleBeforeEdit = true;
     mDirty             = false;
     mDirtyBeforeEdit   = false;

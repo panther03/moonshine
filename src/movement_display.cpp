@@ -164,8 +164,11 @@ void draw(Menu *menu) {
     } else if (sPopupKind == POPUP_DUST && dustEnabled()) {
         text = wallkickDisplayLabel(sPopupResult - 1);
     }
-    if (text)
-        gCreationExtras.drawWallkickDisplay(menu, text, sPopupResult - 1);
+    if (!text) return;
+    if (sPopupKind == POPUP_ROLLOUT)
+        gCreationExtras.drawRolloutDisplay(menu, text, sPopupResult - 1);
+    else
+        gCreationExtras.drawDustDisplay(menu, text, sPopupResult - 1);
 }
 
 }  // namespace MovementDisplay

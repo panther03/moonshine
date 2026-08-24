@@ -9,7 +9,7 @@ FNV_PRIME = 16777619
 EXPECTED_V5_SCHEMA_HASH = 0xA91743AA
 # Filled by the assertion at the bottom. Update only with an intentional
 # append-only route or checkpoint-schema revision.
-EXPECTED_SCHEMA_HASH = 0x4499A650
+EXPECTED_SCHEMA_HASH = 0xB933B5AB
 
 V5_ROUTE_ENTRIES = (
     5, 121, 85, 13, 14, 16, 17, 20, 21, 22,
@@ -110,10 +110,14 @@ V5_CHECKPOINTS = tuple(
 _current = list(V5_CHECKPOINTS)
 _current[10] = ()
 _current[31] = ()
-# B2 may start in either physical episode; the rollout precedes the demo.
+# Bianco 2 runs in Bianco 1's physical scene. Its FMV is the second endpoint.
 _current[13] = (
-    "scene=02:00|02:01;trigger=mario-status-enter;status=rollout;y>=3200",
-) + _current[13]
+    "scene=02:00;trigger=mario-status-enter;status=rollout;y>=3200",
+    "scene=02:00;trigger=streaming-movie-start;movie=6",
+    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=1",
+    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=2",
+    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=3",
+)
 _current.extend([()] * (len(ROUTE_ENTRIES) - len(V5_ROUTE_ENTRIES)))
 CHECKPOINTS = tuple(_current)
 
