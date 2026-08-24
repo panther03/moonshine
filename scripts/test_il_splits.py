@@ -75,7 +75,8 @@ V5_ROUTE_COUNTS = (
 )
 ROUTE_COUNTS = tuple(len(row) + 1 for row in checkpoint_schema.CHECKPOINTS)
 ROUTE_FIRST = tuple(
-    sum(ROUTE_COUNTS[:route]) for route in range(ROUTES)
+    sum(ROUTE_COUNTS[:route]) + (1 if route > 13 else 0)
+    for route in range(ROUTES)
 )
 ROUTE_CHECKPOINTS = tuple(count - 1 for count in ROUTE_COUNTS)
 ROUTE_ENTRIES = checkpoint_schema.ROUTE_ENTRIES
@@ -435,10 +436,11 @@ def migrate_v4(v4: dict[str, list]) -> dict[str, list]:
         for route in range(V5_ROUTES):
             removed = V4_REMOVED_CHECKPOINT.get(route)
             terminal = route in (10, 31)
+            b2 = route == 13
             out["stats"][region][route][:2] = v4["stats"][region][route][:2]
-            if removed is None and not terminal:
+            if removed is None and not terminal and not b2:
                 out["stats"][region][route][2] = v4["stats"][region][route][2]
-            for local in range(ROUTE_COUNTS[route]):
+            for local in range(1 if b2 else 0, ROUTE_COUNTS[route]):
                 if terminal:
                     continue
                 if local != removed:
@@ -447,6 +449,8 @@ def migrate_v4(v4: dict[str, list]) -> dict[str, list]:
                         v4["best"][region][V4_ROUTE_FIRST[route] + old_local]
                     )
             for profile in range(PROFILES):
+                if b2:
+                    continue
                 identity = v4["identity"][region][profile][route]
                 out["identity"][region][profile][route] = identity
                 if terminal:
@@ -481,13 +485,20 @@ def migrate_v5(v5: dict[str, list]) -> dict[str, list]:
     for region in range(REGIONS):
         for route in range(V5_ROUTES):
             out["stats"][region][route][:2] = v5["stats"][region][route][:2]
-            if route not in (10, 31):
+            if route not in (10, 13, 31):
                 out["stats"][region][route][2] = v5["stats"][region][route][2]
                 for local in range(V5_ROUTE_COUNTS[route]):
                     out["best"][region][ROUTE_FIRST[route] + local] = (
                         v5["best"][region][V5_ROUTE_FIRST[route] + local]
                     )
+            elif route == 13:
+                for local in range(1, ROUTE_COUNTS[route]):
+                    out["best"][region][ROUTE_FIRST[route] + local] = (
+                        v5["best"][region][V5_ROUTE_FIRST[route] + local]
+                    )
             for profile in range(PROFILES):
+                if route == 13:
+                    continue
                 identity = v5["identity"][region][profile][route]
                 out["identity"][region][profile][route] = identity
                 if route in (10, 31):
@@ -891,6 +902,25 @@ class SplitContractTests(unittest.TestCase):
                         )
                     continue
 
+                if route == 13:
+                    self.assertEqual(migrated["stats"][region][route][2], 0)
+                    self.assertEqual(migrated["best"][region][first], UNSET)
+                    for local in range(1, ROUTE_COUNTS[route]):
+                        old = V3_ROUTE_FIRST[route] + local
+                        self.assertEqual(
+                            migrated["best"][region][first + local],
+                            payload["best"][region][old],
+                        )
+                    for profile in range(PROFILES):
+                        self.assertEqual(
+                            migrated["identity"][region][profile][route], UNSET
+                        )
+                        self.assertEqual(
+                            migrated["pb"][region][profile][first:end],
+                            [UNSET] * ROUTE_COUNTS[route],
+                        )
+                    continue
+
                 if route in V4_REMOVED_CHECKPOINT:
                     removed = V4_REMOVED_CHECKPOINT[route]
                     self.assertEqual(migrated["stats"][region][route][2], 0)
@@ -1045,7 +1075,7 @@ class SplitContractTests(unittest.TestCase):
         self.assertFalse(generation_is_newer(0x80000000, 0))
 
     def test_terminal_segment_completes_sum_of_best(self) -> None:
-        self.assertEqual(sum(ROUTE_COUNTS), SEGMENTS)
+        self.assertEqual(sum(ROUTE_COUNTS) + 1, SEGMENTS)
         source = SPLITS.read_text(encoding="utf-8")
         result = source[source.index("void onILResult(") :]
         result = result[: result.index("void onPBDeleted")]

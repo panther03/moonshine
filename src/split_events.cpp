@@ -28,8 +28,6 @@ extern "C" void susamuneSplitStartDemo(
     s32 camera, f32 blend, bool flag, s32 (*callback)(u32, u32),
     u32 callbackArg, JDrama::TActor *actor,
     const JDrama::TFlagT<u16> *demoFlag);
-extern "C" void susamuneSplitStreamingMovie(TMarDirector *director,
-                                               u8 movie);
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc);
 extern "C" bool susamuneSplitRailCheck(TRailMapObj *rail);
 extern "C" void susamuneSplitBathtubQuake(void *bathtub,
@@ -209,7 +207,6 @@ u32 sEmitHappyEffectTrampoline[2] = {0x7C0802A6u, 0};
 u32 sChangePlayerStatusTrampoline[2] = {0x7C0802A6u, 0};
 u32 sSpineUpdateTrampoline[2] = {0x7C0802A6u, 0};
 u32 sStartDemoTrampoline[2] = {0x9421FFC8u, 0};
-u32 sStreamingMovieTrampoline[2] = {0, 0};
 u32 sOpenTalkTrampoline[2] = {0x7C0802A6u, 0};
 u32 sRailCheckTrampoline[2] = {0x7C0802A6u, 0};
 u32 sBathtubQuakeTrampoline[2] = {0x7C0802A6u, 0};
@@ -232,8 +229,6 @@ const u32 kSpineUpdate =
     SUSAMUNE_MEM1_ADDR(0x80111BD0u, 0x8003C8A8u, 0x8003C6F8u);
 const u32 kStartDemo =
     SUSAMUNE_MEM1_ADDR(0x800ED7C0u, 0x8029A23Cu, 0x802920D4u);
-const u32 kStreamingMovie =
-    SUSAMUNE_MEM1_ADDR(0x800ED5C8u, 0x8029A044u, 0x80291EDCu);
 const u32 kOpenTalk =
     SUSAMUNE_MEM1_ADDR(0x80214CF0u, 0x80153824u, 0x80148758u);
 const u32 kRailCheck =
@@ -265,7 +260,6 @@ typedef void (*SpineUpdateFn)(TSpineBase<TLiveActor> *);
 typedef void (*StartDemoFn)(TMarDirector *, const char *, const TVec3f *, s32,
                             f32, bool, s32 (*)(u32, u32), u32,
                             JDrama::TActor *, const JDrama::TFlagT<u16> *);
-typedef void (*StreamingMovieFn)(TMarDirector *, u8);
 typedef void (*OpenTalkFn)(void *, TBaseNPC *);
 typedef bool (*RailCheckFn)(TRailMapObj *);
 typedef void (*BathtubQuakeFn)(void *, const void *);
@@ -703,7 +697,7 @@ void notePeteyDamage(u8 healthBefore, u8 healthAfter) {
     for (u8 i = 0; i < hits; ++i) {
         ++sPeteyHits;
         if (sActiveRoute == SplitStats::ROUTE_BIANCO_2)
-            publishEvent(sActiveRoute, sPeteyHits + 1);
+            publishEvent(sActiveRoute, sPeteyHits);
         else if (sActiveRoute == SplitStats::ROUTE_BIANCO_5)
             publishEvent(sActiveRoute, sPeteyHits);
     }
@@ -1250,10 +1244,6 @@ void init() {
     installEntryHook(kStartDemo,
                      reinterpret_cast<const void *>(&susamuneSplitStartDemo),
                      sStartDemoTrampoline);
-    installCapturedEntryHook(kStreamingMovie,
-                     reinterpret_cast<const void *>(
-                         &susamuneSplitStreamingMovie),
-                     sStreamingMovieTrampoline);
     installEntryHook(kOpenTalk,
                      reinterpret_cast<const void *>(&susamuneSplitOpenTalk),
                      sOpenTalkTrampoline);
@@ -1465,18 +1455,6 @@ extern "C" void susamuneSplitStartDemo(
     if (after == before) return;
     if (gSettings.getBool(SETTING_TIMER_FREEZE_DEMO))
         gQFTTimer.freezeEvent();
-}
-
-extern "C" void susamuneSplitStreamingMovie(TMarDirector *director,
-                                               u8 movie) {
-    s32 qf = 0;
-    const bool candidate = director == sStageDirector && movie == 6 &&
-        hookScene(SplitStats::ROUTE_BIANCO_2, 2, 0) &&
-        !(director->mGameState & 0x100) && gQFTTimer.currentQf(&qf);
-    reinterpret_cast<StreamingMovieFn>(sStreamingMovieTrampoline)(director,
-                                                                   movie);
-    if (candidate && (director->mGameState & 0x100))
-        publishEventAt(SplitStats::ROUTE_BIANCO_2, 1, qf);
 }
 
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc) {

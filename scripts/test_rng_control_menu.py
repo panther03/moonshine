@@ -19,26 +19,27 @@ class RngControlMenuTests(unittest.TestCase):
             'SBOOL("Pattern selector", 0, SETTING_CAT_CUSTOM)', descs
         )
         self.assertIn(
-            'SBOOL("Fruit every other roll", 0, SETTING_CAT_CUSTOM)', descs
+            'SBOOL("King Boo fruit cycle", 0, SETTING_CAT_CUSTOM)', descs
         )
         self.assertIn(
-            'SBOOL("Disable tornado", 0, SETTING_CAT_CUSTOM)', descs
+            'SBOOL("Disable Petey tornado", 0, SETTING_CAT_CUSTOM)', descs
         )
         self.assertIn(
-            'SCHOICE("Route", 0, CHOICES_PETEY_ROUTE, SETTING_CAT_CUSTOM)',
+            'SCHOICE("Petey flight route", 0, CHOICES_PETEY_ROUTE, '
+            'SETTING_CAT_CUSTOM)',
             descs,
         )
         self.assertIn(
-            'SCHOICE("Random speed", 0, CHOICES_RICCO_CRANE_SPEED, '
+            'SCHOICE("Crane speed", 0, CHOICES_RICCO_CRANE_SPEED, '
             "SETTING_CAT_CUSTOM)",
             descs,
         )
         self.assertIn(
-            'SCHOICE("Fruit", 0, CHOICES_RICCO_FRUIT_MACHINE, '
+            'SCHOICE("Fruit machine", 0, CHOICES_RICCO_FRUIT_MACHINE, '
             "SETTING_CAT_CUSTOM)",
             descs,
         )
-        self.assertIn('"RNG Control\\0Shined"', menu)
+        self.assertIn('RNG controls\\0Shined"', menu)
         self.assertIn("const u8 kRngCategory = SETTING_CAT_COUNT + 1;", menu)
         for setting in (
             "SETTING_ANY_FRUIT_YOSHI",
@@ -48,19 +49,19 @@ class RngControlMenuTests(unittest.TestCase):
             "SETTING_PETEY_ROUTE",
             "SETTING_RICCO_CRANE_SPEED",
             "SETTING_RICCO_FRUIT_MACHINE",
-            "SETTING_BIANCO_SKEETER_ROUTE",
             "SETTING_GELATO_RED_COIN_FISH_PATTERN",
             "SETTING_GELATO_BLUE_BIRD_PATTERN",
         ):
             self.assertIn(setting, menu)
         for page in (
-            '"General"',
-            '"Boss assists"',
-            '"Bianco Hills"',
+            '"General patterns"',
+            '"Boss fights"',
             '"Ricco Harbor"',
-            '"Gelato Beach"',
+            '"Birds & fish (testing)"',
         ):
             self.assertIn(page, menu)
+        self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", menu)
+        self.assertIn('Retail\\0N1-S1-S2-S3', (ROOT / "src/settings.cpp").read_text())
         self.assertIn("const SettingPage kRngPages[]", menu)
         self.assertIn("gameplay, practice, rng, savestate,", menu)
         self.assertIn("if (child->back())", menu)

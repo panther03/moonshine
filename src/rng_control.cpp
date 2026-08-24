@@ -1,10 +1,8 @@
-// Narrow RNG controls for King Boo, Bianco's route Skeeter, and Ricco's five
-// cranes. Retail rand still runs exactly once at every hooked call.
+// Narrow RNG controls for King Boo and Ricco's five cranes. Retail rand still
+// runs exactly once at every hooked call.
 
 #include "susamune/rng_control.hxx"
 
-#include "Dolphin/OS.h"
-#include "Dolphin/math.h"
 #include "Dolphin/types.h"
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/addresses.hxx"
@@ -16,7 +14,6 @@ extern "C" int rand();
 
 extern "C" int  susamuneCraneUpDownRandImpl(void *crane);
 extern "C" int  susamuneCraneRotYRandImpl(void *crane);
-extern "C" bool susamuneBiancoSkeeterSearch(const void *nerve, void *spine);
 extern "C" void susamuneCraneUpDownControl(void *crane);
 extern "C" void susamuneCraneRotYControl(void *crane);
 
@@ -35,20 +32,9 @@ extern "C" u32 gCraneRotYRandShim[] = {
 namespace {
 
 const u8 kRiccoArea = 3;
-const u8 kBiancoArea = 2;
 const u8 kCraneCount = 5;
 const u8 kRotYCount = 3;
 const u16 kNoRoll = 0xFFFFu;
-
-const f32 kSkeeterSpawnX = 4296.2368f;
-const f32 kSkeeterSpawnY = 2300.0f;
-const f32 kSkeeterSpawnZ = -10375.8877f;
-const f32 kSkeeterSpawnTolerance = 400.0f;
-const u16 kSkeeterRouteRolls[] = {
-    0x0000u, 0x7000u, 0x7FFFu,
-};
-const u32 kBiancoSkeeterSearch =
-    SUSAMUNE_MEM1_ADDR(0x8033DDA4u, 0x8012C4C8u, 0x801259CCu);
 
 const u32 kPeteyTornadoSite =
     SUSAMUNE_MEM1_ADDR(0x802A33ACu, 0x80090590u, 0x80089C30u);
@@ -88,21 +74,10 @@ struct CraneRoll {
 };
 
 CraneRoll sCranes[kCraneCount];
-u32 sBiancoSkeeterSearchTrampoline[2];
 void *sKingBooSlot;
 bool sKingBooRestorePending;
 bool sPeteyPatchCaptured;
 bool sPeteyPatchInstalled;
-bool sSkeeterDecisionConsumed;
-bool sSavedSkeeterDecisionConsumed;
-bool sHaveSavedSkeeterDecision;
-
-struct SkeeterQuat {
-    f32 x;
-    f32 y;
-    f32 z;
-    f32 w;
-};
 
 bool sameText(const char *a, const char *b) {
     if (!a || !b) return false;
@@ -115,23 +90,6 @@ bool sameText(const char *a, const char *b) {
 
 bool inRicco() {
     return gpMarDirector && gpMarDirector->mAreaID == kRiccoArea;
-}
-
-bool isBiancoRouteSkeeter(void *skeeter) {
-    if (!skeeter || !gpMarDirector ||
-        gpMarDirector->mAreaID != kBiancoArea ||
-        gpMarDirector->mEpisodeID > 1) return false;
-    const volatile f32 *position = reinterpret_cast<const volatile f32 *>(
-        static_cast<const u8 *>(skeeter) + 0x194);
-    const f32 dx = position[0] - kSkeeterSpawnX;
-    const f32 dy = position[1] - kSkeeterSpawnY;
-    const f32 dz = position[2] - kSkeeterSpawnZ;
-    return dx >= -kSkeeterSpawnTolerance &&
-           dx <= kSkeeterSpawnTolerance &&
-           dy >= -kSkeeterSpawnTolerance &&
-           dy <= kSkeeterSpawnTolerance &&
-           dz >= -kSkeeterSpawnTolerance &&
-           dz <= kSkeeterSpawnTolerance;
 }
 
 int craneIndex(void *crane, bool upDown) {
@@ -173,31 +131,6 @@ void installControlWrapper(u32 slot, u32 retail, u32 wrapper) {
     if (current == retail) writeGameCode(slot, wrapper);
 }
 
-void installCapturedEntryHook(u32 site, const void *wrapper,
-                              u32 *trampoline) {
-    trampoline[0] = *reinterpret_cast<volatile const u32 *>(site);
-    trampoline[1] = branchWord(reinterpret_cast<u32>(&trampoline[1]),
-                               site + 4);
-    DCFlushRange(trampoline, 2 * sizeof(u32));
-    ICInvalidateRange(trampoline, 2 * sizeof(u32));
-    writeGameCode(site, branchWord(site, reinterpret_cast<u32>(wrapper)));
-}
-
-void applySkeeterRoute(void *skeeter, u16 roll) {
-    u8 *bytes = static_cast<u8 *>(skeeter);
-    const SkeeterQuat start = *reinterpret_cast<const SkeeterQuat *>(
-        bytes + 0x1C0);
-    SkeeterQuat *target = reinterpret_cast<SkeeterQuat *>(bytes + 0x1D0);
-    const f32 angle = (1.5f - (f32)roll * (1.0f / 32768.0f)) *
-                      3.1415927f;
-    const f32 rotY = sinf(angle * 0.5f);
-    const f32 rotW = cosf(angle * 0.5f);
-    target->x = rotW * start.x + rotY * start.z;
-    target->y = rotW * start.y + rotY * start.w;
-    target->z = rotW * start.z - rotY * start.x;
-    target->w = rotW * start.w - rotY * start.y;
-}
-
 void applyPeteyTornadoControl() {
     volatile u32 *site = reinterpret_cast<volatile u32 *>(kPeteyTornadoSite);
     if (!sPeteyPatchCaptured) {
@@ -230,11 +163,6 @@ void rngControlInit() {
                   branchWord(rotBranch,
                              reinterpret_cast<u32>(&susamuneCraneRotYRandImpl)));
 
-    installCapturedEntryHook(
-        kBiancoSkeeterSearch,
-        reinterpret_cast<const void *>(&susamuneBiancoSkeeterSearch),
-        sBiancoSkeeterSearchTrampoline);
-
     installControlWrapper(kUpDownControlSlot, kUpDownRetailControl,
                           reinterpret_cast<u32>(&susamuneCraneUpDownControl));
     installControlWrapper(kRotYControlSlot, kRotYRetailControl,
@@ -244,7 +172,6 @@ void rngControlInit() {
 void rngControlBeforeStageSetup() {
     sKingBooSlot = nullptr;
     sKingBooRestorePending = false;
-    sSkeeterDecisionConsumed = false;
     for (int i = 0; i < kCraneCount; i++) {
         sCranes[i].actor = nullptr;
         sCranes[i].retailSpeed = 0.0f;
@@ -253,14 +180,7 @@ void rngControlBeforeStageSetup() {
     }
 }
 
-void rngControlOnSavestateSaved() {
-    sSavedSkeeterDecisionConsumed = sSkeeterDecisionConsumed;
-    sHaveSavedSkeeterDecision = true;
-}
-
 void rngControlOnSavestateLoaded() {
-    if (sHaveSavedSkeeterDecision)
-        sSkeeterDecisionConsumed = sSavedSkeeterDecisionConsumed;
     sKingBooSlot = nullptr;
     sKingBooRestorePending =
         gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT);
@@ -287,35 +207,6 @@ extern "C" int susamuneCraneRotYRandImpl(void *crane) {
     const int retail = rand();
     recordCrane(crane, retail, false);
     return retail;
-}
-
-extern "C" bool susamuneBiancoSkeeterSearch(const void *nerve, void *spine) {
-    typedef bool (*SearchFn)(const void *, void *);
-    u8 *skeeter = spine
-        ? *reinterpret_cast<u8 **>(static_cast<u8 *>(spine))
-        : nullptr;
-    const bool firstDecision =
-        skeeter && !sSkeeterDecisionConsumed &&
-        *reinterpret_cast<const s32 *>(static_cast<const u8 *>(spine) + 0x20)
-            == 0 &&
-        isBiancoRouteSkeeter(skeeter);
-    u8 choice = 0;
-    u32 priorSearchCooldown = 0;
-    if (firstDecision) {
-        sSkeeterDecisionConsumed = true;
-        choice = gSettings.get(SETTING_BIANCO_SKEETER_ROUTE);
-        priorSearchCooldown = *reinterpret_cast<const u32 *>(skeeter + 0x1A8);
-    }
-
-    const bool result = reinterpret_cast<SearchFn>(
-        sBiancoSkeeterSearchTrampoline)(nerve, spine);
-    if (firstDecision && choice >= 1 && choice <= 3) {
-        // Match the wandering branch even when retail spotted Mario first.
-        skeeter[0x1A0] = 0;
-        *reinterpret_cast<u32 *>(skeeter + 0x1A8) = priorSearchCooldown;
-        applySkeeterRoute(skeeter, kSkeeterRouteRolls[choice - 1]);
-    }
-    return result;
 }
 
 extern "C" void susamuneCraneUpDownControl(void *crane) {

@@ -11,9 +11,6 @@ void rngControlInit();
 // dropped before that call begins.
 void rngControlBeforeStageSetup();
 
-// Mirror the one-shot Skeeter decision alongside the game snapshot.
-void rngControlOnSavestateSaved();
-
 // Re-adopt mod-side RNG state after a same-scenario restore.
 void rngControlOnSavestateLoaded();
 
@@ -21,7 +18,7 @@ void rngControlOnSavestateLoaded();
 void rngControlApply();
 
 // Boss steering makes the current attempt ineligible for leaderboard credit.
-// Crane and Skeeter controls are ordinary practice setup and stay eligible.
+// Crane controls are ordinary practice setup and stay eligible.
 bool rngControlInvalidatesIl();
 
 extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);

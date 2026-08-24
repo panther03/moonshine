@@ -15,21 +15,25 @@ HEADER = ROOT / "include" / "susamune" / "susamune_cfg.h"
 KERNEL = ROOT / "launcher" / "kernel" / "SusamuneCfg.c"
 SCHEMA_PATH = ROOT / "scripts" / "split_checkpoint_schema.py"
 
-spec = importlib.util.spec_from_file_location("split_schema_pr3", SCHEMA_PATH)
+spec = importlib.util.spec_from_file_location("split_schema_pr4", SCHEMA_PATH)
 assert spec and spec.loader
 schema = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(schema)
 
-CURRENT_SCHEMA = 0xB933B5AB
-PREVIOUS_SCHEMA = 0x4499A650
+CURRENT_SCHEMA = 0x8ADD6B7D
+PREVIOUS_SCHEMA = 0xB933B5AB
+LEGACY_BIANCO_SCHEMA = 0x4499A650
 UNSET = 0xFFFFFFFF
 REGIONS = 3
 PROFILES = 4
 B2_ROUTE = 13
 ROUTE_COUNTS = tuple(len(checkpoints) + 1 for checkpoints in schema.CHECKPOINTS)
-ROUTE_FIRST = (0,) + tuple(accumulate(ROUTE_COUNTS[:-1]))
+ROUTE_FIRST = tuple(
+    first + (1 if route > B2_ROUTE else 0)
+    for route, first in enumerate((0,) + tuple(accumulate(ROUTE_COUNTS[:-1])))
+)
 ROUTES = len(ROUTE_COUNTS)
-SEGMENTS = sum(ROUTE_COUNTS)
+SEGMENTS = sum(ROUTE_COUNTS) + 1
 
 
 def function_block(text: str, signature: str) -> str:
@@ -88,7 +92,7 @@ def populated_payload() -> dict[str, list]:
 def migrate_previous(payload: dict[str, list]) -> dict[str, list]:
     migrated = deepcopy(payload)
     first = ROUTE_FIRST[B2_ROUTE]
-    end = first + ROUTE_COUNTS[B2_ROUTE]
+    end = first + ROUTE_COUNTS[B2_ROUTE] + 1
     for region in range(REGIONS):
         migrated["stats"][region][B2_ROUTE][2] = 0
         migrated["best"][region][first:end] = [UNSET] * (end - first)
@@ -99,7 +103,7 @@ def migrate_previous(payload: dict[str, list]) -> dict[str, list]:
 
 
 class PreviousSchemaMigrationContracts(unittest.TestCase):
-    def test_hashes_are_explicit_and_current_schema_is_unchanged(self) -> None:
+    def test_hashes_are_explicit(self) -> None:
         header = HEADER.read_text(encoding="utf-8")
         self.assertEqual(schema.EXPECTED_SCHEMA_HASH, CURRENT_SCHEMA)
         self.assertRegex(
@@ -110,8 +114,13 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
             header,
             rf"SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH\s+0x{PREVIOUS_SCHEMA:08X}u",
         )
+        self.assertRegex(
+            header,
+            rf"SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH\s+"
+            rf"0x{LEGACY_BIANCO_SCHEMA:08X}u",
+        )
 
-    def test_reader_accepts_only_current_and_immediately_previous_v7(self) -> None:
+    def test_reader_accepts_only_current_and_two_bianco_predecessors(self) -> None:
         kernel = KERNEL.read_text(encoding="utf-8")
         supported = function_block(kernel, "static bool SplitStatsSchemaSupported(")
         reader = function_block(kernel, "static enum PbReadResult ReadSplitStatsFile(")
@@ -119,7 +128,11 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
         self.assertIn(
             "schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", supported
         )
-        self.assertEqual(supported.count("schemaHash =="), 2)
+        self.assertIn(
+            "schemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH",
+            supported,
+        )
+        self.assertEqual(supported.count("schemaHash =="), 3)
         self.assertGreaterEqual(reader.count("SplitStatsSchemaSupported"), 3)
         self.assertIn("file->checksum != SplitStatsChecksum(file)", reader)
 
@@ -127,7 +140,7 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
         old = populated_payload()
         new = migrate_previous(old)
         first = ROUTE_FIRST[B2_ROUTE]
-        end = first + ROUTE_COUNTS[B2_ROUTE]
+        end = first + ROUTE_COUNTS[B2_ROUTE] + 1
 
         for region in range(REGIONS):
             for route in range(ROUTES):
@@ -185,6 +198,11 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
             "selectedSchemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH",
             init,
         )
+        self.assertIn(
+            "selectedSchemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH",
+            init,
+        )
+        self.assertIn("SplitRouteCount[route] + 1", migration)
         self.assertIn("MigrateSplitStatsPreviousSchema(&stats->payload)", init)
         self.assertIn("migrated = true", init)
         self.assertLess(

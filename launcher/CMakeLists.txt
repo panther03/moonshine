@@ -31,6 +31,7 @@ set(LAUNCHER_SCRIPTS_DIR "${_repo_root}/scripts" CACHE PATH "repo scripts/ dir")
 set(LAUNCHER_DEFAULT_SOURCE "di" CACHE STRING "meta.xml default load source (di/sd/usb)")
 set(LAUNCHER_VERSION "" CACHE STRING "meta.xml version override")
 set(LAUNCHER_TEST_LOG "" CACHE FILEPATH "tester log included in the HBC app")
+set(LAUNCHER_PATTERN_TEST_LOG "" CACHE FILEPATH "optional pattern tester log")
 set(LAUNCHER_CHANGELOG "" CACHE FILEPATH "changelog included in the HBC app")
 option(LAUNCHER_DISABLE_SUSAMUNE_PATCH "Disable the Susamune patch in the launcher kernel" OFF)
 option(SUSAMUNE_MINIMAL_FREETYPE
@@ -125,6 +126,10 @@ if(LAUNCHER_OUTPUT_ZIP)
     if(LAUNCHER_TEST_LOG)
         set(_test_log_args --test-log "${LAUNCHER_TEST_LOG}")
     endif()
+    set(_pattern_test_log_args "")
+    if(LAUNCHER_PATTERN_TEST_LOG)
+        set(_pattern_test_log_args --pattern-test-log "${LAUNCHER_PATTERN_TEST_LOG}")
+    endif()
     set(_changelog_args "")
     if(LAUNCHER_CHANGELOG)
         set(_changelog_args --changelog "${LAUNCHER_CHANGELOG}")
@@ -136,6 +141,7 @@ if(LAUNCHER_OUTPUT_ZIP)
             --source   "${LAUNCHER_DEFAULT_SOURCE}"
             ${_version_args}
             ${_test_log_args}
+            ${_pattern_test_log_args}
             ${_changelog_args}
             ${_mod_bin_args}
         COMMENT "Packaging launcher HBC app zip"

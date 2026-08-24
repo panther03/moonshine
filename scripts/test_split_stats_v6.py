@@ -28,11 +28,11 @@ schema_spec.loader.exec_module(schema)
 
 VERSION = 7
 ROUTES = 122
-CHECKPOINTS = 153
+CHECKPOINTS = 152
 SEGMENTS = 275
 REGIONS = 3
 PROFILES = 4
-SCHEMA_HASH = 0xB933B5AB
+SCHEMA_HASH = 0x8ADD6B7D
 PAYLOAD_SIZE = 0x6E34
 CFG_SIZE = 0x7000
 CFG_OFFSET = 0x8800
@@ -51,12 +51,12 @@ ROUTE_ENTRIES = tuple(schema.ROUTE_ENTRIES)
 V5_ROUTE_ENTRIES = tuple(schema.V5_ROUTE_ENTRIES)
 ROUTE_COUNTS = tuple(len(points) + 1 for points in schema.CHECKPOINTS)
 V5_ROUTE_COUNTS = tuple(len(points) + 1 for points in schema.V5_CHECKPOINTS)
-ROUTE_FIRST = (0,) + tuple(accumulate(ROUTE_COUNTS[:-1]))
-V5_ROUTE_FIRST = (0,) + tuple(accumulate(V5_ROUTE_COUNTS[:-1]))
-V6_ROUTE_COUNTS = tuple(
-    count - 1 if route == B2_ROUTE else count
-    for route, count in enumerate(ROUTE_COUNTS)
+ROUTE_FIRST = tuple(
+    first + (1 if route > B2_ROUTE else 0)
+    for route, first in enumerate((0,) + tuple(accumulate(ROUTE_COUNTS[:-1])))
 )
+V5_ROUTE_FIRST = (0,) + tuple(accumulate(V5_ROUTE_COUNTS[:-1]))
+V6_ROUTE_COUNTS = ROUTE_COUNTS
 V6_ROUTE_FIRST = (0,) + tuple(accumulate(V6_ROUTE_COUNTS[:-1]))
 
 
@@ -160,7 +160,7 @@ def migrate_v5(old: dict[str, list]) -> dict[str, list]:
             new_first = ROUTE_FIRST[route]
             old_first = V5_ROUTE_FIRST[route]
             if route == B2_ROUTE:
-                new["best"][region][new_first + 2:new_first + 6] = (
+                new["best"][region][new_first + 1:new_first + 5] = (
                     old["best"][region][old_first + 1:old_first + 5]
                 )
             elif route not in TERMINAL_ONLY_CHANGED:
@@ -199,7 +199,7 @@ def migrate_v6(old: dict[str, list]) -> dict[str, list]:
             new_first = ROUTE_FIRST[route]
             old_first = V6_ROUTE_FIRST[route]
             if route == B2_ROUTE:
-                new["best"][region][new_first + 2:new_first + 6] = (
+                new["best"][region][new_first + 1:new_first + 5] = (
                     old["best"][region][old_first + 1:old_first + 5]
                 )
             else:
@@ -279,7 +279,7 @@ class SchemaContracts(unittest.TestCase):
         self.assertEqual(schema.v5_schema_hash(), V5_SCHEMA_HASH)
         self.assertEqual(sum(len(points) for points in schema.CHECKPOINTS),
                          CHECKPOINTS)
-        self.assertEqual(sum(ROUTE_COUNTS), SEGMENTS)
+        self.assertEqual(sum(ROUTE_COUNTS) + 1, SEGMENTS)
         self.assertEqual(ROUTE_COUNTS[10], 1)
         self.assertEqual(ROUTE_COUNTS[31], 1)
         for route in range(V5_ROUTES):
@@ -291,7 +291,6 @@ class SchemaContracts(unittest.TestCase):
             (
                 "scene=02:00;trigger=mario-status-enter;"
                 "status=rollout;y>=3200",
-                "scene=02:00;trigger=streaming-movie-start;movie=6",
                 "scene=02:00;trigger=actor-damage-ordinal;"
                 "actor=petey;value=1",
                 "scene=02:00;trigger=actor-damage-ordinal;"
@@ -314,7 +313,7 @@ class SchemaContracts(unittest.TestCase):
         )
         self.assertTrue(all(not points for points in schema.CHECKPOINTS[V5_ROUTES:]))
 
-    def test_source_route_table_exactly_tiles_all_segments(self) -> None:
+    def test_source_route_table_preserves_one_retired_bianco_slot(self) -> None:
         routes = parse_route_table(SPLITS.read_text(encoding="utf-8"))
         expected = tuple(
             (ROUTE_FIRST[i], ROUTE_ENTRIES[i], ROUTE_COUNTS[i] - 1)
@@ -322,8 +321,9 @@ class SchemaContracts(unittest.TestCase):
         )
         self.assertEqual(routes, expected)
         self.assertEqual(routes[0][0], 0)
-        for previous, current in zip(routes, routes[1:]):
-            self.assertEqual(current[0], previous[0] + previous[2] + 1)
+        for route, (previous, current) in enumerate(zip(routes, routes[1:]), 1):
+            gap = 1 if route == B2_ROUTE + 1 else 0
+            self.assertEqual(current[0], previous[0] + previous[2] + 1 + gap)
         self.assertEqual(routes[-1][0] + routes[-1][2] + 1, SEGMENTS)
 
     def test_route_enum_and_stats_cover_every_catalog_row(self) -> None:
@@ -556,11 +556,11 @@ class MigrationContracts(unittest.TestCase):
                     new_first = ROUTE_FIRST[route]
                     old_first = V5_ROUTE_FIRST[route]
                     self.assertEqual(
-                        new["best"][region][new_first:new_first + 2],
-                        [UNSET, UNSET],
+                        new["best"][region][new_first:new_first + 1],
+                        [UNSET],
                     )
                     self.assertEqual(
-                        new["best"][region][new_first + 2:new_first + 6],
+                        new["best"][region][new_first + 1:new_first + 5],
                         old["best"][region][old_first + 1:old_first + 5],
                     )
                 elif route in TERMINAL_ONLY_CHANGED:
@@ -625,11 +625,11 @@ class MigrationContracts(unittest.TestCase):
                 old_first = V6_ROUTE_FIRST[route]
                 if route == B2_ROUTE:
                     self.assertEqual(
-                        new["best"][region][new_first:new_first + 2],
-                        [UNSET, UNSET],
+                        new["best"][region][new_first:new_first + 1],
+                        [UNSET],
                     )
                     self.assertEqual(
-                        new["best"][region][new_first + 2:new_first + 6],
+                        new["best"][region][new_first + 1:new_first + 5],
                         old["best"][region][old_first + 1:old_first + 5],
                     )
                 else:

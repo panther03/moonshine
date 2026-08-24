@@ -45,8 +45,6 @@ const ChompletPath kChompletPaths[] = {
 
 const u8 kBossPaths[3] = { 0x1e, 0x6e, 0x20 };  // left, up, right
 
-const u8 kGelatoArea = 4;
-const u8 kGelatoSixEpisode = 5;
 const u32 kAnimalBirdType = 0x00800001u;
 const u32 kBlueCoinType = 0x20000010u;
 
@@ -61,39 +59,33 @@ bool inPlayableStage() {
     return gpMarDirector && gpMarDirector->mCurState == TMarDirector::STATE_NORMAL;
 }
 
-bool sameText(const char *a, const char *b) {
-    if (!a || !b) return false;
-    while (*a && *a == *b) {
-        a++;
-        b++;
+u8 blueBirdSlot(const char *name) {
+    if (!name) return 0;
+    u8 hash = 0;
+    int digit = -1;
+    for (const u8 *p = reinterpret_cast<const u8 *>(name); *p; p++) {
+        hash = (u8)(hash * 33u + *p);
+        if (*p >= '0' && *p <= '9') digit = *p - '0';
     }
-    return *a == *b;
+    return digit >= 0 ? digit != 0 : hash & 1;
 }
 
-int selectedGelatoBlueBirdNode(TSpineEnemy *enemy, TGraphWeb *graph,
-                                 int current, int previous) {
+int selectedBlueCoinBirdNode(TSpineEnemy *enemy, TGraphWeb *graph,
+                             int current, int previous) {
     const u8 pattern = gSettings.get(SETTING_GELATO_BLUE_BIRD_PATTERN);
-    if (pattern < 1 || pattern > 4 || previous != -1 || !gpMarDirector ||
-        gpMarDirector->mAreaID != kGelatoArea ||
-        gpMarDirector->mEpisodeID != kGelatoSixEpisode || !enemy || !graph ||
+    if (pattern < 1 || pattern > 4 || previous != -1 || !enemy || !graph ||
         enemy->mObjectID != kAnimalBirdType || current < 0 ||
-        current >= graph->mNodeCount || !sameText(graph->mRailName, "toriA"))
+        current >= graph->mNodeCount)
         return -1;
 
     const u8 *actor = reinterpret_cast<const u8 *>(enemy);
     const THitActor *coin =
         *reinterpret_cast<THitActor *const *>(actor + 0x150);
-    if (!coin || coin->mObjectID != kBlueCoinType || !enemy->mKeyName)
-        return -1;
-
-    const u8 *name = reinterpret_cast<const u8 *>(enemy->mKeyName);
-    if (name[0] != 0x92 || name[1] != 0xB9 || name[2] != ' ' ||
-        (name[3] != '0' && name[3] != '8') || name[4] != '\0')
-        return -1;
+    if (!coin || coin->mObjectID != kBlueCoinType) return -1;
 
     const TRailNode *node = graph->mNodes[current].mRailNode;
     if (!node || node->mNeighborCount != 2) return -1;
-    const int actorIndex = name[3] == '0' ? 0 : 1;
+    const u8 actorIndex = blueBirdSlot(enemy->mKeyName);
     const u8 slot = (u8)(((pattern - 1) >> (1 - actorIndex)) & 1);
     return node->mNeighborIDs[slot];
 }
@@ -223,7 +215,7 @@ extern "C" void susamuneGoToRandomNextGraphNode(TSpineEnemy *enemy) {
             next = graph->getRandomNextIndex(current, tracer->mPreviousNode, (u32)-1);
             if ((u32)current < sizeof(kPeteyPath)) next = kPeteyPath[current];
         } else {
-            const int blueBird = selectedGelatoBlueBirdNode(
+            const int blueBird = selectedBlueCoinBirdNode(
                 enemy, graph, current, tracer->mPreviousNode);
             if (blueBird >= 0) {
                 // Keep the shared libc stream aligned with an unassisted run.

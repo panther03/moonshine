@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contracts for the PR3 menu, modal input, and movement-style payload."""
+"""Contracts for the current menu, modal input, and movement-style payload."""
 
 from __future__ import annotations
 
@@ -32,6 +32,59 @@ def function(source: str, signature: str) -> str:
 
 
 class NestedMenuContracts(unittest.TestCase):
+    def test_nested_pages_cover_every_setting_in_their_category_once(self) -> None:
+        menu = text("src/menu.cpp")
+        settings = re.findall(
+            r"X\((SETTING_[A-Z0-9_]+),",
+            text("include/susamune/settings_list.h"),
+        )
+        categories = re.findall(
+            r"^(?:SBOOL|SCHOICE)\(.*,\s*(SETTING_CAT_[A-Z_]+)\)\s*$",
+            text("src/settings_descs.inc"),
+            re.MULTILINE,
+        )
+        self.assertEqual(len(settings), len(categories))
+        setting_category = dict(zip(settings, categories))
+
+        def page_ids(*arrays: str) -> list[str]:
+            result: list[str] = []
+            for array in arrays:
+                match = re.search(
+                    rf"const u8 {array}\[\]\s*=\s*\{{([^}}]+)\}}", menu
+                )
+                self.assertIsNotNone(match, array)
+                result.extend(re.findall(r"SETTING_[A-Z0-9_]+", match.group(1)))
+            return result
+
+        page_groups = {
+            "SETTING_CAT_QOL": (
+                "kGameplayCoreSettings",
+                "kGameplaySkipSettings",
+                "kGameplayWorldSettings",
+            ),
+            "SETTING_CAT_TIMER": (
+                "kTimerDisplaySettings",
+                "kTimerFreezeSettings",
+            ),
+            "SETTING_CAT_UI": (
+                "kDisplayMovementSettings",
+                "kDisplayOtherSettings",
+            ),
+            "SETTING_CAT_COSMETIC": (
+                "kAppearanceMarioSettings",
+                "kAppearanceWorldSettings",
+            ),
+        }
+        for category, arrays in page_groups.items():
+            actual = page_ids(*arrays)
+            self.assertEqual(len(actual), len(set(actual)), category)
+            expected = {
+                setting
+                for setting, setting_cat in setting_category.items()
+                if setting_cat == category
+            }
+            self.assertEqual(set(actual), expected, category)
+
     def test_timer_freezes_are_one_nested_page(self) -> None:
         menu = text("src/menu.cpp")
         settings = text("include/susamune/settings_list.h")
@@ -61,14 +114,19 @@ class NestedMenuContracts(unittest.TestCase):
         self.assertIn("static_assert(sizeof(CategorySettingsTab) == 8", menu)
         self.assertIn("const SettingPage kTimerPages[]", menu)
         self.assertIn("const SettingPage kRngPages[]", menu)
+        self.assertIn("const SettingPage kGameplayPages[]", menu)
+        self.assertIn("const SettingPage kDisplayPages[]", menu)
+        self.assertIn("const SettingPage kAppearancePages[]", menu)
 
     def test_settings_hub_is_grouped_coherently(self) -> None:
         menu = text("src/menu.cpp")
         self.assertIn("gameplay, practice, rng, savestate,", menu)
         self.assertIn("timer, display, cosmetics, creation, binds,", menu)
-        self.assertIn('return "GAME & PRACTICE"', menu)
-        self.assertIn('return "TIMING & DISPLAY"', menu)
-        self.assertIn('return "CUSTOMIZE & CONTROLS"', menu)
+        self.assertIn('return "GAMEPLAY & PRACTICE"', menu)
+        self.assertIn('return "TIMING & HUD"', menu)
+        self.assertIn('return "LAYOUT & CONTROLS"', menu)
+        self.assertIn('return "Layout editor"', menu)
+        self.assertIn('return "Button binds"', menu)
         self.assertIn("gInputDisplay.editing()", menu)
 
 

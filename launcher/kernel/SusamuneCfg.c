@@ -1479,7 +1479,7 @@ static const u16 SplitRouteFirst[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT] =
 static const u8 SplitRouteCount[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT] =
 {
 	4, 3, 5, 4, 5, 3, 4, 4, 4, 2,
-	1, 4, 2, 6, 4, 2, 5, 5, 5, 3,
+	1, 4, 2, 5, 4, 2, 5, 5, 5, 3,
 	2, 5, 2, 4, 2, 3, 3, 6, 4, 2,
 	2, 1, 3, 2, 4, 3, 4, 2, 2, 3,
 	5, 3, 3, 6, 3, 6, 3, 3, 5, 4,
@@ -1631,7 +1631,8 @@ static bool SplitStatsQfValid(u32 value)
 static bool SplitStatsSchemaSupported(u32 schemaHash)
 {
 	return schemaHash == SUSAMUNE_SPLIT_STATS_SCHEMA_HASH ||
-	       schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH;
+	       schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH ||
+	       schemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH;
 }
 
 static bool SplitStatsPayloadValid(
@@ -1967,8 +1968,7 @@ static void MigrateSplitStatsV6(
 			for (local = b2 ? 1u : 0u;
 			     local < SplitV6RouteCount[route]; local++)
 			{
-				const u32 newLocal = b2 ? local + 1 : local;
-				dst->bestQf[region][SplitRouteFirst[route] + newLocal] =
+				dst->bestQf[region][SplitRouteFirst[route] + local] =
 					src->bestQf[region]
 					           [SplitV6RouteFirst[route] + local];
 			}
@@ -2178,8 +2178,7 @@ static void MigrateSplitStatsV5(
 			     !SplitStatsV5RouteBecameTerminal(route) &&
 			     local < SplitV5RouteCount[route]; local++)
 			{
-				const u32 newLocal = b2 ? local + 1 : local;
-				dst->bestQf[region][SplitRouteFirst[route] + newLocal] =
+				dst->bestQf[region][SplitRouteFirst[route] + local] =
 					src->bestQf[region]
 					           [SplitV5RouteFirst[route] + local];
 			}
@@ -2402,6 +2401,7 @@ static void MigrateSplitStatsV4(
 		     route++)
 		{
 			u32 removed = 0;
+			const bool b2 = route == 13;
 			const bool changed =
 				SplitStatsV4RemovedCheckpoint(route, &removed);
 			const bool terminal = SplitStatsV5RouteBecameTerminal(route);
@@ -2409,11 +2409,11 @@ static void MigrateSplitStatsV4(
 				src->routeStats[region][route].attempts;
 			dst->routeStats[region][route].finishes =
 				src->routeStats[region][route].finishes;
-			if (!changed && !terminal)
+			if (!changed && !terminal && !b2)
 				dst->routeStats[region][route].golds =
 					src->routeStats[region][route].golds;
 
-			for (local = 0; !terminal &&
+			for (local = b2 ? 1u : 0u; !terminal &&
 			                local < SplitRouteCount[route]; local++)
 			{
 				u32 oldLocal = local;
@@ -2429,6 +2429,8 @@ static void MigrateSplitStatsV4(
 			for (profile = 0;
 			     profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT; profile++)
 			{
+				if (b2)
+					continue;
 				const u32 identity =
 					src->pbIdentityQf[region][profile][route];
 				dst->pbIdentityQf[region][profile][route] = identity;
@@ -3103,7 +3105,8 @@ static void MigrateSplitStatsPreviousSchema(
 {
 	const u32 route = 13;
 	const u32 first = SplitRouteFirst[route];
-	const u32 count = SplitRouteCount[route];
+	// Include Bianco 2's retired FMV slot after its new five segments.
+	const u32 count = SplitRouteCount[route] + 1;
 	u32 region;
 	u32 profile;
 
@@ -3191,7 +3194,8 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 		selectedSchemaHash = file->schemaHash;
 	}
 	if (safe && SplitStatsActiveFile >= 0 &&
-	    selectedSchemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH)
+	    (selectedSchemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH ||
+	     selectedSchemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH))
 	{
 		MigrateSplitStatsPreviousSchema(&stats->payload);
 		migrated = true;

@@ -90,10 +90,6 @@ DYNAMIC_HOOKS = {
 }
 
 CAPTURED_HOOKS = {
-    "kStreamingMovie": (
-        "sStreamingMovieTrampoline", "susamuneSplitStreamingMovie",
-        (0x800ED5C8, 0x8029A044, 0x80291EDC),
-    ),
     "kPeteyHipDrop": (
         "sPeteyHipDropTrampoline", "susamuneSplitPeteyHipDrop",
         (0x802A8790, 0x80095A0C, 0x8008F0AC),
@@ -166,16 +162,18 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertEqual(
             tuple(map(len, checkpoint_schema.CHECKPOINTS)), ROUTE_COUNTS
         )
-        self.assertEqual(sum(ROUTE_COUNTS), 153)
-        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 275)
+        self.assertEqual(sum(ROUTE_COUNTS), 152)
+        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 274)
         self.assertEqual(
             checkpoint_schema.schema_hash(),
             checkpoint_schema.EXPECTED_SCHEMA_HASH,
         )
         cursor = 0
-        for first, _, count in rows:
+        for route, (first, _, count) in enumerate(rows):
             self.assertEqual(first, cursor)
             cursor += count + 1
+            if route == 13:
+                cursor += 1  # retired FMV segment keeps later stats stable
 
     def test_manifest_keeps_only_the_three_legacy_static_hooks(self) -> None:
         for symbol, (kind, addresses) in STATIC_HOOKS.items():
@@ -264,7 +262,7 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertNotIn("JDrama::TActor *, u16 demoFlag", text)
         wrapper = text.rsplit('extern "C" void susamuneSplitStartDemo', 1)[1]
         wrapper = wrapper.split(
-            'extern "C" void susamuneSplitStreamingMovie', 1
+            'extern "C" void susamuneSplitOpenTalk', 1
         )[0]
         self.assertIn("+ 0x24C", wrapper)
         self.assertIn("if (after == before) return;", wrapper)
@@ -291,26 +289,16 @@ class SplitEventContractTests(unittest.TestCase):
             "const TGameSequence &current = gpApplication.mCurrentScene;", setup
         )
 
-    def test_bianco_two_second_split_owns_the_accepted_movie_edge(self) -> None:
+    def test_bianco_two_has_no_movie_checkpoint_or_hook(self) -> None:
         text = source_text()
-        wrapper = text.rsplit(
-            'extern "C" void susamuneSplitStreamingMovie', 1
-        )[1].split('extern "C" void susamuneSplitOpenTalk', 1)[0]
-        for contract in (
-            "director == sStageDirector",
-            "movie == 6",
-            "hookScene(SplitStats::ROUTE_BIANCO_2, 2, 0)",
-            "!(director->mGameState & 0x100)",
-            "gQFTTimer.currentQf(&qf)",
-            "sStreamingMovieTrampoline",
-            "candidate && (director->mGameState & 0x100)",
-            "publishEventAt(SplitStats::ROUTE_BIANCO_2, 1, qf)",
-        ):
-            self.assertIn(contract, wrapper)
-        self.assertLess(wrapper.index("gQFTTimer.currentQf(&qf)"),
-                        wrapper.index("sStreamingMovieTrampoline"))
-        self.assertLess(wrapper.index("sStreamingMovieTrampoline"),
-                        wrapper.index("publishEventAt"))
+        self.assertNotIn("susamuneSplitStreamingMovie", text)
+        self.assertNotIn("sStreamingMovieTrampoline", text)
+        self.assertNotIn("kStreamingMovie", text)
+        petey = text.split("void notePeteyDamage", 1)[1].split(
+            "void notePetey(", 1
+        )[0]
+        self.assertIn("publishEvent(sActiveRoute, sPeteyHits)", petey)
+        self.assertNotIn("sPeteyHits + 1", petey)
 
     def test_carry_table_is_exact_and_known_transitions_arm_it(self) -> None:
         text = source_text()
@@ -463,7 +451,7 @@ class SplitEventContractTests(unittest.TestCase):
         petey = text.split("void notePeteyDamage", 1)[1].split(
             "void notePetey(", 1
         )[0]
-        self.assertIn("publishEvent(sActiveRoute, sPeteyHits + 1)", petey)
+        self.assertIn("publishEvent(sActiveRoute, sPeteyHits)", petey)
         wake = text.split("void notePetey(", 1)[1].split(
             "void noteBossGesso", 1
         )[0]

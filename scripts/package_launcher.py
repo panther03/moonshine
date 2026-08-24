@@ -10,6 +10,7 @@ meta.xml is rendered from launcher/meta.xml.j2 (jinja2) with the git short hash.
 
 Usage: package_launcher.py --boot-dol boot.dol --out-zip out.zip \
                            [--source di|sd|usb] [--test-log TESTING.md] \
+                           [--pattern-test-log PATTERN_TESTING.md] \
                            [--changelog CHANGELOG.md] \
                            [--mod-bins mod_jp.bin ...]
 """
@@ -57,6 +58,8 @@ def main(argv):
     ap.add_argument("--source", default="di", choices=["di", "sd", "usb"])
     ap.add_argument("--version", help="meta.xml version override")
     ap.add_argument("--test-log", help="tester log to include as TESTING.md")
+    ap.add_argument("--pattern-test-log",
+                    help="extra pattern tester log to include")
     ap.add_argument("--changelog", help="release notes to include as CHANGELOG.md")
     ap.add_argument("--mod-bins", nargs="*", default=[],
                     help="mod_<region>.bin files to drop into the app dir")
@@ -73,6 +76,8 @@ def main(argv):
                    render_meta(args.source, regions, args.version))
         if args.test_log:
             z.write(args.test_log, f"{APP_NAME}/TESTING.md")
+        if args.pattern_test_log:
+            z.write(args.pattern_test_log, f"{APP_NAME}/PATTERN_TESTING.md")
         if args.changelog:
             z.write(args.changelog, f"{APP_NAME}/CHANGELOG.md")
         for bin_path in mod_bins:

@@ -2661,7 +2661,7 @@ private:
         drawValueRow(menu, x, ry, w, "Unlock popup & chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR3",
+        menu->drawText("Moonshine V2.2.0 PR4",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3057,21 +3057,22 @@ private:
 namespace {
 
 const char kCategoryTitles[] =
-    "Gameplay\0Savestate\0Practice\0Cosmetics\0Display\0Timer\0"
-    "RNG Control\0Shined";
+    "Gameplay & QoL\0Savestates\0Practice tools\0Appearance\0"
+    "HUD & displays\0Timer & splits\0RNG controls\0Shined";
 
 enum CategoryTitleOffset {
     TITLE_QOL       = 0,
-    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay"),
-    TITLE_MISC      = TITLE_SAVESTATE + sizeof("Savestate"),
-    TITLE_COSMETIC  = TITLE_MISC + sizeof("Practice"),
-    TITLE_UI        = TITLE_COSMETIC + sizeof("Cosmetics"),
-    TITLE_TIMER     = TITLE_UI + sizeof("Display"),
-    TITLE_RNG       = TITLE_TIMER + sizeof("Timer"),
-    TITLE_STARRED   = TITLE_RNG + sizeof("RNG Control"),
+    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay & QoL"),
+    TITLE_MISC      = TITLE_SAVESTATE + sizeof("Savestates"),
+    TITLE_COSMETIC  = TITLE_MISC + sizeof("Practice tools"),
+    TITLE_UI        = TITLE_COSMETIC + sizeof("Appearance"),
+    TITLE_TIMER     = TITLE_UI + sizeof("HUD & displays"),
+    TITLE_RNG       = TITLE_TIMER + sizeof("Timer & splits"),
+    TITLE_STARRED   = TITLE_RNG + sizeof("RNG controls"),
 };
 
-static_assert(sizeof(kCategoryTitles) == 71, "category title offsets changed");
+static_assert(TITLE_STARRED + sizeof("Shined") == sizeof(kCategoryTitles),
+              "category title offsets changed");
 static_assert(SETTING_COUNT <= 0x100, "setting ids no longer fit in a byte");
 static_assert(SETTING_CAT_COUNT <= 0x100, "setting categories no longer fit in a byte");
 const u8 kStarredCategory = SETTING_CAT_COUNT;
@@ -3081,6 +3082,35 @@ struct SettingPage {
     const char *name;
     const u8 *ids;
     u8 count;
+};
+
+const u8 kGameplayCoreSettings[] = {
+    SETTING_FAST_TEXT,
+    SETTING_INFINITE_LIVES,
+    SETTING_INFINITE_JUICE,
+    SETTING_FREE_PAUSE,
+    SETTING_EXIT_AREA_EVERYWHERE,
+};
+const u8 kGameplaySkipSettings[] = {
+    SETTING_FMV_SKIPS,
+    SETTING_INTRO_SKIP,
+    SETTING_UNLOCK_YOSHI,
+    SETTING_UNLOCK_NOZZLES,
+    SETTING_RESPAWN_SHINES,
+};
+const u8 kGameplayWorldSettings[] = {
+    SETTING_FLUDD_SECRETS,
+    SETTING_AREA_LOCK,
+    SETTING_DISABLE_BLUE_COIN,
+    SETTING_FAST_PIANTISSIMO,
+    SETTING_DISABLE_THIRD_CHOMPLET_AGGRO,
+    SETTING_YOSHI_NOZZLE_SAVE_PROMPT,
+    SETTING_DISABLE_RETAIL_PAUSE,
+};
+const SettingPage kGameplayPages[] = {
+    {"General gameplay", kGameplayCoreSettings, sizeof(kGameplayCoreSettings)},
+    {"Skips & unlocks", kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
+    {"World rules", kGameplayWorldSettings, sizeof(kGameplayWorldSettings)},
 };
 
 const u8 kTimerDisplaySettings[] = {
@@ -3134,45 +3164,66 @@ const u8 kRngBossSettings[] = {
     SETTING_PETEY_NO_TORNADO,
     SETTING_PETEY_ROUTE,
 };
-const u8 kRngBiancoSettings[] = {SETTING_BIANCO_SKEETER_ROUTE};
 const u8 kRngRiccoSettings[] = {
     SETTING_RICCO_CRANE_SPEED,
     SETTING_RICCO_FRUIT_MACHINE,
 };
-const u8 kRngGelatoSettings[] = {
+const u8 kRngCourseSettings[] = {
     SETTING_GELATO_RED_COIN_FISH_PATTERN,
     SETTING_GELATO_BLUE_BIRD_PATTERN,
 };
 const SettingPage kRngPages[] = {
-    {"General", kRngGeneralSettings, sizeof(kRngGeneralSettings)},
-    {"Boss assists", kRngBossSettings, sizeof(kRngBossSettings)},
-    {"Bianco Hills", kRngBiancoSettings, sizeof(kRngBiancoSettings)},
+    {"General patterns", kRngGeneralSettings, sizeof(kRngGeneralSettings)},
+    {"Boss fights", kRngBossSettings, sizeof(kRngBossSettings)},
     {"Ricco Harbor", kRngRiccoSettings, sizeof(kRngRiccoSettings)},
-    {"Gelato Beach", kRngGelatoSettings, sizeof(kRngGelatoSettings)},
+    {"Birds & fish (testing)", kRngCourseSettings, sizeof(kRngCourseSettings)},
+};
+
+const u8 kDisplayMovementSettings[] = {
+    SETTING_WALLKICK_DISPLAY,
+    SETTING_ROLLOUT_DISPLAY,
+    SETTING_DUST_DISPLAY,
+};
+const u8 kDisplayOtherSettings[] = {
+    SETTING_SHOW_BGM_SLOTS,
+    SETTING_RESTART_QUEUED_FEEDBACK,
+};
+const SettingPage kDisplayPages[] = {
+    {"Movement displays", kDisplayMovementSettings,
+     sizeof(kDisplayMovementSettings)},
+    {"Other HUD", kDisplayOtherSettings, sizeof(kDisplayOtherSettings)},
+};
+
+const u8 kAppearanceMarioSettings[] = {
+    SETTING_SHINE_OUTFIT,
+    SETTING_HELMET_APPEARANCE,
+    SETTING_CAP_APPEARANCE,
+    SETTING_SHADES_APPEARANCE,
+    SETTING_SHINE_SHIRT_APPEARANCE,
+};
+const u8 kAppearanceWorldSettings[] = {
+    SETTING_MUTE_BGM,
+    SETTING_REPLACE_EPISODE_NAMES,
+    SETTING_SHINY_SHINES,
+    SETTING_VISIBLE_GOOP,
+};
+const SettingPage kAppearancePages[] = {
+    {"Mario appearance", kAppearanceMarioSettings,
+     sizeof(kAppearanceMarioSettings)},
+    {"World & audio", kAppearanceWorldSettings,
+     sizeof(kAppearanceWorldSettings)},
 };
 
 const u8 kSettingSectionStarts[] = {
-    SETTING_FAST_TEXT,
-    SETTING_FMV_SKIPS,
-    SETTING_ANY_FRUIT_YOSHI,
-    SETTING_FREE_PAUSE,
-    SETTING_YOSHI_NOZZLE_SAVE_PROMPT,
     SETTING_NOZZLE_LOCK,
+    SETTING_DISABLE_Z_MENU,
     SETTING_ATTEMPT_COUNTER,
-    SETTING_PATTERN_SELECTOR,
     SETTING_FORCE_BOX_GAME,
-    SETTING_MUTE_BGM,
-    SETTING_VISIBLE_GOOP,
-    SETTING_SHOW_BGM_SLOTS,
-    SETTING_WALLKICK_DISPLAY,
     SETTING_SAVE_RNG_STATE,
     SETTING_SAVESTATE_FEEDBACK,
-    SETTING_ROLLOUT_DISPLAY,
 };
 const char kSettingSectionNames[] =
-    "GENERAL\0SKIPS & UNLOCKS\0YOSHI EGGS\0WORLD RULES\0SAVE PROMPTS\0"
-    "LEVEL RULES\0PRACTICE TOOLS\0PATTERNS\0BOX GAMES\0PRESENTATION\0WORLD\0"
-    "DIAGNOSTICS\0PRACTICE FEEDBACK\0STATE\0FEEDBACK\0MOVEMENT FEEDBACK";
+    "LEVEL RULES\0MENU CONTROLS\0COUNTERS\0BOX GAME\0STATE\0FEEDBACK";
 
 }  // namespace
 
@@ -3372,15 +3423,23 @@ public:
 
 private:
     bool isStarred() const { return mCat == kStarredCategory; }
+    bool isGameplay() const { return mCat == SETTING_CAT_QOL; }
     bool isTimer() const { return mCat == SETTING_CAT_TIMER; }
     bool isRng() const { return mCat == kRngCategory; }
-    bool hasPages() const { return isTimer() || isRng(); }
+    bool isDisplay() const { return mCat == SETTING_CAT_UI; }
+    bool isAppearance() const { return mCat == SETTING_CAT_COSMETIC; }
+    bool hasPages() const {
+        return isGameplay() || isTimer() || isRng() || isDisplay() ||
+               isAppearance();
+    }
     bool pageRoot() const { return hasPages() && !mMode; }
     bool resetConfirm() const { return hasFactoryReset() && mMode; }
     bool hasFeedbackEditor() const {
         return mCat == SETTING_CAT_SAVESTATE;
     }
-    bool hasMovementEditors() const { return mCat == SETTING_CAT_UI; }
+    bool hasMovementEditors() const {
+        return isDisplay() && (!hasPages() || mMode == 1);
+    }
     bool hasVisualEditor() const {
         return hasFeedbackEditor() || hasMovementEditors();
     }
@@ -3391,12 +3450,19 @@ private:
     }
 
     const SettingPage *pages() const {
-        return isTimer() ? kTimerPages : kRngPages;
+        if (isGameplay()) return kGameplayPages;
+        if (isTimer()) return kTimerPages;
+        if (isRng()) return kRngPages;
+        return isDisplay() ? kDisplayPages : kAppearancePages;
     }
     int pageCount() const {
-        return isTimer()
-                   ? sizeof(kTimerPages) / sizeof(kTimerPages[0])
-                   : sizeof(kRngPages) / sizeof(kRngPages[0]);
+        if (isGameplay())
+            return sizeof(kGameplayPages) / sizeof(kGameplayPages[0]);
+        if (isTimer()) return sizeof(kTimerPages) / sizeof(kTimerPages[0]);
+        if (isRng()) return sizeof(kRngPages) / sizeof(kRngPages[0]);
+        if (isDisplay())
+            return sizeof(kDisplayPages) / sizeof(kDisplayPages[0]);
+        return sizeof(kAppearancePages) / sizeof(kAppearancePages[0]);
     }
     const SettingPage &currentPage() const { return pages()[mMode - 1]; }
 
@@ -3408,9 +3474,17 @@ private:
 
     const char *pageRootSection(int page) const {
         if (isTimer()) return page == 0 ? "TIMING & SPLITS" : "QFT";
-        if (page == 0) return "GENERAL";
-        if (page == 1) return "BOSSES";
-        return page == 2 ? "COURSES" : nullptr;
+        if (isRng()) {
+            if (page == 0) return "PRACTICE CODES";
+            if (page == 1) return "ASSISTED RNG";
+            return page == 2 ? "COURSE RNG" : "TESTING";
+        }
+        if (isGameplay()) {
+            if (page == 0) return "CORE";
+            return page == 1 ? "ROUTE SETUP" : "WORLD";
+        }
+        if (isDisplay()) return page == 0 ? "PRACTICE HUD" : "OTHER HUD";
+        return page == 0 ? "MARIO" : "WORLD & AUDIO";
     }
 
     void updatePageRoot(Menu *menu, TMarioGamePad *pad) {
@@ -3466,7 +3540,8 @@ private:
         if (logical < settings) {
             if (isStarred()) return nullptr;
             if (hasPages()) {
-                if (isRng()) return logical == 0 ? currentPage().name : nullptr;
+                if (!isTimer())
+                    return logical == 0 ? currentPage().name : nullptr;
                 if (mMode == 1) {
                     if (logical == 0) return "TIMER DISPLAY";
                     return logical == 2 ? "HISTORY & SPLITS" : nullptr;
@@ -3528,7 +3603,7 @@ class CreationTab final : public MenuTab {
 public:
     CreationTab() : mSel(ROW_QFT_EDITOR) {}
 
-    const char *title() const override { return "Creation"; }
+    const char *title() const override { return "Layout editor"; }
     bool available() const override { return !rngControlInvalidatesIl(); }
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
@@ -3809,7 +3884,7 @@ class BindsTab : public MenuTab {
 public:
     BindsTab() : mSel(0) {}
 
-    const char *title() const override { return "Binds"; }
+    const char *title() const override { return "Button binds"; }
 
     bool grabsInput() const override { return gBinds.recording(); }
 
@@ -4721,9 +4796,9 @@ private:
 
     const char *sectionName(int child) const {
         if (mSectionStyle == SECTIONS_SETTINGS) {
-            if (child == 0) return "GAME & PRACTICE";
-            if (child == 4) return "TIMING & DISPLAY";
-            if (child == 7) return "CUSTOMIZE & CONTROLS";
+            if (child == 0) return "GAMEPLAY & PRACTICE";
+            if (child == 4) return "TIMING & HUD";
+            if (child == 7) return "LAYOUT & CONTROLS";
         } else if (mSectionStyle == SECTIONS_ILS) {
             if (child == 0) return "PRACTICE";
             if (child == 2) return "SESSIONS";

@@ -58,7 +58,7 @@ const RouteDesc kRoutes[SplitStats::ROUTE_COUNT] = {
     {12, 13, 3},     {16, 14, 4},     {21, 16, 2},
     {24, 17, 3},     {28, 20, 3},     {32, 21, 3},
     {36, 22, 1},     {38, 90, 0},     {39, 110, 3},
-    {43, 111, 1},    {45, 1, 5},      {51, 2, 3},
+    {43, 111, 1},    {45, 1, 4},      {51, 2, 3},
     {55, 3, 1},      {57, 112, 4},    {62, 6, 4},
     {67, 7, 4},      {72, 8, 2},      {75, 10, 1},
     {77, 113, 4},    {82, 34, 1},     {84, 78, 3},
@@ -127,8 +127,9 @@ static_assert(sizeof(Runtime) == 0x6E90,
 static_assert(SplitStats::ROUTE_COUNT == SUSAMUNE_SPLIT_STATS_ROUTE_COUNT,
               "split route schema drifted");
 static_assert(sizeof(RouteDesc) == 4, "split route descriptor drifted");
+// Segment 50 stays reserved so every route after Bianco 2 keeps its old slot.
 static_assert(274 + 1 == SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT,
-              "split segment ranges no longer tile the schema");
+              "split segment layout or reserved slot changed");
 static_assert(sizeof(kFreezeFrames) == 6,
               "split overlay duration choices changed");
 

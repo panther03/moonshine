@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host contracts for the Gelato 6 fish and blue-bird route patterns."""
+"""Host contracts for the Gelato 6 fish and blue-coin bird patterns."""
 
 from pathlib import Path
 import re
@@ -30,11 +30,11 @@ class GelatoPatternTests(unittest.TestCase):
         )
         descs = DESCS.read_text(encoding="utf-8")
         self.assertIn(
-            'SCHOICE("Red coin fish pattern", 0, CHOICES_GELATO_PATTERN',
+            'SCHOICE("Gelato 6 red-coin fish", 0, CHOICES_GELATO_PATTERN',
             descs,
         )
         self.assertIn(
-            'SCHOICE("Blue bird pattern", 0, CHOICES_GELATO_PATTERN',
+            'SCHOICE("Blue-coin birds", 0, CHOICES_GELATO_PATTERN',
             descs,
         )
 
@@ -82,19 +82,19 @@ class GelatoPatternTests(unittest.TestCase):
         self.assertIn(formula, FISH.read_text(encoding="utf-8"))
         self.assertIn(formula, BIRDS.read_text(encoding="utf-8"))
 
-    def test_blue_birds_are_stage_actor_and_item_scoped(self) -> None:
+    def test_blue_birds_are_actor_and_blue_coin_scoped_across_courses(self) -> None:
         source = BIRDS.read_text(encoding="utf-8")
-        selector = source.split("int selectedGelatoBlueBirdNode", 1)[1].split(
+        selector = source.split("int selectedBlueCoinBirdNode", 1)[1].split(
             "int selectedNode", 1
         )[0]
         self.assertIn("SETTING_GELATO_BLUE_BIRD_PATTERN", selector)
-        self.assertIn("kGelatoArea = 4", source)
-        self.assertIn("kGelatoSixEpisode = 5", source)
         self.assertIn("kAnimalBirdType = 0x00800001u", source)
         self.assertIn("kBlueCoinType = 0x20000010u", source)
         self.assertIn("actor + 0x150", selector)
-        self.assertIn('sameText(graph->mRailName, "toriA")', selector)
-        self.assertIn("name[3] != '0' && name[3] != '8'", selector)
+        self.assertNotIn("mAreaID", selector)
+        self.assertNotIn("mEpisodeID", selector)
+        self.assertNotIn("mRailName", selector)
+        self.assertIn("blueBirdSlot(enemy->mKeyName)", selector)
         self.assertIn("previous != -1", selector)
         self.assertIn("node->mNeighborCount != 2", selector)
 

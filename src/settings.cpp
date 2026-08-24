@@ -40,7 +40,6 @@ enum ChoiceSet {
     CHOICES_PETEY_ROUTE,
     CHOICES_RICCO_CRANE_SPEED,
     CHOICES_RICCO_FRUIT_MACHINE,
-    CHOICES_BIANCO_SKEETER_ROUTE,
     CHOICES_GELATO_PATTERN,
     CHOICES_COUNT,
 };
@@ -68,8 +67,8 @@ const char kChoiceLabels[] =
     "Slowest\0Fastest\0"
     "25 pct\0" "50 pct\0" "75 pct\0" "100 pct\0Default\0Never\0"
     "Shadow Mario\0Piantissimo\0Full notification\0Counter\0"
-    "Ask\0Auto-Save\0Don't ask\0N1-S1-S2-S3\0Slow\0Medium\0Fast\0"
-    "Durians only\0Left\0Middle\0Right\0"
+    "Ask\0Auto-Save\0Don't ask\0Retail\0N1-S1-S2-S3\0Slow\0Medium\0Fast\0"
+    "Durians only\0"
     "Pattern 1\0Pattern 2\0Pattern 3\0Pattern 4";
 
 const u8 kChoiceMap[] = {
@@ -86,17 +85,16 @@ const u8 kChoiceMap[] = {
     28, 29,             // ghost appearance
     30, 31, 0,          // stage session: Full notification, Counter, Off
     32, 33, 34,         // PB ghost save
-    0, 35,              // Petey route
-    0, 20, 36, 37, 38, 21,  // crane speed band
-    0, 39,              // Ricco fruit machine
-    0, 40, 41, 42,      // Bianco Skeeter route
-    0, 43, 44, 45, 46,  // Gelato pattern
+    35, 36,              // Petey route
+    35, 20, 37, 38, 39, 21,  // crane speed band
+    35, 40,              // Ricco fruit machine
+    35, 41, 42, 43, 44,  // course pattern
 };
 const u8 kChoiceFirst[CHOICES_COUNT + 1] = {
-    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 56, 61
+    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 57
 };
 
-static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 61,
+static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 57,
               "choice map size changed");
 static_assert(SETTING_HELMET_APPEARANCE == SETTING_GHOST_OPACITY + 1 &&
                   SETTING_CAP_APPEARANCE == SETTING_HELMET_APPEARANCE + 1 &&

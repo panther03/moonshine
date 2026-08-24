@@ -11,7 +11,7 @@ SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
 RUNTIME = ROOT / "src" / "rng_control.cpp"
 PATTERN = ROOT / "src" / "pattern_selector.cpp"
 PATCHES = ROOT / "scripts" / "patches.py"
-SAVESTATE = ROOT / "src" / "savestate.cpp"
+DESCS = ROOT / "src" / "settings_descs.inc"
 
 
 class RngControlRuntimeTests(unittest.TestCase):
@@ -64,7 +64,7 @@ class RngControlRuntimeTests(unittest.TestCase):
         )[1].split('extern "C" int susamuneCraneRotYRandImpl', 1)[0]
         rot_y = source.split(
             'extern "C" int susamuneCraneRotYRandImpl', 1
-        )[1].split('extern "C" bool susamuneBiancoSkeeterSearch', 1)[0]
+        )[1].split('extern "C" void susamuneCraneUpDownControl', 1)[0]
         self.assertEqual(up_down.count("const int retail = rand();"), 1)
         self.assertEqual(rot_y.count("const int retail = rand();"), 1)
         self.assertIn("choice * 20 - 19 + ((u32)roll * 20u >> 15)", source)
@@ -104,60 +104,19 @@ class RngControlRuntimeTests(unittest.TestCase):
         self.assertEqual((values[3], values[10], values[8], values[12]),
                          (10, 8, 12, 16))
 
-    def test_bianco_skeeter_is_instance_scoped_and_rng_neutral(self) -> None:
+    def test_retired_skeeter_id_is_hidden_and_has_no_runtime(self) -> None:
+        settings = SETTINGS.read_text(encoding="utf-8")
+        descs = DESCS.read_text(encoding="utf-8")
         source = RUNTIME.read_text(encoding="utf-8")
-        wrapper = source.split(
-            'extern "C" bool susamuneBiancoSkeeterSearch(const void *nerve, '
-            'void *spine) {', 1
-        )[1].split('extern "C" void susamuneCraneUpDownControl', 1)[0]
-        self.assertNotIn("rand()", wrapper)
-        self.assertEqual(
-            wrapper.count("sBiancoSkeeterSearchTrampoline)(nerve, spine)"),
-            1,
-        )
-        self.assertLess(
-            wrapper.index("sBiancoSkeeterSearchTrampoline)(nerve, spine)"),
-            wrapper.index("applySkeeterRoute"),
-        )
-        self.assertIn("!sSkeeterDecisionConsumed", wrapper)
-        self.assertIn("static_cast<const u8 *>(spine) + 0x20", wrapper)
-        self.assertLess(
-            wrapper.index("sSkeeterDecisionConsumed = true;"),
-            wrapper.index("choice = gSettings.get"),
-        )
-        self.assertIn("firstDecision && choice >= 1 && choice <= 3", wrapper)
-        self.assertIn("skeeter[0x1A0] = 0", wrapper)
-        self.assertIn("skeeter + 0x1A8", wrapper)
-        self.assertIn("kSkeeterSpawnX = 4296.2368f", source)
-        self.assertIn("kSkeeterSpawnY = 2300.0f", source)
-        self.assertIn("kSkeeterSpawnZ = -10375.8877f", source)
-        self.assertIn("kSkeeterSpawnTolerance = 400.0f", source)
-        self.assertIn("static_cast<const u8 *>(skeeter) + 0x194", source)
-        self.assertIn("0x0000u, 0x7000u, 0x7FFFu", source)
-        for address in (0x8033DDA4, 0x8012C4C8, 0x801259CC):
-            self.assertIn(f"0x{address:08X}u", source)
-        self.assertIn("bytes + 0x1C0", source)
-        self.assertIn("bytes + 0x1D0", source)
-        self.assertIn("gpMarDirector->mAreaID != kBiancoArea", source)
-        self.assertIn("gpMarDirector->mEpisodeID > 1", source)
-        self.assertNotIn("ILing::invalidateForAssist", wrapper)
-        self.assertNotIn("rngControlInvalidatesIl", wrapper)
-
-    def test_bianco_skeeter_one_shot_tracks_savestates(self) -> None:
-        source = RUNTIME.read_text(encoding="utf-8")
-        savestate = SAVESTATE.read_text(encoding="utf-8")
-        self.assertIn("sSkeeterDecisionConsumed = false;", source)
-        self.assertIn("void rngControlOnSavestateSaved()", source)
+        self.assertIn("SETTING_BIANCO_SKEETER_ROUTE", settings)
+        self.assertIn("Retired Skeeter slot", settings)
         self.assertIn(
-            "sSavedSkeeterDecisionConsumed = sSkeeterDecisionConsumed;",
-            source,
+            'SCHOICE("Fruit machine", 0, CHOICES_RICCO_FRUIT_MACHINE, '
+            'SETTING_CAT_CUSTOM)\nSBOOL("", 0, SETTING_CAT_HIDDEN)',
+            descs,
         )
-        self.assertIn(
-            "sSkeeterDecisionConsumed = sSavedSkeeterDecisionConsumed;",
-            source,
-        )
-        self.assertIn("rngControlOnSavestateSaved();", savestate)
-        self.assertIn("rngControlOnSavestateLoaded();", savestate)
+        self.assertNotIn("Skeeter", source)
+        self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", source)
 
     def test_king_boo_alternates_only_after_a_completed_result(self) -> None:
         source = RUNTIME.read_text(encoding="utf-8")
