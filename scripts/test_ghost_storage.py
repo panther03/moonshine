@@ -335,6 +335,47 @@ class StorageEnvelopeTests(unittest.TestCase):
                 "copyCatalogName", source_function(ppc, function)
             )
 
+    def test_race_load_preserves_the_recording_save_source(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        ghost_path = root / "src/ghost.cpp"
+        source = ghost_path.read_text(encoding="utf-8")
+        race_load = source_function(ghost_path, "importPlayback")
+
+        # Loading playback uses the other fixed MEM2 track. It must not reset
+        # the live challenger or its clock while the file request completes.
+        for forbidden in (
+            "clearRecord()",
+            "sRecording = false",
+            "sAttemptSerial =",
+            "sClockPhase =",
+            "sBoundaryPending = false",
+        ):
+            self.assertNotIn(forbidden, race_load)
+        self.assertIn("sPlaybackPinned = true", race_load)
+        self.assertIn("sGhostVisible = false", race_load)
+
+        # A challenger still being captured or waiting to be saved survives a
+        # race import. Once storage has acknowledged it, the next race attempt
+        # must reuse that buffer instead of treating the saved run as pending.
+        begin_attempt = source_function(ghost_path, "beginAttempt")
+        self.assertIn(
+            "recordPromotable && sPlaybackPinned && !sRecord.saved",
+            begin_attempt,
+        )
+
+        selection = re.search(
+            r"SaveSelection latestSaveableTrack\(\) \{(?P<body>.*?)\n\}",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(selection)
+        body = selection.group("body")
+        self.assertIn("sPlayback.valid && !sPlaybackPinned", body)
+        self.assertLess(
+            body.index("if (sRecord.valid"),
+            body.index("sPlayback.valid && !sPlaybackPinned"),
+        )
+
     def test_quarantined_import_stays_visible_and_deletable(self) -> None:
         root = Path(__file__).resolve().parents[1]
         kernel = root / "launcher/kernel/SusamuneGhost.c"

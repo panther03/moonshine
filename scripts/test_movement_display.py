@@ -87,10 +87,21 @@ class MovementDisplayContracts(unittest.TestCase):
         self.assertIn("sGroundFrames++;", before)
         self.assertIn("landedThisDirect ? 1 : sGroundFrames", after)
         self.assertIn("frames > 6 ? 7 : frames", after)
-        self.assertIn(
-            "dustEnabled() && (sGroundTracking || landedThisDirect)", after
-        )
+        self.assertIn("dustEnabled() && dryLanding", after)
+        self.assertIn("sGroundTracking || landedThisDirect", after)
         self.assertIn("wallkickDisplayLabel(sPopupResult - 1)", self.source)
+
+    def test_dust_ignores_water_slides(self) -> None:
+        water = function(self.source, r"bool isWaterSlide\(const TMario \*mario\)")
+        after = function(self.source, r"void afterDirect\(bool active\)")
+        self.assertIn("mAttributes.mIsWater", water)
+        self.assertIn("mAttributes.mIsShallowWater", water)
+        self.assertIn("mFloorTriangle", water)
+        self.assertIn("floor->mType & 0x3FFFu", water)
+        self.assertIn("type == 0x0004u", water)
+        self.assertNotIn("0x0500u", water)
+        self.assertIn("sGroundDry = !isWaterSlide(sMario);", after)
+        self.assertIn("dustEnabled() && dryLanding", after)
 
     def test_dust_popup_survives_until_rollout_result_is_ready(self) -> None:
         show = function(self.source, r"void showPopup\(u8 kind, u8 result\)")

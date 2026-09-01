@@ -30,6 +30,7 @@
 #include "susamune/ghost_storage.hxx"
 #include "susamune/qft_display.hxx"
 #include "susamune/records.hxx"
+#include "susamune/practice_visuals.hxx"
 #include "susamune/records_persistence.hxx"
 #include "susamune/ricco_fruit.hxx"
 #include "susamune/rng_control.hxx"
@@ -492,6 +493,9 @@ extern "C" void afterDraw() {
         const bool sessionModal = StageLoader::modal();
         if (!sessionModal && (!gMenu || !gMenu->shown()))
             PatternSelector::draw(gMenu);
+        if (!sessionModal && (!gMenu || !gMenu->shown()) &&
+            !WarpWheel::shown())
+            PracticeVisuals::draw(gMenu);
         if (!sessionModal &&
             (!gSettings.getBool(SETTING_DISABLE_WARPS) || WarpWheel::shown()))
             WarpWheel::draw();

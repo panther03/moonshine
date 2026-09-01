@@ -42,6 +42,19 @@ class ClassicInputDisplayContracts(unittest.TestCase):
         self.assertIn("void InputDisplay::stageStyleInto", source)
         self.assertIn("SUSAMUNE_INPUT_STYLE_ALL", source)
 
+    def test_sticks_use_the_reference_processed_travel(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("JUTGamePad::mPadMStick[0]", source)
+        self.assertIn("JUTGamePad::mPadSStick[0]", source)
+        self.assertIn("main.mStickX * 14.0f", source)
+        self.assertIn("sub.mStickY * 14.0f", source)
+        self.assertNotIn("raw.mStickX, -100, 100", source)
+
+    def test_small_start_press_has_a_visible_center(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("down && scale(radius) <= 2", source)
+        self.assertIn("menu->fillBox(x(lx) - 1, y(ly) - 1, 3, 3, c);", source)
+
 
 if __name__ == "__main__":
     unittest.main()

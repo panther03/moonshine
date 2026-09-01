@@ -1114,7 +1114,8 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
     // segment evict the last course ghost.
     const bool recordPromotable = recordReady &&
         recordPromotableForRoute(routeMatches, boundaryReset);
-    const bool keepChallenger = recordPromotable && sPlaybackPinned;
+    const bool keepChallenger =
+        recordPromotable && sPlaybackPinned && !sRecord.saved;
 
     if (recordPromotable && !sPlaybackPinned) {
         // Keep the newest completed track even when the next attempt changes
@@ -1805,14 +1806,15 @@ SaveSelection latestSaveableTrack() {
                 sPlayback.pbToken, SAVE_SOURCE_PLAYBACK};
     }
     // The current attempt owns Save once its clock/route have settled. A
-    // pinned race target is only the fallback; it must never mask a challenger.
+    // loaded race target must never mask a challenger.
     if (sRecord.valid &&
         (!sRecording ||
          (sClockPhase == CLOCK_ACTIVE && !sBoundaryPending))) {
         return {&sRecord, sRecordToken, sRecordIdentityToken,
                 SAVE_SOURCE_RECORD};
     }
-    if (sPlayback.valid) {
+    // A pinned library target is playback-only while the race is active.
+    if (sPlayback.valid && !sPlaybackPinned) {
         return {&sPlayback, kPlaybackTokenBit | sPlaybackToken,
                 kPlaybackTokenBit | sPlaybackToken, SAVE_SOURCE_PLAYBACK};
     }
@@ -2860,29 +2862,9 @@ bool importPlayback(const void *data, u32 size) {
     installCanonicalTrack(sPlayback, data, header);
     sPlaybackPinned = true;
     rewindPlayback();
-
-    // Loading a new race target must not destroy a completed challenger that
-    // is waiting for an SD save. An in-progress attempt is intentionally ended.
-    if (sRecording || !sRecord.valid) clearRecord();
-    sRecording = false;
     sGhostVisible = false;
-    sStageRoutePending = false;
-    sPendingHadLiveRoute = false;
-    sPendingContinueRecording = false;
-    sBoundaryPending = false;
-    sAttemptSerial = gQFTTimer.attemptSerial();
-    if (gpMarDirector) captureLiveRoute();
-
-    s32 qf;
-    bool stopped;
-    if (gQFTTimer.currentQf(&qf, &stopped)) {
-        sClockPhase = stopped ? CLOCK_FINISHED : CLOCK_PROVISIONAL;
-        sClockObservations = 1;
-        sClockLastQf = qf;
-        sClockEpochStartQf = qf;
-    } else {
-        sClockPhase = CLOCK_UNAVAILABLE;
-    }
+    // Playback has its own buffer. Keep the current recorder and clock alive
+    // so selecting a race target cannot erase the challenger being captured.
     return true;
 }
 

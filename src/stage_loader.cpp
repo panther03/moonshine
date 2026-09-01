@@ -1286,6 +1286,7 @@ bool startLoader() {
 
 bool startStreak(int entry, u16 finishes, s32 targetQf) {
     if (entry < 0 || entry >= ILing::count() || entry > 0xff ||
+        !ILing::streakEntrySelectable(entry) ||
         finishes == 0 || targetQf < -1 || Ghost::observerPreparing() ||
         Ghost::observerStatsSuppressed()) {
         return false;
@@ -1517,7 +1518,10 @@ void onILAttemptEnded() {
 void onILResult(int entry, s32 qf, bool eligible) {
     if (sRuntime.state != STATE_RUNNING) return;
     if (!eligible) invalidatePlaylistBest();
-    if (entry != expectedResultEntry()) {
+    const int expected = expectedResultEntry();
+    const bool episodeShine = sRuntime.mode == MODE_STREAKING &&
+        ILing::sameEpisodeShine(expectedStartEntry(), entry);
+    if (entry != expected && !episodeShine) {
         queueFailure(OUTCOME_WRONG_ROUTE, qf);
         return;
     }
@@ -1533,7 +1537,9 @@ void onILResult(int entry, s32 qf, bool eligible) {
         queueFailure(OUTCOME_TARGET_MISS, qf);
         return;
     }
-    queueSuccess(entry, qf);
+    queueSuccess(sRuntime.mode == MODE_STREAKING ? expectedStartEntry()
+                                                 : entry,
+                 qf);
 }
 
 void onILWarpCancelled() {

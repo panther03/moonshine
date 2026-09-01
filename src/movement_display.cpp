@@ -30,6 +30,7 @@ u8 sPendingResult;
 u8 sPendingKind;
 bool sGroundTracking;
 bool sRolloutTracking;
+bool sGroundDry;
 
 bool rolloutEnabled() {
     return gSettings.getBool(SETTING_ROLLOUT_DISPLAY);
@@ -46,6 +47,7 @@ void resetTracking(bool clearPopup) {
     sRolloutFrames = 0;
     sGroundTracking = false;
     sRolloutTracking = false;
+    sGroundDry = false;
     if (clearPopup) {
         sPopupResult = 0;
         sPopupFrames = 0;
@@ -84,6 +86,18 @@ void finishRollout() {
 
 bool rawAHeld() {
     return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
+}
+
+bool isWaterSlide(const TMario *mario) {
+    if (mario->mAttributes.mIsWater ||
+        mario->mAttributes.mIsShallowWater) {
+        return true;
+    }
+    const TBGCheckData *floor = mario->mFloorTriangle;
+    if (!floor) return false;
+    // frontSlipEffect treats the four wet-ground variants as water.
+    const u16 type = floor->mType & 0x3FFFu;
+    return type == 0x0004u;
 }
 
 }  // namespace
@@ -130,6 +144,7 @@ void afterDirect(bool active) {
     if (landed) {
         sGroundFrames = 0;
         sGroundTracking = true;
+        sGroundDry = !isWaterSlide(sMario);
     }
 
     const bool rollout = sStateBefore != TMario::STATE_DIVEJUMP &&
@@ -137,18 +152,23 @@ void afterDirect(bool active) {
                          state == TMario::STATE_DIVEJUMP;
     if (rollout) {
         const bool landedThisDirect = sStateBefore == TMario::STATE_DIVE;
-        if (dustEnabled() && (sGroundTracking || landedThisDirect)) {
+        const bool dryLanding = landedThisDirect ? !isWaterSlide(sMario)
+                                                  : sGroundDry;
+        if (dustEnabled() && dryLanding &&
+            (sGroundTracking || landedThisDirect)) {
             const u8 frames = landedThisDirect ? 1 : sGroundFrames;
             const u8 result = frames > 6 ? 7 : frames;
             showPopup(POPUP_DUST, result);
         }
         sGroundTracking = false;
+        sGroundDry = false;
         if (rolloutEnabled()) {
             sRolloutFrames = 1;
             sRolloutTracking = true;
         }
     } else if (sGroundTracking && state != TMario::STATE_DIVESLIDE) {
         sGroundTracking = false;
+        sGroundDry = false;
     }
 
     if (sRolloutTracking && state != TMario::STATE_DIVEJUMP) {

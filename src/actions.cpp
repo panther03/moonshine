@@ -20,6 +20,7 @@
 #include "susamune/iling.hxx"
 
 #include "Dolphin/OS.h"  // DCFlushRange, ICInvalidateRange
+#include "SMS/Camera/PolarSubCamera.hxx"
 #include "SMS/MapObj/MapObjBase.hxx"
 #include "SMS/MoveBG/EggYoshi.hxx"
 #include "SMS/Player/Mario.hxx"
@@ -244,6 +245,57 @@ void spawnYoshiFromBinds() {
 }
 
 // =====================================================================
+// Save / Load Position  (DPad Functions, Dan Salvato)
+// =====================================================================
+
+struct PositionSnapshot {
+    TVec3f position;
+    s16    marioAngleY;
+    s16    cameraHorizontalAngle;
+    f32    cameraInterpolateDistance;
+};
+
+PositionSnapshot gPositionSnapshot;
+bool             gPositionSnapshotValid;
+
+bool positionActorsReady() {
+    return stageActive() && gpMarioPos && gpMarioAngleY && gpCamera;
+}
+
+void savePosition() {
+    if (!positionActorsReady()) {
+        return;
+    }
+
+    gPositionSnapshot.position                  = *gpMarioPos;
+    gPositionSnapshot.marioAngleY               = *gpMarioAngleY;
+    gPositionSnapshot.cameraHorizontalAngle     = gpCamera->mHorizontalAngle;
+    gPositionSnapshot.cameraInterpolateDistance = gpCamera->mInterpolateDistance;
+    gPositionSnapshotValid                      = true;
+}
+
+void loadPosition() {
+    if (!gPositionSnapshotValid || !positionActorsReady()) {
+        return;
+    }
+
+    *gpMarioPos = gPositionSnapshot.position;
+    *gpMarioAngleY = gPositionSnapshot.marioAngleY;
+    gpCamera->mHorizontalAngle = gPositionSnapshot.cameraHorizontalAngle;
+    gpCamera->mInterpolateDistance = gPositionSnapshot.cameraInterpolateDistance;
+    ILing::invalidateForAssist();
+}
+
+void positionFromBinds() {
+    if (gBinds.isHeld(BIND_POSITION_SAVE)) {
+        savePosition();
+    }
+    if (gBinds.isHeld(BIND_POSITION_LOAD)) {
+        loadPosition();
+    }
+}
+
+// =====================================================================
 // Fast Forward
 //
 //   020ECDE2 00000258   ; default
@@ -320,6 +372,7 @@ void actionsApply(bool allowBinds) {
     if (allowBinds) {
         regrabLastHeldObject();
         spawnYoshiFromBinds();
+        positionFromBinds();
     }
 
     applyEggHook(gEggKillFrames != 0);

@@ -614,10 +614,11 @@ public:
             ry += ROW_H;
         }
 
-        for (int i = 0; i < entries && row < end; i++) {
-            if (ILing::beginsGroup(i)) {
+        for (int position = 0; position < entries && row < end; position++) {
+            if (ILing::beginsMenuGroup(position)) {
                 if (row >= start) {
-                    drawSectionHeader(menu, x, ry, w, ILing::groupName(i));
+                    drawSectionHeader(menu, x, ry, w,
+                                      ILing::menuGroupName(position));
                     ry += ROW_H;
                 }
                 row++;
@@ -628,16 +629,18 @@ public:
                 continue;
             }
 
-            const bool selected = !isOption() && i == selectedEntry();
+            const int entry = ILing::menuEntryAt(position);
+            const bool selected = !isOption() &&
+                                  position == selectedPosition();
             char pb[24];
             const char *value = "(PB: --)";
-            const s32 qf = ILing::pbQf(i);
+            const s32 qf = ILing::pbQf(entry);
             if (qf >= 0) {
                     ILing::formatTime(qf, pb, sizeof(pb),
                                   "(PB: %d:%02d.%03d)");
                 value = pb;
             }
-            drawValueRow(menu, x, ry, w, ILing::label(i), value, selected,
+            drawValueRow(menu, x, ry, w, ILing::label(entry), value, selected,
                          false, true);
             ry += ROW_H;
             row++;
@@ -659,7 +662,10 @@ private:
     enum { OPTION_COUNT = 8 };
 
     bool isOption() const { return mSel < OPTION_COUNT; }
-    int selectedEntry() const { return mSel - OPTION_COUNT; }
+    int selectedPosition() const { return mSel - OPTION_COUNT; }
+    int selectedEntry() const {
+        return ILing::menuEntryAt(selectedPosition());
+    }
 
     static SettingId optionSetting(int option) {
         static const u8 kSettings[5] = {
@@ -719,10 +725,12 @@ private:
     }
 
     void jumpSection(int direction) {
-        const int entry = selectedEntry();
-        int groupFirst = entry;
-        while (groupFirst > 0 && !ILing::beginsGroup(groupFirst)) groupFirst--;
-        const int destination = ILing::jumpGroup(entry, direction);
+        const int position = selectedPosition();
+        int groupFirst = position;
+        while (groupFirst > 0 && !ILing::beginsMenuGroup(groupFirst)) {
+            groupFirst--;
+        }
+        const int destination = ILing::jumpMenuGroup(position, direction);
         if ((direction < 0 && groupFirst == 0) ||
             (direction > 0 && destination == 0)) {
             mSel = 0;
@@ -732,28 +740,28 @@ private:
     }
 
     void jumpFromOptions(int direction) {
-        const int first = direction > 0 ? 0 : ILing::jumpGroup(0, -1);
+        const int first = direction > 0 ? 0 : ILing::jumpMenuGroup(0, -1);
         mSel = OPTION_COUNT + first;
     }
 
-    static int menuRowForEntry(int entry) {
-        int row = entry;
-        for (int i = 0; i <= entry; i++) {
-            if (ILing::beginsGroup(i)) row++;
+    static int menuRowForPosition(int position) {
+        int row = position;
+        for (int i = 0; i <= position; i++) {
+            if (ILing::beginsMenuGroup(i)) row++;
         }
         return row;
     }
 
     static int menuRowCount(int entries) {
         return 2 + OPTION_COUNT + theoryRows() +
-               menuRowForEntry(entries - 1) + 1;
+               menuRowForPosition(entries - 1) + 1;
     }
 
     static int menuRowForSelection(int selection) {
         if (selection < 2) return 1 + selection;
         if (selection < OPTION_COUNT) return 2 + theoryRows() + selection;
         return 2 + OPTION_COUNT + theoryRows() +
-               menuRowForEntry(selection - OPTION_COUNT);
+               menuRowForPosition(selection - OPTION_COUNT);
     }
 
     static int theoryRows() { return ILing::pbProfile() == 0 ? 1 : 0; }
@@ -1257,7 +1265,7 @@ public:
                 drawSectionHeader(menu, x, ry, w, summary);
             } else if (row == IMPORT_SCAN_DISPLAY) {
                 drawValueRow(menu, x, ry, w, "Scan import folder",
-                             "drag & drop .smsghost",
+                             "drag and drop .smsghost",
                              mSel == IMPORT_SCAN_SELECTION, false, true);
             } else {
                 int index;
@@ -2226,7 +2234,7 @@ private:
     void drawPBConfirmation(Menu *menu, int x, int y, int w) const {
         const char *title = "Discard unsaved PB ghost?";
         const char *note = "The selected ghost action will destroy it.";
-        const char *hint = SUSAMUNE_GLYPH_A " Discard & continue    "
+        const char *hint = SUSAMUNE_GLYPH_A " Discard and continue    "
                            SUSAMUNE_GLYPH_B " Cancel";
         menu->fillBox(x, y + 24, w, 150,
                       JUtility::TColor(36, 30, 20, 245));
@@ -2658,10 +2666,10 @@ private:
                          (RecordsPersistence::Scope)mScope),
                      mSel == 3, false, true);
         ry += ROW_H;
-        drawValueRow(menu, x, ry, w, "Unlock popup & chime",
+        drawValueRow(menu, x, ry, w, "Unlock popup and chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR4",
+        menu->drawText("Moonshine V2.2.0 PR5",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3057,17 +3065,17 @@ private:
 namespace {
 
 const char kCategoryTitles[] =
-    "Gameplay & QoL\0Savestates\0Practice tools\0Appearance\0"
-    "HUD & displays\0Timer & splits\0RNG controls\0Shined";
+    "Gameplay and QoL\0Savestates\0Practice tools\0Appearance\0"
+    "HUD and displays\0Timer and splits\0RNG controls\0Shined";
 
 enum CategoryTitleOffset {
     TITLE_QOL       = 0,
-    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay & QoL"),
+    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay and QoL"),
     TITLE_MISC      = TITLE_SAVESTATE + sizeof("Savestates"),
     TITLE_COSMETIC  = TITLE_MISC + sizeof("Practice tools"),
     TITLE_UI        = TITLE_COSMETIC + sizeof("Appearance"),
-    TITLE_TIMER     = TITLE_UI + sizeof("HUD & displays"),
-    TITLE_RNG       = TITLE_TIMER + sizeof("Timer & splits"),
+    TITLE_TIMER     = TITLE_UI + sizeof("HUD and displays"),
+    TITLE_RNG       = TITLE_TIMER + sizeof("Timer and splits"),
     TITLE_STARRED   = TITLE_RNG + sizeof("RNG controls"),
 };
 
@@ -3109,7 +3117,7 @@ const u8 kGameplayWorldSettings[] = {
 };
 const SettingPage kGameplayPages[] = {
     {"General gameplay", kGameplayCoreSettings, sizeof(kGameplayCoreSettings)},
-    {"Skips & unlocks", kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
+    {"Skips and unlocks", kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
     {"World rules", kGameplayWorldSettings, sizeof(kGameplayWorldSettings)},
 };
 
@@ -3151,7 +3159,7 @@ const u8 kTimerFreezeSettings[] = {
     SETTING_TIMER_FREEZE_YOSHI,
 };
 const SettingPage kTimerPages[] = {
-    {"Timer & splits", kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
+    {"Timer and splits", kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
     {"QFT freezes", kTimerFreezeSettings, sizeof(kTimerFreezeSettings)},
 };
 
@@ -3176,7 +3184,7 @@ const SettingPage kRngPages[] = {
     {"General patterns", kRngGeneralSettings, sizeof(kRngGeneralSettings)},
     {"Boss fights", kRngBossSettings, sizeof(kRngBossSettings)},
     {"Ricco Harbor", kRngRiccoSettings, sizeof(kRngRiccoSettings)},
-    {"Birds & fish (testing)", kRngCourseSettings, sizeof(kRngCourseSettings)},
+    {"Birds and fish (testing)", kRngCourseSettings, sizeof(kRngCourseSettings)},
 };
 
 const u8 kDisplayMovementSettings[] = {
@@ -3187,6 +3195,8 @@ const u8 kDisplayMovementSettings[] = {
 const u8 kDisplayOtherSettings[] = {
     SETTING_SHOW_BGM_SLOTS,
     SETTING_RESTART_QUEUED_FEEDBACK,
+    SETTING_PINNA_HIDDEN_ITEMS,
+    SETTING_ENEMY_HURTBOXES,
 };
 const SettingPage kDisplayPages[] = {
     {"Movement displays", kDisplayMovementSettings,
@@ -3210,7 +3220,7 @@ const u8 kAppearanceWorldSettings[] = {
 const SettingPage kAppearancePages[] = {
     {"Mario appearance", kAppearanceMarioSettings,
      sizeof(kAppearanceMarioSettings)},
-    {"World & audio", kAppearanceWorldSettings,
+    {"World and audio", kAppearanceWorldSettings,
      sizeof(kAppearanceWorldSettings)},
 };
 
@@ -3237,7 +3247,8 @@ public:
         if (pageRoot()) return false;
         u8 ids[SETTING_COUNT];
         const int settings = buildList(ids);
-        return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;
+        return mSel < settings &&
+               Settings::favoriteable((SettingId)ids[mSel]);
     }
     bool back() override {
         if (!hasPages() || !mMode) return false;
@@ -3316,7 +3327,7 @@ public:
             return;
         }
         SettingId id = (SettingId)ids[mSel];
-        if ((rapid & TMarioGamePad::X) && id < SETTING_FAVORITES_0) {
+        if ((rapid & TMarioGamePad::X) && Settings::favoriteable(id)) {
             gSettings.toggleFavorite(id);
             menu->toast(gSettings.favorite(id)
                             ? "Added to Shined"
@@ -3473,7 +3484,7 @@ private:
     }
 
     const char *pageRootSection(int page) const {
-        if (isTimer()) return page == 0 ? "TIMING & SPLITS" : "QFT";
+        if (isTimer()) return page == 0 ? "TIMING AND SPLITS" : "QFT";
         if (isRng()) {
             if (page == 0) return "PRACTICE CODES";
             if (page == 1) return "ASSISTED RNG";
@@ -3484,7 +3495,7 @@ private:
             return page == 1 ? "ROUTE SETUP" : "WORLD";
         }
         if (isDisplay()) return page == 0 ? "PRACTICE HUD" : "OTHER HUD";
-        return page == 0 ? "MARIO" : "WORLD & AUDIO";
+        return page == 0 ? "MARIO" : "WORLD AND AUDIO";
     }
 
     void updatePageRoot(Menu *menu, TMarioGamePad *pad) {
@@ -3522,11 +3533,12 @@ private:
             return page.count;
         }
         int n = 0;
-        const int count = isStarred() ? SETTING_FAVORITES_0 : SETTING_COUNT;
+        const int count = SETTING_COUNT;
         for (int i = 0; i < count; i++) {
             const SettingId id = (SettingId)i;
             const bool include = isStarred()
-                    ? Settings::category(id) != SETTING_CAT_HIDDEN &&
+                    ? Settings::favoriteable(id) &&
+                          Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)
                     : Settings::category(id) == (SettingCategory)mCat;
             if (include) {
@@ -3544,12 +3556,12 @@ private:
                     return logical == 0 ? currentPage().name : nullptr;
                 if (mMode == 1) {
                     if (logical == 0) return "TIMER DISPLAY";
-                    return logical == 2 ? "HISTORY & SPLITS" : nullptr;
+                    return logical == 2 ? "HISTORY AND SPLITS" : nullptr;
                 }
                 if (logical == 0) return "DURATION";
-                if (logical == 1) return "COINS & OBJECTS";
+                if (logical == 1) return "COINS AND OBJECTS";
                 if (logical == 8) return "MOVEMENT";
-                return logical == 21 ? "EVENTS & BOSSES" : nullptr;
+                return logical == 21 ? "EVENTS AND BOSSES" : nullptr;
             }
             const SettingId id = (SettingId)ids[logical];
             for (u32 i = 0; i < sizeof(kSettingSectionStarts); i++) {
@@ -3860,14 +3872,15 @@ const u8 kBindSectionStarts[] = {
     BIND_WARP_WHEEL,
     BIND_TOGGLE_INPUT_DISPLAY,
     BIND_ATTEMPT_SHOW,
+    BIND_POSITION_SAVE,
 };
 const char kBindSectionNames[] =
-    "ACTIONS\0MENU\0SAVESTATES\0WARPS & RESTARTS\0DISPLAY\0ATTEMPT COUNTER";
+    "ACTIONS\0MENU\0SAVESTATES\0WARPS AND RESTARTS\0DISPLAY\0ATTEMPT COUNTER\0POSITION";
 enum {
     kBindSectionCount =
         sizeof(kBindSectionStarts) / sizeof(kBindSectionStarts[0]),
 };
-static_assert(kBindSectionCount == 6,
+static_assert(kBindSectionCount == 7,
               "bind section metadata must be validated together");
 static_assert(BIND_REGRAB_OBJECT == 0 &&
                   BIND_REGRAB_OBJECT < BIND_MENU_TOGGLE &&
@@ -3875,7 +3888,8 @@ static_assert(BIND_REGRAB_OBJECT == 0 &&
                   BIND_SAVESTATE_SAVE < BIND_WARP_WHEEL &&
                   BIND_WARP_WHEEL < BIND_TOGGLE_INPUT_DISPLAY &&
                   BIND_TOGGLE_INPUT_DISPLAY < BIND_ATTEMPT_SHOW &&
-                  BIND_ATTEMPT_SHOW < BIND_COUNT,
+                  BIND_ATTEMPT_SHOW < BIND_POSITION_SAVE &&
+                  BIND_POSITION_SAVE < BIND_COUNT,
               "bind section starts must be ordered and in bounds");
 
 }  // namespace
@@ -4126,7 +4140,7 @@ public:
         const int entries = ILing::count();
         const int listH = h - ROW_H;
         const int maxRows = listH / ROW_H;
-        const int rows = menuRowCount(entries);
+        const int rows = menuRowCount();
         const int start = listScrollStart(menuRowForSelection(mSel), rows,
                                           maxRows);
         int end = start + maxRows;
@@ -4232,6 +4246,7 @@ public:
         row++;
 
         for (int entry = 0; entry < entries && row < end; entry++) {
+            if (!catalogueIncludesEntry(entry)) continue;
             if (ILing::beginsGroup(entry)) {
                 if (row >= start) {
                     drawSectionHeader(menu, x, ry, w,
@@ -4328,17 +4343,50 @@ private:
     }
     bool isCatalogueRow() const { return mSel >= catalogueFirst(); }
     int queuePosition() const { return mSel - optionCount(); }
-    int catalogueEntry() const { return mSel - catalogueFirst(); }
+    bool catalogueIncludesEntry(int entry) const {
+        return !mStreaking || ILing::streakEntrySelectable(entry);
+    }
+    int catalogueCount() const {
+        if (!mStreaking) return ILing::count();
+        int count = 0;
+        for (int entry = 0; entry < ILing::count(); entry++) {
+            if (catalogueIncludesEntry(entry)) count++;
+        }
+        return count;
+    }
+    int catalogueEntryAt(int index) const {
+        for (int entry = 0; entry < ILing::count(); entry++) {
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (index-- == 0) return entry;
+        }
+        return -1;
+    }
+    int catalogueIndexForEntry(int selected) const {
+        int index = 0;
+        for (int entry = 0; entry < ILing::count(); entry++) {
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (entry == selected) return index;
+            index++;
+        }
+        return -1;
+    }
+    int catalogueEntry() const {
+        return catalogueEntryAt(mSel - catalogueFirst());
+    }
     int selectionCount() const {
-        return catalogueFirst() + ILing::count();
+        return catalogueFirst() + catalogueCount();
     }
 
     void activateOption(Menu *menu) {
         const Option option = selectedOption();
         if (option == OPTION_MODE) {
             mStreaking = !mStreaking;
-            if (mStreaking)
+            if (mStreaking) {
+                if (!ILing::streakEntrySelectable(mStreakEntry)) {
+                    mStreakEntry = catalogueEntryAt(0);
+                }
                 mTargetQf = StageTargets::get(mStreakEntry);
+            }
             mSel = OPTION_MODE;
             return;
         }
@@ -4448,12 +4496,12 @@ private:
             mSel = OPTION_MODE;
             return;
         }
-        mSel = catalogueFirst() + destination;
+        mSel = catalogueFirst() + catalogueIndexForEntry(destination);
     }
 
     void jumpFromOptions(int direction) {
         const int entry = direction > 0 ? 0 : ILing::jumpGroup(0, -1);
-        mSel = catalogueFirst() + entry;
+        mSel = catalogueFirst() + catalogueIndexForEntry(entry);
     }
 
     void beginTextEditor(Editor editor) {
@@ -4618,12 +4666,25 @@ private:
         return true;
     }
 
-    static int catalogueRowForEntry(int entry) {
-        int row = entry;
-        for (int i = 0; i <= entry; i++) {
-            if (ILing::beginsGroup(i)) row++;
+    int catalogueRowForEntry(int selected) const {
+        int row = 0;
+        for (int entry = 0; entry <= selected; entry++) {
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (ILing::beginsGroup(entry)) row++;
+            if (entry == selected) return row;
+            row++;
         }
         return row;
+    }
+
+    int catalogueRowCount() const {
+        int rows = 0;
+        for (int entry = 0; entry < ILing::count(); entry++) {
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (ILing::beginsGroup(entry)) rows++;
+            rows++;
+        }
+        return rows;
     }
 
     int catalogueBaseRow() const {
@@ -4636,8 +4697,8 @@ private:
         return row + 1;
     }
 
-    int menuRowCount(int entries) const {
-        return catalogueBaseRow() + catalogueRowForEntry(entries - 1) + 1;
+    int menuRowCount() const {
+        return catalogueBaseRow() + catalogueRowCount();
     }
 
     int menuRowForSelection(int selection) const {
@@ -4645,8 +4706,8 @@ private:
         if (!mStreaking && selection < catalogueFirst()) {
             return optionCount() + 1 + selection - optionCount();
         }
-        return catalogueBaseRow() +
-               catalogueRowForEntry(selection - catalogueFirst());
+        return catalogueBaseRow() + catalogueRowForEntry(
+            catalogueEntryAt(selection - catalogueFirst()));
     }
 
     int mSel;
@@ -4744,6 +4805,10 @@ public:
             mSel = (u8)wrap(mSel - 1, mCount);
         } else if (rapid & TMarioGamePad::CSTICK_DOWN) {
             mSel = (u8)wrap(mSel + 1, mCount);
+        } else if (rapid & TMarioGamePad::CSTICK_LEFT) {
+            jumpRootSection(-1);
+        } else if (rapid & TMarioGamePad::CSTICK_RIGHT) {
+            jumpRootSection(+1);
         }
         if (mNavInput.update() & JUTGamePad::A) {
             if (!mChildren[mSel]->available()) {
@@ -4796,14 +4861,45 @@ private:
 
     const char *sectionName(int child) const {
         if (mSectionStyle == SECTIONS_SETTINGS) {
-            if (child == 0) return "GAMEPLAY & PRACTICE";
-            if (child == 4) return "TIMING & HUD";
-            if (child == 7) return "LAYOUT & CONTROLS";
+            if (child == 0) return "GAMEPLAY AND PRACTICE";
+            if (child == 4) return "TIMING AND HUD";
+            if (child == 7) return "LAYOUT AND CONTROLS";
         } else if (mSectionStyle == SECTIONS_ILS) {
             if (child == 0) return "PRACTICE";
             if (child == 2) return "SESSIONS";
         }
         return nullptr;
+    }
+
+    void jumpRootSection(int direction) {
+        if (mSectionStyle == SECTIONS_NONE) return;
+        if (direction > 0) {
+            for (int child = mSel + 1; child < mCount; child++) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+            for (int child = 0; child <= mSel; child++) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+        } else {
+            for (int child = mSel - 1; child >= 0; child--) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+            for (int child = mCount - 1; child >= mSel; child--) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+        }
     }
 
     const char *mName;

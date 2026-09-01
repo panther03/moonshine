@@ -125,6 +125,26 @@ SettingCategory settingCategory(const SettingDesc &desc) {
     return (SettingCategory)(desc.config & kCategoryMask);
 }
 
+int rngFavoriteBit(SettingId id) {
+    if (id >= SETTING_KING_BOO_ALWAYS_FRUIT &&
+        id <= SETTING_RICCO_FRUIT_MACHINE) {
+        return id - SETTING_KING_BOO_ALWAYS_FRUIT;
+    }
+    if (id >= SETTING_GELATO_RED_COIN_FISH_PATTERN &&
+        id <= SETTING_GELATO_BLUE_BIRD_PATTERN) {
+        return 5 + id - SETTING_GELATO_RED_COIN_FISH_PATTERN;
+    }
+    return -1;
+}
+
+static_assert(SETTING_RICCO_FRUIT_MACHINE -
+                      SETTING_KING_BOO_ALWAYS_FRUIT ==
+                  4 &&
+                  SETTING_GELATO_BLUE_BIRD_PATTERN -
+                          SETTING_GELATO_RED_COIN_FISH_PATTERN ==
+                      1,
+              "RNG Shined bit mapping changed");
+
 #define SETTING_CONFIG(def, cat) (u8)(((def) << kDefaultShift) | (cat))
 #define SBOOL(name, def, cat) { CHOICES_BOOL, SETTING_CONFIG(def, cat) },
 #define SCHOICE(name, def, choices, cat) { choices, SETTING_CONFIG(def, cat) },
@@ -356,7 +376,8 @@ void Settings::stageInto(volatile SusamuneCfg *cfg) {
 }
 
 void Settings::set(SettingId id, u8 value) {
-    if (id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) {
+    if ((id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) ||
+        id == SETTING_RNG_FAVORITES) {
         value &= 0x7F;
     } else {
         value = value % choiceCount(kSettingDescs[id]);
@@ -367,20 +388,36 @@ void Settings::set(SettingId id, u8 value) {
     mValues[id] = value;
 }
 
+bool Settings::favoriteable(SettingId id) {
+    return (id >= 0 && id < SETTING_FAVORITES_0) ||
+           rngFavoriteBit(id) >= 0;
+}
+
 bool Settings::favorite(SettingId id) const {
-    if (id < 0 || id >= SETTING_FAVORITES_0) return false;
-    const int index = (int)id;
-    const SettingId storage =
-        (SettingId)(SETTING_FAVORITES_0 + index / 7);
-    return (mValues[storage] & (1u << (index % 7))) != 0;
+    if (id >= 0 && id < SETTING_FAVORITES_0) {
+        const int index = (int)id;
+        const SettingId storage =
+            (SettingId)(SETTING_FAVORITES_0 + index / 7);
+        return (mValues[storage] & (1u << (index % 7))) != 0;
+    }
+    const int bit = rngFavoriteBit(id);
+    return bit >= 0 &&
+           (mValues[SETTING_RNG_FAVORITES] & (1u << bit)) != 0;
 }
 
 void Settings::toggleFavorite(SettingId id) {
-    if (id < 0 || id >= SETTING_FAVORITES_0) return;
-    const int index = (int)id;
-    const SettingId storage =
-        (SettingId)(SETTING_FAVORITES_0 + index / 7);
-    mValues[storage] ^= (u8)(1u << (index % 7));
+    SettingId storage;
+    int bit;
+    if (id >= 0 && id < SETTING_FAVORITES_0) {
+        const int index = (int)id;
+        storage = (SettingId)(SETTING_FAVORITES_0 + index / 7);
+        bit = index % 7;
+    } else {
+        bit = rngFavoriteBit(id);
+        if (bit < 0) return;
+        storage = SETTING_RNG_FAVORITES;
+    }
+    mValues[storage] ^= (u8)(1u << bit);
     mDirty = true;
 }
 

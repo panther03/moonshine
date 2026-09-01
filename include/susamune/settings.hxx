@@ -106,8 +106,8 @@ public:
     // steps a choice. Used by the menu for both A-press and left/right.
     void cycle(SettingId id, int dir);
 
-    // The Starred tab covers the visible generic settings that predate the
-    // hidden packed storage at SETTING_FAVORITES_0.
+    // Shined settings use packed hidden bytes without changing their values.
+    static bool favoriteable(SettingId id);
     bool favorite(SettingId id) const;
     void toggleFavorite(SettingId id);
 

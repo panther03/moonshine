@@ -151,6 +151,11 @@ constexpr bool isSecretOnlyPbSlot(int slot) {
 constexpr u8 kGroupFirst[GROUP_COUNT] = {
     0, 13, 25, 38, 52, 65, 78, 90, 92, 94, 110
 };
+// GBS remains append-only entry 121; the ILs tab projects it into Gelato.
+constexpr u8 kMenuGroupFirst[GROUP_COUNT] = {
+    0, 13, 25, 39, 53, 66, 79, 91, 93, 95, 111
+};
+const int kMenuGelatoGbsPosition = 38;
 const int kGeneratedLabelCount = 90;
 const int kRegularLabelSize = 18;
 // Fixed-width names and computed suffix offsets cost less than lookup tables.
@@ -165,6 +170,8 @@ constexpr char kMenuGroupNames[] =
 constexpr u8 kMenuGroupOffsets[] = {0, 7, 13, 20, 26, 33, 38, 45, 54, 61, 69};
 static_assert(sizeof(kMenuGroupOffsets) == GROUP_COUNT,
               "IL menu group labels changed");
+static_assert(sizeof(kMenuGroupFirst) == GROUP_COUNT,
+              "IL menu group starts changed");
 constexpr char kRegularSuffixes[] =
     "\0\0\0\0 Reds\0 (Full)\0 (Secret)\0 (Race)";
 constexpr char kRegularLabelFormats[] =
@@ -912,14 +919,29 @@ bool sameDest(const LevelWarp::Dest &a, const LevelWarp::Dest &b) {
            a.gameInt3 == b.gameInt3;
 }
 
-bool acceptsSkipOrigin(const Entry &item) {
+bool isBonusShine(const Entry &item) {
     const bool hidden = item.result == 29 || item.result == 59 ||
                         item.result == 69;
     const bool hundred = item.result >= 100 && item.result <= 107;
-    if ((hidden || hundred) && sAttemptStart.area == item.start.area) {
-        return true;
-    }
-    return false;
+    return hidden || hundred;
+}
+
+u8 parentOrSelf(u8 area) {
+    const u8 parent = LevelWarp::parentArea(area);
+    return parent == 0xFF ? area : parent;
+}
+
+bool sameCourse(const LevelWarp::Dest &a, const LevelWarp::Dest &b) {
+    return parentOrSelf(a.area) == parentOrSelf(b.area);
+}
+
+bool sameCourseEpisode(const LevelWarp::Dest &a,
+                       const LevelWarp::Dest &b) {
+    return sameCourse(a, b) && a.gameInt3 == b.gameInt3;
+}
+
+bool acceptsSkipOrigin(const Entry &item) {
+    return isBonusShine(item) && sameCourse(sAttemptStart, item.start);
 }
 
 bool sceneMatches(const TGameSequence &scene, const LevelWarp::Dest &dest) {
@@ -1412,6 +1434,25 @@ void onPersistenceReady() {
 
 int count() { return kEntryCount; }
 
+bool streakEntrySelectable(int entry) {
+    return entry >= 0 && entry < kEntryCount &&
+           !isBonusShine(kEntries[entry]);
+}
+
+bool sameEpisodeShine(int selectedEntry, int completedEntry) {
+    if (selectedEntry < 0 || selectedEntry >= kEntryCount ||
+        completedEntry < 0 || completedEntry >= kEntryCount) {
+        return false;
+    }
+    const Entry &selected = kEntries[selectedEntry];
+    const Entry &completed = kEntries[completedEntry];
+    return entryFinish(selected) == FINISH_SHINE &&
+           entryFinish(completed) == FINISH_SHINE &&
+           sameCourse(selected.start, completed.start) &&
+           (isBonusShine(completed) ||
+            sameCourseEpisode(selected.start, completed.start));
+}
+
 const char *label(int entry) {
     if (entry < kGeneratedLabelCount) {
         const Entry &item = kEntries[entry];
@@ -1559,6 +1600,46 @@ bool beginsGroup(int entry) {
 const char *groupName(int entry) {
     int group = 0;
     while (group + 1 < GROUP_COUNT && entry >= kGroupFirst[group + 1]) group++;
+    return kMenuGroupNames + kMenuGroupOffsets[group];
+}
+
+int menuEntryAt(int position) {
+    if (position < 0 || position >= kEntryCount) return -1;
+    if (position < kMenuGelatoGbsPosition) return position;
+    if (position == kMenuGelatoGbsPosition) return kEntryGelatoGbs;
+    int entry = position - 1;
+    if (entry >= kEntryGelatoGbs) entry++;
+    return entry;
+}
+
+int jumpMenuGroup(int position, int direction) {
+    int group = 0;
+    while (group + 1 < GROUP_COUNT &&
+           position >= kMenuGroupFirst[group + 1]) {
+        group++;
+    }
+    group += direction > 0 ? 1 : -1;
+    if (group < 0) {
+        group = GROUP_COUNT - 1;
+    } else if (group >= GROUP_COUNT) {
+        group = 0;
+    }
+    return kMenuGroupFirst[group];
+}
+
+bool beginsMenuGroup(int position) {
+    for (int group = 0; group < GROUP_COUNT; group++) {
+        if (position == kMenuGroupFirst[group]) return true;
+    }
+    return false;
+}
+
+const char *menuGroupName(int position) {
+    int group = 0;
+    while (group + 1 < GROUP_COUNT &&
+           position >= kMenuGroupFirst[group + 1]) {
+        group++;
+    }
     return kMenuGroupNames + kMenuGroupOffsets[group];
 }
 

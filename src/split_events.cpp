@@ -1507,7 +1507,8 @@ extern "C" void susamuneSplitPeteyHipDrop(void *petey) {
     const u8 before = enemy->mHealth;
     reinterpret_cast<PeteyHipDropFn>(sPeteyHipDropTrampoline)(petey);
     if (!sRetailDirectOpen || !stageIdentityValid()) return;
-    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0);
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0) ||
+                    routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1);
     const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
     if (b2 || b5) notePeteyDamage(before, enemy->mHealth);
 }

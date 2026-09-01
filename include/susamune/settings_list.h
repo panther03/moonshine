@@ -183,7 +183,12 @@
     X(SETTING_TIMER_FREEZE_AIRGRAB,         "timer_freeze_airgrab")          \
     /* -- Course patterns (append-only persisted ids) -- */                  \
     X(SETTING_GELATO_RED_COIN_FISH_PATTERN, "gelato_red_coin_fish_pattern")  \
-    X(SETTING_GELATO_BLUE_BIRD_PATTERN,     "gelato_blue_bird_pattern")
+    X(SETTING_GELATO_BLUE_BIRD_PATTERN,     "gelato_blue_bird_pattern")     \
+    /* -- Practice visuals (append-only persisted ids) -- */                 \
+    X(SETTING_PINNA_HIDDEN_ITEMS,            "pinna_hidden_items")           \
+    X(SETTING_ENEMY_HURTBOXES,               "enemy_hurtboxes")              \
+    /* -- Post-V2.1 Shined storage (append-only persisted id) -- */          \
+    X(SETTING_RNG_FAVORITES,                 "rng_favorites")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

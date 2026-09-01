@@ -21,8 +21,9 @@ class GelatoPatternTests(unittest.TestCase):
             r'X\((SETTING_[A-Z0-9_]+),\s*"[^"]+"\)',
             SETTINGS.read_text(encoding="utf-8"),
         )
+        first = rows.index("SETTING_GELATO_RED_COIN_FISH_PATTERN")
         self.assertEqual(
-            rows[-2:],
+            rows[first:first + 2],
             [
                 "SETTING_GELATO_RED_COIN_FISH_PATTERN",
                 "SETTING_GELATO_BLUE_BIRD_PATTERN",

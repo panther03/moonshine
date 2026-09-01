@@ -299,6 +299,17 @@ class SplitEventContractTests(unittest.TestCase):
         )[0]
         self.assertIn("publishEvent(sActiveRoute, sPeteyHits)", petey)
         self.assertNotIn("sPeteyHits + 1", petey)
+        hip_drop = text.rsplit(
+            'extern "C" void susamuneSplitPeteyHipDrop', 1
+        )[1].split(
+            'extern "C" void susamuneSplitGessoTentacleDamage', 1
+        )[0]
+        self.assertIn(
+            "routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0)", hip_drop
+        )
+        self.assertIn(
+            "routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1)", hip_drop
+        )
 
     def test_carry_table_is_exact_and_known_transitions_arm_it(self) -> None:
         text = source_text()

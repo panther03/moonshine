@@ -17,6 +17,10 @@ void onPersistenceReady();
 int count();
 const char *label(int entry);
 const char *shortLabel(int entry);
+// Streaking repeats episodes, so bonus/100-coin Shines are not start choices.
+bool streakEntrySelectable(int entry);
+// A Streaking finish may be any Shine collected from the selected start scene.
+bool sameEpisodeShine(int selectedEntry, int completedEntry);
 s32 pbQf(int entry);
 // Stable across catalogue reorderings; shared by PBs and per-level targets.
 int persistentSlot(int entry);
@@ -32,6 +36,11 @@ void setPbProfileName(int profile, const char *name);
 int jumpGroup(int entry, int direction);
 bool beginsGroup(int entry);
 const char *groupName(int entry);
+// The ILs tab projects GBS into Gelato without changing persisted entry ids.
+int menuEntryAt(int position);
+int jumpMenuGroup(int position, int direction);
+bool beginsMenuGroup(int position);
+const char *menuGroupName(int position);
 // Parent episode retained by the active IL attempt, or -1 when it does not
 // describe `parentArea`. Direct internal starts use this for full restart.
 int activeParentEpisode(u8 parentArea);

@@ -15,6 +15,8 @@ SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
 DESCS = ROOT / "src" / "settings_descs.inc"
 QFT_HEADER = ROOT / "include" / "susamune" / "qft_timer.hxx"
 QFT_SOURCE = ROOT / "src" / "qft_timer.cpp"
+ILING_HEADER = ROOT / "include" / "susamune" / "iling.hxx"
+MENU = ROOT / "src" / "menu.cpp"
 
 
 def array_values(source: str, name: str) -> tuple[int, ...]:
@@ -68,6 +70,39 @@ class GelatoGbsContracts(unittest.TestCase):
         )
         theory = array_values(iling, "kAnyPercentTheorySlots")
         self.assertEqual(theory[:8], (1, 2, 3, 4, 5, 6, 125, 26))
+
+    def test_ils_tab_projects_gbs_into_the_gelato_section(self) -> None:
+        iling = ILING.read_text(encoding="utf-8")
+        header = ILING_HEADER.read_text(encoding="utf-8")
+        menu = MENU.read_text(encoding="utf-8")
+
+        self.assertIn("const int kMenuGelatoGbsPosition = 38;", iling)
+        self.assertRegex(
+            iling,
+            r"kMenuGroupFirst\[GROUP_COUNT\]\s*=\s*\{\s*"
+            r"0, 13, 25, 39, 53, 66, 79, 91, 93, 95, 111\s*\}",
+        )
+        self.assertIn(
+            "if (position == kMenuGelatoGbsPosition) "
+            "return kEntryGelatoGbs;",
+            iling,
+        )
+        self.assertIn("int entry = position - 1;", iling)
+        self.assertIn("if (entry >= kEntryGelatoGbs) entry++;", iling)
+        for declaration in (
+            "int menuEntryAt(int position);",
+            "int jumpMenuGroup(int position, int direction);",
+            "bool beginsMenuGroup(int position);",
+            "const char *menuGroupName(int position);",
+        ):
+            self.assertIn(declaration, header)
+        ils_tab = menu[
+            menu.index("class ILingTab") : menu.index("class GhostsTab")
+        ]
+        self.assertIn("ILing::menuEntryAt(position)", ils_tab)
+        self.assertIn("ILing::beginsMenuGroup(position)", ils_tab)
+        self.assertIn("ILing::menuGroupName(position)", ils_tab)
+        self.assertIn("ILing::jumpMenuGroup(position, direction)", ils_tab)
 
     def test_fast_any_uses_route_but_legacy_action_survives(self) -> None:
         source = STAGE_LOADER.read_text(encoding="utf-8")

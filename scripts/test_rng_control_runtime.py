@@ -20,8 +20,9 @@ class RngControlRuntimeTests(unittest.TestCase):
             r'X\((SETTING_[A-Z0-9_]+),\s*"[^"]+"\)',
             SETTINGS.read_text(encoding="utf-8"),
         )
+        first = rows.index("SETTING_KING_BOO_ALWAYS_FRUIT")
         self.assertEqual(
-            rows[-11:-6],
+            rows[first:first + 5],
             [
                 "SETTING_KING_BOO_ALWAYS_FRUIT",
                 "SETTING_PETEY_NO_TORNADO",
@@ -31,7 +32,7 @@ class RngControlRuntimeTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            rows[-6:],
+            rows[first + 5:first + 11],
             [
                 "SETTING_BIANCO_SKEETER_ROUTE",
                 "SETTING_ROLLOUT_DISPLAY",

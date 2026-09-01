@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -57,7 +58,7 @@ class RngControlMenuTests(unittest.TestCase):
             '"General patterns"',
             '"Boss fights"',
             '"Ricco Harbor"',
-            '"Birds & fish (testing)"',
+            '"Birds and fish (testing)"',
         ):
             self.assertIn(page, menu)
         self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", menu)
@@ -65,14 +66,50 @@ class RngControlMenuTests(unittest.TestCase):
         self.assertIn("const SettingPage kRngPages[]", menu)
         self.assertIn("gameplay, practice, rng, savestate,", menu)
         self.assertIn("if (child->back())", menu)
+
+    def test_every_live_rng_control_can_be_shined(self):
+        settings = (ROOT / "include/susamune/settings.hxx").read_text()
+        setting_list = (ROOT / "include/susamune/settings_list.h").read_text()
+        implementation = (ROOT / "src/settings.cpp").read_text()
+        descs = (ROOT / "src/settings_descs.inc").read_text()
+        menu = (ROOT / "src/menu.cpp").read_text()
+
+        rows = re.findall(r"X\((SETTING_[A-Z0-9_]+),", setting_list)
+        self.assertEqual(rows[-1], "SETTING_RNG_FAVORITES")
+        live_size = (((((len(rows) + 3) & ~1) + 5) & ~3) + 8)
+        mem2 = (ROOT / "include/susamune/mem2_map.h").read_text()
+        slot = re.search(
+            r"SUSAMUNE_CONFIG_SETTINGS_SIZE\s+0x([0-9A-Fa-f]+)u", mem2
+        )
+        self.assertIsNotNone(slot)
+        assert slot is not None
+        self.assertLessEqual(live_size, int(slot.group(1), 16))
+        self.assertEqual(descs.strip().splitlines()[-1],
+                         'SBOOL("", 0, SETTING_CAT_HIDDEN)')
+        self.assertIn("static bool favoriteable(SettingId id);", settings)
+        self.assertIn("id == SETTING_RNG_FAVORITES", implementation)
+        self.assertIn("value &= 0x7F;", implementation)
         self.assertIn(
-            "return mSel < settings && ids[mSel] < SETTING_FAVORITES_0;",
+            "id >= SETTING_KING_BOO_ALWAYS_FRUIT &&\n"
+            "        id <= SETTING_RICCO_FRUIT_MACHINE",
+            implementation,
+        )
+        self.assertIn(
+            "id >= SETTING_GELATO_RED_COIN_FISH_PATTERN &&\n"
+            "        id <= SETTING_GELATO_BLUE_BIRD_PATTERN",
+            implementation,
+        )
+        self.assertIn("storage = SETTING_RNG_FAVORITES;", implementation)
+        self.assertIn(
+            "Settings::favoriteable((SettingId)ids[mSel])",
             menu,
         )
         self.assertIn(
-            "if ((rapid & TMarioGamePad::X) && id < SETTING_FAVORITES_0)",
+            "if ((rapid & TMarioGamePad::X) && Settings::favoriteable(id))",
             menu,
         )
+        self.assertIn("const int count = SETTING_COUNT;", menu)
+        self.assertIn("? Settings::favoriteable(id) &&", menu)
 
 
 if __name__ == "__main__":
