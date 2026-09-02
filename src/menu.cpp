@@ -2708,7 +2708,7 @@ private:
                         ? "Switch Records between this region and all regions."
                         : "Shows a popup and chime when an achievement unlocks.";
         drawHelpLine(menu, x, y, w, h - 52, help);
-        menu->drawText("Moonshine V2.2.0 PR8",
+        menu->drawText("Moonshine V2.2.0 RC1",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,

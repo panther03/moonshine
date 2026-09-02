@@ -116,19 +116,38 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertIn("static const u8 kFaces[24]", cube)
         self.assertIn("JUtility::TColor fill(color.r, color.g, color.b, 48)",
                       cube)
-        self.assertIn("menu->fillPoly(xy, 4, fill)", cube)
-        self.assertIn("maxX - minX <= 400", cube)
-        self.assertIn("maxY - minY <= 360", cube)
+        self.assertIn("drawClippedRaceFace(menu, projection, points, fill)",
+                      cube)
         self.assertNotIn("drawSegment", cube)
+        self.assertNotIn("fillSafe", cube)
+        clipped = self.source.split("void drawClippedRaceFace", 1)[1].split(
+            "void drawRaceCube", 1
+        )[0]
+        self.assertIn("projection.nearPlane", clipped)
+        self.assertIn("projection.farPlane", clipped)
+        self.assertEqual(clipped.count("clipRaceScreen("), 4)
+        self.assertIn("twiceArea > kRaceFaceAlphaAreaBudget", clipped)
+        self.assertIn("if (softened < 8) softened = 8", clipped)
+        self.assertIn("JUtility::TColor(color.r, color.g, color.b, alpha)",
+                      clipped)
         self.assertIn("menu->fillBox(x - 5, y - 1, 11, 3, color)",
                       self.source)
         self.assertIn("y - 8, 14, 14, color", self.source)
 
     def test_visual_assists_invalidate_before_retail_finishes(self) -> None:
-        self.assertIn("ILing::invalidateForAssist()", self.source)
+        update = self.source.split("void update()", 1)[1].split(
+            "void drawHudScreen", 1
+        )[0]
+        self.assertIn(
+            "gSettings.get(SETTING_ENEMY_HURTBOXES) != HURTBOX_OFF",
+            update,
+        )
+        self.assertIn(
+            "gSettings.getBool(SETTING_RICCO_RACE_CHECKPOINTS)", update
+        )
+        self.assertEqual(update.count("ILing::invalidateForAssist();"), 1)
         direct = self.main.index("int state = director->direct();")
         self.assertLess(self.main.index("PracticeVisuals::update();"), direct)
-        self.assertIn("SETTING_RICCO_RACE_CHECKPOINTS", self.source)
 
     def test_pinna_timer_shift_brackets_the_actual_retail_hud_draw(self) -> None:
         draw = self.source.split("void drawHudScreen", 1)[1].split(

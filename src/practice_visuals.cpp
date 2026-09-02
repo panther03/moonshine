@@ -53,6 +53,7 @@ const u32 kYoshiTongue = 0x08000083u;
 const int kScreenWidth = 640;
 const int kScreenHeight = 480;
 const int kMissionCounterGap = 60;
+const f32 kRaceFaceAlphaAreaBudget = 100000.0f;
 
 struct Projection {
     Mtx view;
@@ -84,8 +85,8 @@ struct Projection {
         valid = cot > 0.0f && cot < 100.0f;
     }
 
-    bool point(const TVec3f &world, s16 *x, s16 *y) const {
-        if (!valid || !x || !y || !(world.x > -1000000.0f) ||
+    bool viewPoint(const TVec3f &world, Vec *viewPosition) const {
+        if (!valid || !viewPosition || !(world.x > -1000000.0f) ||
             !(world.x < 1000000.0f) || !(world.y > -1000000.0f) ||
             !(world.y < 1000000.0f) || !(world.z > -1000000.0f) ||
             !(world.z < 1000000.0f)) {
@@ -93,8 +94,18 @@ struct Projection {
         }
 
         Vec source = {world.x, world.y, world.z};
+        PSMTXMultVec(view, &source, viewPosition);
+        return viewPosition->x > -100000000.0f &&
+               viewPosition->x < 100000000.0f &&
+               viewPosition->y > -100000000.0f &&
+               viewPosition->y < 100000000.0f &&
+               viewPosition->z > -100000000.0f &&
+               viewPosition->z < 100000000.0f;
+    }
+
+    bool point(const TVec3f &world, s16 *x, s16 *y) const {
         Vec viewPosition;
-        PSMTXMultVec(view, &source, &viewPosition);
+        if (!x || !y || !viewPoint(world, &viewPosition)) return false;
         const f32 depth = -viewPosition.z;
         if (!(depth >= nearPlane && depth <= farPlane)) return false;
 
@@ -399,6 +410,133 @@ TVec3f cubePoint(const TCubeGeneralInfo *cube, f32 x, f32 y, f32 z) {
                   cube->mTranslation.z + z2);
 }
 
+struct RaceViewPoint {
+    f32 x;
+    f32 y;
+    f32 depth;
+};
+
+struct RaceScreenPoint {
+    f32 x;
+    f32 y;
+};
+
+int clipRaceDepth(const RaceViewPoint *input, int count,
+                  RaceViewPoint *output, f32 plane, bool keepGreater) {
+    if (count < 1) return 0;
+    int outputCount = 0;
+    RaceViewPoint previous = input[count - 1];
+    bool previousInside = keepGreater ? previous.depth >= plane
+                                      : previous.depth <= plane;
+    for (int i = 0; i < count; ++i) {
+        const RaceViewPoint current = input[i];
+        const bool currentInside = keepGreater ? current.depth >= plane
+                                               : current.depth <= plane;
+        if (currentInside != previousInside) {
+            const f32 divisor = current.depth - previous.depth;
+            if (divisor != 0.0f) {
+                const f32 t = (plane - previous.depth) / divisor;
+                RaceViewPoint &intersection = output[outputCount++];
+                intersection.x = previous.x + (current.x - previous.x) * t;
+                intersection.y = previous.y + (current.y - previous.y) * t;
+                intersection.depth = plane;
+            }
+        }
+        if (currentInside) output[outputCount++] = current;
+        previous = current;
+        previousInside = currentInside;
+    }
+    return outputCount;
+}
+
+int clipRaceScreen(const RaceScreenPoint *input, int count,
+                   RaceScreenPoint *output, bool clipX, f32 edge,
+                   bool keepGreater) {
+    if (count < 1) return 0;
+    int outputCount = 0;
+    RaceScreenPoint previous = input[count - 1];
+    f32 previousValue = clipX ? previous.x : previous.y;
+    bool previousInside = keepGreater ? previousValue >= edge
+                                      : previousValue <= edge;
+    for (int i = 0; i < count; ++i) {
+        const RaceScreenPoint current = input[i];
+        const f32 currentValue = clipX ? current.x : current.y;
+        const bool currentInside = keepGreater ? currentValue >= edge
+                                               : currentValue <= edge;
+        if (currentInside != previousInside) {
+            const f32 divisor = currentValue - previousValue;
+            if (divisor != 0.0f) {
+                const f32 t = (edge - previousValue) / divisor;
+                RaceScreenPoint &intersection = output[outputCount++];
+                intersection.x = previous.x + (current.x - previous.x) * t;
+                intersection.y = previous.y + (current.y - previous.y) * t;
+                if (clipX)
+                    intersection.x = edge;
+                else
+                    intersection.y = edge;
+            }
+        }
+        if (currentInside) output[outputCount++] = current;
+        previous = current;
+        previousValue = currentValue;
+        previousInside = currentInside;
+    }
+    return outputCount;
+}
+
+void drawClippedRaceFace(Menu *menu, const Projection &projection,
+                         const RaceViewPoint *face,
+                         const JUtility::TColor &color) {
+    RaceViewPoint depthA[8];
+    RaceViewPoint depthB[8];
+    int count = clipRaceDepth(face, 4, depthA, projection.nearPlane, true);
+    count = clipRaceDepth(depthA, count, depthB, projection.farPlane, false);
+    if (count < 3) return;
+
+    RaceScreenPoint screenA[12];
+    RaceScreenPoint screenB[12];
+    for (int i = 0; i < count; ++i) {
+        const f32 ndcX = depthB[i].x * projection.cot /
+                         (projection.aspect * depthB[i].depth);
+        const f32 ndcY = depthB[i].y * projection.cot / depthB[i].depth;
+        screenA[i].x = (ndcX * 0.5f + 0.5f) * kScreenWidth;
+        screenA[i].y = (0.5f - ndcY * 0.5f) * kScreenHeight;
+    }
+
+    count = clipRaceScreen(screenA, count, screenB, true, 1.0f, true);
+    count = clipRaceScreen(screenB, count, screenA, true,
+                           kScreenWidth - 2.0f, false);
+    count = clipRaceScreen(screenA, count, screenB, false, 1.0f, true);
+    count = clipRaceScreen(screenB, count, screenA, false,
+                           kScreenHeight - 2.0f, false);
+    if (count < 3) return;
+
+    f32 twiceArea = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        const int next = i + 1 == count ? 0 : i + 1;
+        twiceArea += screenA[i].x * screenA[next].y -
+                     screenA[next].x * screenA[i].y;
+    }
+    if (twiceArea < 0.0f) twiceArea = -twiceArea;
+    u8 alpha = color.a;
+    if (twiceArea > kRaceFaceAlphaAreaBudget) {
+        int softened = static_cast<int>(
+            color.a * kRaceFaceAlphaAreaBudget / twiceArea);
+        if (softened < 8) softened = 8;
+        alpha = static_cast<u8>(softened);
+    }
+
+    s16 xy[24];
+    for (int i = 0; i < count; ++i) {
+        xy[i * 2] = static_cast<s16>(screenA[i].x);
+        xy[i * 2 + 1] = static_cast<s16>(screenA[i].y);
+    }
+    // When the camera enters a checkpoint, several clipped faces can cover
+    // the viewport at once. Area-weighting keeps their stacked tint gentle.
+    menu->fillPoly(xy, count,
+                   JUtility::TColor(color.r, color.g, color.b, alpha));
+}
+
 void drawRaceCube(Menu *menu, const Projection &projection,
                   const TCubeGeneralInfo *cube, char letter,
                   const JUtility::TColor &color) {
@@ -413,45 +551,25 @@ void drawRaceCube(Menu *menu, const Projection &projection,
         0, 1, 5, 4, 1, 2, 6, 5,
         2, 3, 7, 6, 3, 0, 4, 7,
     };
-    s16 screen[16];
-    bool fillSafe = true;
-    int minX = kScreenWidth;
-    int maxX = 0;
-    int minY = kScreenHeight;
-    int maxY = 0;
+    RaceViewPoint corners[8];
     for (int i = 0; i < 8; ++i) {
         const TVec3f world = cubePoint(
             cube, kCorners[i * 3] * cube->mScale.x * 0.5f,
             kCorners[i * 3 + 1] * cube->mScale.y,
             kCorners[i * 3 + 2] * cube->mScale.z * 0.5f);
-        if (!projection.point(world, &screen[i * 2],
-                              &screen[i * 2 + 1])) {
-            fillSafe = false;
-            continue;
-        }
-        const int x = screen[i * 2];
-        const int y = screen[i * 2 + 1];
-        fillSafe = fillSafe && x >= 1 && x < kScreenWidth - 1 &&
-                   y >= 1 && y < kScreenHeight - 1;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+        Vec view;
+        if (!projection.viewPoint(world, &view)) return;
+        corners[i].x = view.x;
+        corners[i].y = view.y;
+        corners[i].depth = -view.z;
     }
-    // Refuse fills that cross the viewport or engulf it near the camera.
-    // Labels still identify those checkpoints without feeding GX a giant fan.
-    fillSafe = fillSafe && maxX - minX <= 400 && maxY - minY <= 360;
-    if (fillSafe) {
-        const JUtility::TColor fill(color.r, color.g, color.b, 48);
-        for (int face = 0; face < 6; ++face) {
-            s16 xy[8];
-            for (int corner = 0; corner < 4; ++corner) {
-                const int index = kFaces[face * 4 + corner];
-                xy[corner * 2] = screen[index * 2];
-                xy[corner * 2 + 1] = screen[index * 2 + 1];
-            }
-            menu->fillPoly(xy, 4, fill);
+    const JUtility::TColor fill(color.r, color.g, color.b, 48);
+    for (int face = 0; face < 6; ++face) {
+        RaceViewPoint points[4];
+        for (int corner = 0; corner < 4; ++corner) {
+            points[corner] = corners[kFaces[face * 4 + corner]];
         }
+        drawClippedRaceFace(menu, projection, points, fill);
     }
 
     const TVec3f labelPoint =
