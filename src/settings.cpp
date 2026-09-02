@@ -41,6 +41,9 @@ enum ChoiceSet {
     CHOICES_RICCO_CRANE_SPEED,
     CHOICES_RICCO_FRUIT_MACHINE,
     CHOICES_GELATO_PATTERN,
+    CHOICES_HIDDEN_ITEMS,
+    CHOICES_HURTBOX_MODE,
+    CHOICES_HURTBOX_TARGET,
     CHOICES_COUNT,
 };
 
@@ -69,7 +72,9 @@ const char kChoiceLabels[] =
     "Shadow Mario\0Piantissimo\0Full notification\0Counter\0"
     "Ask\0Auto-Save\0Don't ask\0Retail\0N1-S1-S2-S3\0Slow\0Medium\0Fast\0"
     "Durians only\0"
-    "Pattern 1\0Pattern 2\0Pattern 3\0Pattern 4";
+    "Pattern 1\0Pattern 2\0Pattern 3\0Pattern 4\0"
+    "Both\0Fruit\0Coins\0Wireframe\0Transparent\0Solid\0"
+    "All enemies\0Eely teeth only";
 
 const u8 kChoiceMap[] = {
     0, 1,              // bool
@@ -89,12 +94,16 @@ const u8 kChoiceMap[] = {
     35, 20, 37, 38, 39, 21,  // crane speed band
     35, 40,              // Ricco fruit machine
     35, 41, 42, 43, 44,  // course pattern
+    0, 45, 46, 47,       // hidden items
+    0, 48, 49, 50,       // hurtbox mode
+    51, 52,               // hurtbox target
 };
 const u8 kChoiceFirst[CHOICES_COUNT + 1] = {
-    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 57
+    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 57,
+    61, 65, 67
 };
 
-static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 57,
+static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 67,
               "choice map size changed");
 static_assert(SETTING_HELMET_APPEARANCE == SETTING_GHOST_OPACITY + 1 &&
                   SETTING_CAP_APPEARANCE == SETTING_HELMET_APPEARANCE + 1 &&

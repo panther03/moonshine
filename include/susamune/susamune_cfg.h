@@ -455,17 +455,17 @@ struct SusamuneMetadataStyleCfg {
 // Kernel/backend understands Rollout and Dust Creation styles.
 #define SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE 0x4000u
 
-// IL PBs use stable result slots: ordinary rows use retail Shine ids, while
-// independent Secret, variant and Any% rows occupy otherwise-unused ids through 124.
-// Two spare values keep the payload cache-line-sized and allow append-only
-// additions without moving anything in the handoff block.
-#define SUSAMUNE_ILING_PB_MAGIC          0x53495042u  // 'SIPB'
-#define SUSAMUNE_ILING_PB_FILE_MAGIC     0x53504246u  // 'SPBF'
-#define SUSAMUNE_ILING_PB_VERSION        1u
-#define SUSAMUNE_ILING_PB_SLOT_COUNT     126u
-#define SUSAMUNE_ILING_PB_MAX_SLOTS      128u
-#define SUSAMUNE_ILING_PB_UNSET          (-1)
-#define SUSAMUNE_ILING_PB_MAX_QF         0x000AF9B0
+// IL PBs use stable result slots. The original single-profile payload stays
+// fixed at 128 values; the active profile format grows append-only beyond it.
+#define SUSAMUNE_ILING_PB_MAGIC               0x53495042u  // 'SIPB'
+#define SUSAMUNE_ILING_PB_FILE_MAGIC          0x53504246u  // 'SPBF'
+#define SUSAMUNE_ILING_PB_VERSION             1u
+#define SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT   126u
+#define SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS    128u
+#define SUSAMUNE_ILING_PB_SLOT_COUNT          136u
+#define SUSAMUNE_ILING_PB_MAX_SLOTS           136u
+#define SUSAMUNE_ILING_PB_UNSET               (-1)
+#define SUSAMUNE_ILING_PB_MAX_QF              0x000AF9B0
 
 struct SusamuneILingPbCfg {
     // --- cache line 0: written by the kernel at boot, by the mod on save ---
@@ -481,7 +481,7 @@ struct SusamuneILingPbCfg {
     unsigned char  pad1[24];
 
     // --- cache lines 2+: written by the kernel at boot, by the mod on save ---
-    signed int values[SUSAMUNE_ILING_PB_MAX_SLOTS];
+    signed int values[SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS];
 };
 
 // Fixed binary record written by the ARM kernel. Two generations are kept per
@@ -494,15 +494,36 @@ struct SusamuneILingPbFile {
     unsigned int   generation;
     unsigned int   checksum;
     unsigned char  reserved[12];
-    signed int     values[SUSAMUNE_ILING_PB_MAX_SLOTS];
+    signed int     values[SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS];
 };
 
 #define SUSAMUNE_ILING_PROFILE_MAGIC      0x53495052u  // 'SIPR'
 #define SUSAMUNE_ILING_PROFILE_FILE_MAGIC 0x53505246u  // 'SPRF'
-#define SUSAMUNE_ILING_PROFILE_VERSION    1u
+#define SUSAMUNE_ILING_PROFILE_VERSION_V1 1u
+#define SUSAMUNE_ILING_PROFILE_VERSION    2u
 #define SUSAMUNE_ILING_PROFILE_COUNT      4u
 #define SUSAMUNE_ILING_CUSTOM_NAME_COUNT  2u
 #define SUSAMUNE_ILING_PROFILE_NAME_SIZE  16u
+
+// V1 is also the profile tail embedded in Dolphin CARD record versions 4/5.
+// Keep it explicit so those records can be migrated without offset guesses.
+struct SusamuneILingProfilesCfgV1 {
+    unsigned int   magic;
+    unsigned short version;
+    unsigned char  profileCount;
+    unsigned char  activeProfile;
+    unsigned short slotCount;
+    unsigned short nameSize;
+    unsigned int   saveSeq;
+    unsigned char  pad0[16];
+    unsigned int   ackSeq;
+    unsigned int   status;
+    unsigned char  pad1[24];
+    signed int values[SUSAMUNE_ILING_PROFILE_COUNT]
+                     [SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS];
+    char customNames[SUSAMUNE_ILING_CUSTOM_NAME_COUNT]
+                    [SUSAMUNE_ILING_PROFILE_NAME_SIZE];
+};
 
 struct SusamuneILingProfilesCfg {
     // --- cache line 0: written by the kernel at boot, by the mod on save ---
@@ -539,6 +560,23 @@ struct SusamuneILingProfilesFile {
     unsigned char  reserved[8];
     signed int values[SUSAMUNE_ILING_PROFILE_COUNT]
                      [SUSAMUNE_ILING_PB_MAX_SLOTS];
+    char customNames[SUSAMUNE_ILING_CUSTOM_NAME_COUNT]
+                    [SUSAMUNE_ILING_PROFILE_NAME_SIZE];
+};
+
+struct SusamuneILingProfilesFileV1 {
+    unsigned int   magic;
+    unsigned short version;
+    unsigned char  profileCount;
+    unsigned char  activeProfile;
+    unsigned short slotCount;
+    unsigned short nameSize;
+    unsigned int   gameId;
+    unsigned int   generation;
+    unsigned int   checksum;
+    unsigned char  reserved[8];
+    signed int values[SUSAMUNE_ILING_PROFILE_COUNT]
+                     [SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS];
     char customNames[SUSAMUNE_ILING_CUSTOM_NAME_COUNT]
                     [SUSAMUNE_ILING_PROFILE_NAME_SIZE];
 };
@@ -613,7 +651,7 @@ struct SusamuneProgressFile {
     (SUSAMUNE_STAGE_PLAYLIST_BUILTIN_COUNT + SUSAMUNE_STAGE_PLAYLIST_COUNT)
 #define SUSAMUNE_STAGE_PLAYLIST_REGION_COUNT 3u
 #define SUSAMUNE_STAGE_PLAYLIST_CAPACITY   120u
-#define SUSAMUNE_STAGE_PLAYLIST_ROUTE_COUNT 122u
+#define SUSAMUNE_STAGE_PLAYLIST_ROUTE_COUNT 132u
 #define SUSAMUNE_STAGE_PLAYLIST_ACTION_BYTES \
     (SUSAMUNE_STAGE_PLAYLIST_CAPACITY / 8u)
 #define SUSAMUNE_STAGE_PLAYLIST_ACTION_SCHEMA 1u
@@ -704,8 +742,10 @@ struct SusamuneStagePlaylistsFile {
 // regional journal: target edits must not rewrite playlists or PB profiles.
 #define SUSAMUNE_STAGE_TARGET_MAGIC          0x53544754u  // 'STGT'
 #define SUSAMUNE_STAGE_TARGET_FILE_MAGIC     0x53544746u  // 'STGF'
-#define SUSAMUNE_STAGE_TARGET_VERSION        1u
-#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT     128u
+#define SUSAMUNE_STAGE_TARGET_VERSION_V1     1u
+#define SUSAMUNE_STAGE_TARGET_VERSION        2u
+#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1  128u
+#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT     136u
 #define SUSAMUNE_STAGE_TARGET_UNSET          (-1)
 #define SUSAMUNE_STAGE_TARGET_FLAG_WRITABLE  0x1u
 
@@ -737,6 +777,17 @@ struct SusamuneStageTargetsFile {
     signed int targets[SUSAMUNE_STAGE_TARGET_SLOT_COUNT];
 };
 
+struct SusamuneStageTargetsFileV1 {
+    unsigned int   magic;
+    unsigned short version;
+    unsigned short slotCount;
+    unsigned int   gameId;
+    unsigned int   generation;
+    unsigned int   checksum;
+    unsigned char  reserved[12];
+    signed int targets[SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1];
+};
+
 // Stable route IDs are append-only. Older flat segment layouts remain explicit
 // so migrations can copy unchanged routes by route-local segment identity.
 #define SUSAMUNE_SPLIT_STATS_MAGIC          0x53535453u  // 'SSTS'
@@ -747,13 +798,17 @@ struct SusamuneStageTargetsFile {
 #define SUSAMUNE_SPLIT_STATS_VERSION_V4     4u
 #define SUSAMUNE_SPLIT_STATS_VERSION_V5     5u
 #define SUSAMUNE_SPLIT_STATS_VERSION_V6     6u
-#define SUSAMUNE_SPLIT_STATS_VERSION        7u
-#define SUSAMUNE_SPLIT_STATS_ROUTE_COUNT    122u
-#define SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT  275u
+#define SUSAMUNE_SPLIT_STATS_VERSION_V7     7u
+#define SUSAMUNE_SPLIT_STATS_VERSION        8u
+#define SUSAMUNE_SPLIT_STATS_ROUTE_COUNT    132u
+#define SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT  285u
 #define SUSAMUNE_SPLIT_STATS_REGION_COUNT   3u
 #define SUSAMUNE_SPLIT_STATS_PROFILE_COUNT  4u
-#define SUSAMUNE_SPLIT_STATS_SCHEMA_HASH    0x8ADD6B7Du
-// Prior V7 layouts accepted only to clear the changed Bianco 2 segments.
+#define SUSAMUNE_SPLIT_STATS_SCHEMA_HASH    0xD0AAE2E5u
+#define SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT   122u
+#define SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT 275u
+#define SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH   0x8ADD6B7Du
+// Earlier V7 layouts are accepted only to clear changed Bianco 2 segments.
 #define SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH 0xB933B5ABu
 #define SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH 0x4499A650u
 #define SUSAMUNE_SPLIT_STATS_QF_UNSET       0xFFFFFFFFu
@@ -972,6 +1027,39 @@ struct SusamuneSplitStatsFileV6 {
     unsigned char tailPad[440];
 };
 
+struct SusamuneSplitStatsPayloadV7 {
+    struct SusamuneSplitRouteStats routeStats[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
+                                                [SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT];
+    unsigned int playedQf[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
+                         [SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT];
+    unsigned int bestQf[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
+                       [SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT];
+    unsigned int pbIdentityQf[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
+                             [SUSAMUNE_SPLIT_STATS_PROFILE_COUNT]
+                             [SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT];
+    unsigned int pbQf[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
+                     [SUSAMUNE_SPLIT_STATS_PROFILE_COUNT]
+                     [SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT];
+};
+
+struct SusamuneSplitStatsFileV7 {
+    unsigned int   magic;
+    unsigned short version;
+    unsigned char  routeCount;
+    unsigned char  regionCount;
+    unsigned short segmentCount;
+    unsigned char  profileCount;
+    unsigned char  headerReserved;
+    unsigned int   payloadBytes;
+    unsigned int   schemaHash;
+    unsigned int   generation;
+    unsigned int   checksum;
+    unsigned char  reserved0[4];
+    struct SusamuneSplitStatsPayloadV7 payload;
+    unsigned char reserved1[16];
+    unsigned char tailPad[380];
+};
+
 struct SusamuneSplitStatsPayload {
     struct SusamuneSplitRouteStats routeStats[SUSAMUNE_SPLIT_STATS_REGION_COUNT]
                                                 [SUSAMUNE_SPLIT_STATS_ROUTE_COUNT];
@@ -1011,7 +1099,7 @@ struct SusamuneSplitStatsCfg {
 
     struct SusamuneSplitStatsPayload payload;
     unsigned char reserved[16];
-    unsigned char tailPad[380];
+    unsigned char tailPad[100];
 };
 
 struct SusamuneSplitStatsFile {
@@ -1029,7 +1117,7 @@ struct SusamuneSplitStatsFile {
     unsigned char  reserved0[4];
     struct SusamuneSplitStatsPayload payload;
     unsigned char reserved1[16];
-    unsigned char tailPad[380];
+    unsigned char tailPad[36];
 };
 
 struct SusamuneCfg {
@@ -1085,7 +1173,7 @@ struct SusamuneCfg {
 
 // Fixed gap before progress. This remains separate from SusamuneCfg so older
 // launchers can keep their established struct size and offsets.
-#define SUSAMUNE_STAGE_PLAYLIST_CFG_OFFSET 0x1400u
+#define SUSAMUNE_STAGE_PLAYLIST_CFG_OFFSET 0x1420u
 #define SUSAMUNE_STAGE_PLAYLIST_PPC_PTR \
     ((struct SusamuneStagePlaylistsCfg *)(SUSAMUNE_MEM2_CFG_PPC_BASE + \
                                           SUSAMUNE_STAGE_PLAYLIST_CFG_OFFSET))
@@ -1101,7 +1189,7 @@ struct SusamuneCfg {
 // The mailbox ends immediately before the live PB mirror. SplitStats keeps its
 // mutable copy in mod BSS so the larger all-IL schema does not need two copies
 // in this 64 KiB handoff window.
-#define SUSAMUNE_SPLIT_STATS_CFG_OFFSET 0x8800u
+#define SUSAMUNE_SPLIT_STATS_CFG_OFFSET 0x8280u
 #define SUSAMUNE_SPLIT_STATS_PPC_PTR \
     ((struct SusamuneSplitStatsCfg *)(SUSAMUNE_MEM2_CFG_PPC_BASE + \
                                       SUSAMUNE_SPLIT_STATS_CFG_OFFSET))
@@ -1184,14 +1272,18 @@ typedef char susamune_cfg_input_style_check[(__builtin_offsetof(struct SusamuneC
 typedef char susamune_cfg_creation_check[(__builtin_offsetof(struct SusamuneCfg, creation) == 2144) ? 1 : -1];
 typedef char susamune_cfg_wallkick_style_check[(__builtin_offsetof(struct SusamuneCfg, wallkickStyle) == 2720) ? 1 : -1];
 typedef char susamune_iling_profiles_cfg_values_check[(__builtin_offsetof(struct SusamuneILingProfilesCfg, values) == 64) ? 1 : -1];
-typedef char susamune_iling_profiles_cfg_names_check[(__builtin_offsetof(struct SusamuneILingProfilesCfg, customNames) == 2112) ? 1 : -1];
-typedef char susamune_iling_profiles_cfg_size_check[(sizeof(struct SusamuneILingProfilesCfg) == 2144) ? 1 : -1];
+typedef char susamune_iling_profiles_cfg_names_check[(__builtin_offsetof(struct SusamuneILingProfilesCfg, customNames) == 2240) ? 1 : -1];
+typedef char susamune_iling_profiles_cfg_size_check[(sizeof(struct SusamuneILingProfilesCfg) == 2272) ? 1 : -1];
+typedef char susamune_iling_profiles_v1_cfg_names_check[(__builtin_offsetof(struct SusamuneILingProfilesCfgV1, customNames) == 2112) ? 1 : -1];
+typedef char susamune_iling_profiles_v1_cfg_size_check[(sizeof(struct SusamuneILingProfilesCfgV1) == 2144) ? 1 : -1];
 typedef char susamune_iling_profiles_file_values_check[(__builtin_offsetof(struct SusamuneILingProfilesFile, values) == 32) ? 1 : -1];
-typedef char susamune_iling_profiles_file_names_check[(__builtin_offsetof(struct SusamuneILingProfilesFile, customNames) == 2080) ? 1 : -1];
-typedef char susamune_iling_profiles_file_size_check[(sizeof(struct SusamuneILingProfilesFile) == 2112) ? 1 : -1];
+typedef char susamune_iling_profiles_file_names_check[(__builtin_offsetof(struct SusamuneILingProfilesFile, customNames) == 2208) ? 1 : -1];
+typedef char susamune_iling_profiles_file_size_check[(sizeof(struct SusamuneILingProfilesFile) == 2240) ? 1 : -1];
+typedef char susamune_iling_profiles_v1_file_names_check[(__builtin_offsetof(struct SusamuneILingProfilesFileV1, customNames) == 2080) ? 1 : -1];
+typedef char susamune_iling_profiles_v1_file_size_check[(sizeof(struct SusamuneILingProfilesFileV1) == 2112) ? 1 : -1];
 typedef char susamune_cfg_iling_profiles_check[(__builtin_offsetof(struct SusamuneCfg, ilingProfiles) == 2784) ? 1 : -1];
-typedef char susamune_cfg_movement_style_check[(__builtin_offsetof(struct SusamuneCfg, movementStyle) == 4928) ? 1 : -1];
-typedef char susamune_cfg_expanded_size_check[(sizeof(struct SusamuneCfg) == 5016) ? 1 : -1];
+typedef char susamune_cfg_movement_style_check[(__builtin_offsetof(struct SusamuneCfg, movementStyle) == 5056) ? 1 : -1];
+typedef char susamune_cfg_expanded_size_check[(sizeof(struct SusamuneCfg) == 5144) ? 1 : -1];
 typedef char susamune_progress_cfg_ack_check[(__builtin_offsetof(struct SusamuneProgressCfg, ackSeq) == 32) ? 1 : -1];
 typedef char susamune_progress_cfg_achievements_check[(__builtin_offsetof(struct SusamuneProgressCfg, achievements) == 64) ? 1 : -1];
 typedef char susamune_progress_cfg_stats_check[(__builtin_offsetof(struct SusamuneProgressCfg, stats) == 128) ? 1 : -1];
@@ -1228,7 +1320,9 @@ typedef char susamune_stage_targets_cfg_size_check[
 typedef char susamune_stage_targets_file_values_check[
     (__builtin_offsetof(struct SusamuneStageTargetsFile, targets) == 0x20) ? 1 : -1];
 typedef char susamune_stage_targets_file_size_check[
-    (sizeof(struct SusamuneStageTargetsFile) == 0x220) ? 1 : -1];
+    (sizeof(struct SusamuneStageTargetsFile) == 0x240) ? 1 : -1];
+typedef char susamune_stage_targets_v1_file_size_check[
+    (sizeof(struct SusamuneStageTargetsFileV1) == 0x220) ? 1 : -1];
 typedef char susamune_split_route_stats_size_check[
     (sizeof(struct SusamuneSplitRouteStats) == 12) ? 1 : -1];
 typedef char susamune_split_v1_payload_size_check[
@@ -1255,18 +1349,22 @@ typedef char susamune_split_v6_payload_size_check[
     (sizeof(struct SusamuneSplitStatsPayloadV6) == 0x6DF8) ? 1 : -1];
 typedef char susamune_split_v6_file_size_check[
     (sizeof(struct SusamuneSplitStatsFileV6) == 0x6FE0) ? 1 : -1];
+typedef char susamune_split_v7_payload_size_check[
+    (sizeof(struct SusamuneSplitStatsPayloadV7) == 0x6E34) ? 1 : -1];
+typedef char susamune_split_v7_file_size_check[
+    (sizeof(struct SusamuneSplitStatsFileV7) == 0x6FE0) ? 1 : -1];
 typedef char susamune_split_payload_size_check[
-    (sizeof(struct SusamuneSplitStatsPayload) == 0x6E34) ? 1 : -1];
+    (sizeof(struct SusamuneSplitStatsPayload) == 0x744C) ? 1 : -1];
 typedef char susamune_split_cfg_ack_check[
     (__builtin_offsetof(struct SusamuneSplitStatsCfg, ackSeq) == 0x20) ? 1 : -1];
 typedef char susamune_split_cfg_payload_check[
     (__builtin_offsetof(struct SusamuneSplitStatsCfg, payload) == 0x40) ? 1 : -1];
 typedef char susamune_split_cfg_size_check[
-    (sizeof(struct SusamuneSplitStatsCfg) == 0x7000) ? 1 : -1];
+    (sizeof(struct SusamuneSplitStatsCfg) == 0x7500) ? 1 : -1];
 typedef char susamune_split_file_payload_check[
     (__builtin_offsetof(struct SusamuneSplitStatsFile, payload) == 0x20) ? 1 : -1];
 typedef char susamune_split_file_size_check[
-    (sizeof(struct SusamuneSplitStatsFile) == 0x6FE0) ? 1 : -1];
+    (sizeof(struct SusamuneSplitStatsFile) == 0x74A0) ? 1 : -1];
 typedef char susamune_progress_alignment_check[(SUSAMUNE_PROGRESS_CFG_OFFSET % 32 == 0) ? 1 : -1];
 typedef char susamune_stage_playlist_alignment_check[(SUSAMUNE_STAGE_PLAYLIST_CFG_OFFSET % 32 == 0) ? 1 : -1];
 typedef char susamune_split_stats_alignment_check[(SUSAMUNE_SPLIT_STATS_CFG_OFFSET % 32 == 0) ? 1 : -1];

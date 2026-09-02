@@ -109,13 +109,23 @@ struct Painter {
 
     void button(int lx, int ly, int radius, bool down, int slot) const {
         const Color c = lit(slot, 0xbf);
+        if (scale(radius) <= 2) {
+            const int cx = x(lx);
+            const int cy = y(ly);
+            if (down) {
+                menu->fillBox(cx - 1, cy - 1, 3, 3, c);
+            } else {
+                menu->fillBox(cx - 1, cy - 1, 3, 1, c);
+                menu->fillBox(cx - 1, cy + 1, 3, 1, c);
+                menu->fillBox(cx - 1, cy, 1, 1, c);
+                menu->fillBox(cx + 1, cy, 1, 1, c);
+            }
+            return;
+        }
         // The original display is an outline at rest and gains a solid fill
         // only for the frames where the button is held.
         if (down) fillCircle(lx, ly, radius, c);
         strokeCircle(lx, ly, radius, c);
-        // The Start circle becomes only two pixels wide at minimum scale.
-        if (down && scale(radius) <= 2)
-            menu->fillBox(x(lx) - 1, y(ly) - 1, 3, 3, c);
     }
 };
 

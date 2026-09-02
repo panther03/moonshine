@@ -1,4 +1,4 @@
-"""Contracts for the same-version Bianco 2 split-schema migration."""
+"""Contracts for migrating the V7 Bianco 2 schemas into V8."""
 
 from __future__ import annotations
 
@@ -20,14 +20,18 @@ assert spec and spec.loader
 schema = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(schema)
 
-CURRENT_SCHEMA = 0x8ADD6B7D
+CURRENT_SCHEMA = 0xD0AAE2E5
+V7_SCHEMA = 0x8ADD6B7D
 PREVIOUS_SCHEMA = 0xB933B5AB
 LEGACY_BIANCO_SCHEMA = 0x4499A650
 UNSET = 0xFFFFFFFF
 REGIONS = 3
 PROFILES = 4
 B2_ROUTE = 13
-ROUTE_COUNTS = tuple(len(checkpoints) + 1 for checkpoints in schema.CHECKPOINTS)
+V7_ROUTES = 122
+ROUTE_COUNTS = tuple(
+    len(checkpoints) + 1 for checkpoints in schema.CHECKPOINTS[:V7_ROUTES]
+)
 ROUTE_FIRST = tuple(
     first + (1 if route > B2_ROUTE else 0)
     for route, first in enumerate((0,) + tuple(accumulate(ROUTE_COUNTS[:-1])))
@@ -120,11 +124,13 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
             rf"0x{LEGACY_BIANCO_SCHEMA:08X}u",
         )
 
-    def test_reader_accepts_only_current_and_two_bianco_predecessors(self) -> None:
+    def test_v7_reader_accepts_only_v7_and_two_bianco_predecessors(self) -> None:
         kernel = KERNEL.read_text(encoding="utf-8")
-        supported = function_block(kernel, "static bool SplitStatsSchemaSupported(")
-        reader = function_block(kernel, "static enum PbReadResult ReadSplitStatsFile(")
-        self.assertIn("schemaHash == SUSAMUNE_SPLIT_STATS_SCHEMA_HASH", supported)
+        supported = function_block(kernel, "static bool SplitStatsV7SchemaSupported(")
+        reader = function_block(
+            kernel, "static enum PbReadResult ReadSplitStatsV7File("
+        )
+        self.assertIn("schemaHash == SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH", supported)
         self.assertIn(
             "schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", supported
         )
@@ -133,8 +139,8 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
             supported,
         )
         self.assertEqual(supported.count("schemaHash =="), 3)
-        self.assertGreaterEqual(reader.count("SplitStatsSchemaSupported"), 3)
-        self.assertIn("file->checksum != SplitStatsChecksum(file)", reader)
+        self.assertGreaterEqual(reader.count("SplitStatsV7SchemaSupported"), 3)
+        self.assertIn("file->checksum != SplitStatsV7Checksum(file)", reader)
 
     def test_only_incompatible_b2_timing_history_is_invalidated(self) -> None:
         old = populated_payload()
@@ -192,16 +198,11 @@ class PreviousSchemaMigrationContracts(unittest.TestCase):
         self.assertIn("pbIdentityQf[region][profile][route]", migration)
         self.assertIn("&payload->pbQf[region][profile][first]", migration)
         self.assertNotIn("playedQf", migration)
-        self.assertIn("file->schemaHash != selectedSchemaHash", init)
-        self.assertIn("selectedSchemaHash = file->schemaHash", init)
         self.assertIn(
-            "selectedSchemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH",
-            init,
+            "v7->schemaHash != SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH", init
         )
-        self.assertIn(
-            "selectedSchemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH",
-            init,
-        )
+        self.assertIn("ReadSplitStatsV7File", init)
+        self.assertIn("MigrateSplitStatsV7", init)
         self.assertIn("SplitRouteCount[route] + 1", migration)
         self.assertIn("MigrateSplitStatsPreviousSchema(&stats->payload)", init)
         self.assertIn("migrated = true", init)

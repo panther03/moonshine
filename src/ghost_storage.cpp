@@ -28,6 +28,7 @@ const char kExportingShare[] = "Exporting .smsghost file";
 const char kImportingShare[] = "Scanning imported ghosts";
 const char kSaved[] = "Ghost saved";
 const char kLoaded[] = "Ghost loaded";
+const char kRaceLoaded[] = "Ghost ready - restart to race";
 const char kDeleted[] = "Ghost deleted";
 const char kExportedShare[] = "Ghost exported to share folder";
 const char kExportExists[] = "Export filename already exists";
@@ -651,7 +652,7 @@ void completeRequest(const SusamuneGhostStorageResponse &response) {
         }
         sLoadedProfile = static_cast<u8>(requestProfile);
         sLoadedSlot = static_cast<s8>(requestSlot);
-        notify(kLoaded);
+        notify(kRaceLoaded);
         if (requestProfile != SUSAMUNE_GHOST_IMPORTED_PROFILE) queueRefresh();
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host contracts for the V7 IL split journal, migration, and overlay."""
+"""Host contracts for the V8 IL split journal, migration, and overlay."""
 
 from __future__ import annotations
 
@@ -34,9 +34,9 @@ checkpoint_schema = importlib.util.module_from_spec(schema_spec)
 schema_spec.loader.exec_module(checkpoint_schema)
 
 MAGIC = 0x53535446
-VERSION = 7
-ROUTES = 122
-SEGMENTS = 275
+VERSION = 8
+ROUTES = 132
+SEGMENTS = 285
 REGIONS = 3
 PROFILES = 4
 SCHEMA_HASH = checkpoint_schema.EXPECTED_SCHEMA_HASH
@@ -44,10 +44,17 @@ V2_SCHEMA_HASH = 0xE70B57F8
 PR7_SCHEMA_HASH = 0xB9B6E310
 UNSET = 0xFFFFFFFF
 MAX_QF = 0x000AF9B0
-PAYLOAD_SIZE = 0x6E34
-FILE_SIZE = 0x6FE0
-MAILBOX_SIZE = 0x7000
-MAILBOX_OFFSET = 0x8800
+PAYLOAD_SIZE = 0x744C
+FILE_SIZE = 0x74A0
+MAILBOX_SIZE = 0x7500
+MAILBOX_OFFSET = 0x8280
+
+V7_VERSION = 7
+V7_ROUTES = 122
+V7_SEGMENTS = 275
+V7_SCHEMA_HASH = 0x8ADD6B7D
+V7_PREVIOUS_SCHEMA_HASH = 0xB933B5AB
+V7_LEGACY_BIANCO_SCHEMA_HASH = 0x4499A650
 
 V5_VERSION = 5
 V5_ROUTES = 61
@@ -189,6 +196,23 @@ def blank_payload() -> dict[str, list]:
         ],
         "pb": [
             [[UNSET] * SEGMENTS for _ in range(PROFILES)] for _ in range(REGIONS)
+        ],
+    }
+
+
+def blank_v7_payload() -> dict[str, list]:
+    return {
+        "stats": [[[0, 0, 0] for _ in range(V7_ROUTES)]
+                  for _ in range(REGIONS)],
+        "played": [[0] * V7_ROUTES for _ in range(REGIONS)],
+        "best": [[UNSET] * V7_SEGMENTS for _ in range(REGIONS)],
+        "identity": [
+            [[UNSET] * V7_ROUTES for _ in range(PROFILES)]
+            for _ in range(REGIONS)
+        ],
+        "pb": [
+            [[UNSET] * V7_SEGMENTS for _ in range(PROFILES)]
+            for _ in range(REGIONS)
         ],
     }
 
@@ -513,6 +537,35 @@ def migrate_v5(v5: dict[str, list]) -> dict[str, list]:
     return out
 
 
+def migrate_v7(v7: dict[str, list], schema: int = V7_SCHEMA_HASH
+               ) -> dict[str, list]:
+    out = blank_payload()
+    for region in range(REGIONS):
+        out["stats"][region][:V7_ROUTES] = deepcopy(v7["stats"][region])
+        out["played"][region][:V7_ROUTES] = list(v7["played"][region])
+        out["best"][region][:V7_SEGMENTS] = list(v7["best"][region])
+        for profile in range(PROFILES):
+            out["identity"][region][profile][:V7_ROUTES] = list(
+                v7["identity"][region][profile]
+            )
+            out["pb"][region][profile][:V7_SEGMENTS] = list(
+                v7["pb"][region][profile]
+            )
+
+    if schema != V7_SCHEMA_HASH:
+        route = 13
+        first = ROUTE_FIRST[route]
+        # Five live segments plus the retired FMV slot immediately after them.
+        end = first + ROUTE_COUNTS[route] + 1
+        for region in range(REGIONS):
+            out["stats"][region][route][2] = 0
+            out["best"][region][first:end] = [UNSET] * (end - first)
+            for profile in range(PROFILES):
+                out["identity"][region][profile][route] = UNSET
+                out["pb"][region][profile][first:end] = [UNSET] * (end - first)
+    return out
+
+
 def select_v2(records: list[tuple[int, int, dict[str, list], bool] | None]
               ) -> tuple[bool, tuple[int, int, dict[str, list], bool] | None]:
     safe = True
@@ -552,32 +605,33 @@ class SplitContractTests(unittest.TestCase):
             "SUSAMUNE_SPLIT_STATS_V4_SCHEMA_HASH": "0x2E5CC875u",
             "SUSAMUNE_SPLIT_STATS_V3_SCHEMA_HASH": "0xD452F6FDu",
             "SUSAMUNE_SPLIT_STATS_PR7_SCHEMA_HASH": "0xB9B6E310u",
-            "SUSAMUNE_SPLIT_STATS_CFG_OFFSET": "0x8800u",
+            "SUSAMUNE_SPLIT_STATS_CFG_OFFSET": "0x8280u",
         }
         for name, value in expected.items():
             self.assertRegex(text, rf"#define\s+{name}\s+{value}")
-        self.assertIn("SUSAMUNE_SPLIT_STATS_VERSION        7u", text)
-        self.assertIn("SUSAMUNE_SPLIT_STATS_ROUTE_COUNT    122u", text)
-        self.assertIn("SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT  275u", text)
-        self.assertIn("SUSAMUNE_ILING_PB_SLOT_COUNT     126u", text)
-        self.assertIn("sizeof(struct SusamuneSplitStatsPayload) == 0x6E34", text)
-        self.assertIn("sizeof(struct SusamuneSplitStatsCfg) == 0x7000", text)
-        self.assertIn("sizeof(struct SusamuneSplitStatsFile) == 0x6FE0", text)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_VERSION        8u", text)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_ROUTE_COUNT    132u", text)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT  285u", text)
+        self.assertIn("SUSAMUNE_ILING_PB_SLOT_COUNT          136u", text)
+        self.assertIn("sizeof(struct SusamuneSplitStatsPayload) == 0x744C", text)
+        self.assertIn("sizeof(struct SusamuneSplitStatsCfg) == 0x7500", text)
+        self.assertIn("sizeof(struct SusamuneSplitStatsFile) == 0x74A0", text)
+        self.assertIn("sizeof(struct SusamuneSplitStatsFileV7) == 0x6FE0", text)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV5) == 0x47E0", text)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV4) == 0x47E0", text)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV3) == 0x4540", text)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV2) == 0xC60", text)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV1) == 0x340", text)
         self.assertEqual(FILE_HEADER.size, 0x20)
-        self.assertEqual(MAILBOX_OFFSET + MAILBOX_SIZE, 0xF800)
+        self.assertEqual(MAILBOX_OFFSET + MAILBOX_SIZE, 0xF780)
 
     def test_split_runtime_is_bss_and_mailbox_partition_is_exact(self) -> None:
         text = MEM2.read_text(encoding="utf-8")
         source = SPLITS.read_text(encoding="utf-8")
         self.assertNotIn("SPLIT_STATS_RUNTIME", text)
         self.assertIn("Runtime sStateStorage;", source)
-        self.assertIn("sizeof(Runtime) == 0x6E90", source)
-        self.assertEqual(MAILBOX_OFFSET + MAILBOX_SIZE, 0xF800)
+        self.assertIn("sizeof(Runtime) == 0x74A8", source)
+        self.assertEqual(MAILBOX_OFFSET + MAILBOX_SIZE, 0xF780)
 
     def test_route_indices_match_catalog_labels(self) -> None:
         lines = ILING_ENTRIES.read_text(encoding="utf-8")
@@ -600,7 +654,7 @@ class SplitContractTests(unittest.TestCase):
         self.assertRegex(text, r"ROUTE_BOWSER\s*=\s*58")
         self.assertRegex(text, r"ROUTE_RICCO_2_RACE\s*=\s*59")
         self.assertRegex(text, r"ROUTE_RICCO_4_SECRET\s*=\s*60")
-        self.assertRegex(text, r"ROUTE_COUNT\s*=\s*122")
+        self.assertRegex(text, r"ROUTE_COUNT\s*=\s*132")
 
     def test_gbs_uses_credited_route_only_for_stage_loader_alias(self) -> None:
         source = SPLITS.read_text(encoding="utf-8")
@@ -791,6 +845,77 @@ class SplitContractTests(unittest.TestCase):
                             migrated["pb"][region][profile][first:end],
                             payload["pb"][region][profile][first:end],
                         )
+
+    def test_v7_migration_retains_every_old_slot_and_appends_clean_routes(self) -> None:
+        payload = blank_v7_payload()
+        for region in range(REGIONS):
+            for route in range(V7_ROUTES):
+                payload["stats"][region][route] = [20 + route, 10, 7]
+                payload["played"][region][route] = 1000 + route
+                for profile in range(PROFILES):
+                    payload["identity"][region][profile][route] = (
+                        2000 + profile * 200 + route
+                    )
+            payload["best"][region] = [3000 + i for i in range(V7_SEGMENTS)]
+            for profile in range(PROFILES):
+                payload["pb"][region][profile] = [
+                    4000 + profile * 300 + i for i in range(V7_SEGMENTS)
+                ]
+
+        migrated = migrate_v7(payload)
+        self.assertTrue(valid_payload(migrated))
+        for region in range(REGIONS):
+            self.assertEqual(migrated["stats"][region][:V7_ROUTES],
+                             payload["stats"][region])
+            self.assertEqual(migrated["played"][region][:V7_ROUTES],
+                             payload["played"][region])
+            self.assertEqual(migrated["best"][region][:V7_SEGMENTS],
+                             payload["best"][region])
+            self.assertEqual(migrated["stats"][region][V7_ROUTES:],
+                             [[0, 0, 0]] * (ROUTES - V7_ROUTES))
+            self.assertEqual(migrated["played"][region][V7_ROUTES:],
+                             [0] * (ROUTES - V7_ROUTES))
+            self.assertEqual(migrated["best"][region][V7_SEGMENTS:],
+                             [UNSET] * (SEGMENTS - V7_SEGMENTS))
+            for profile in range(PROFILES):
+                self.assertEqual(
+                    migrated["identity"][region][profile][:V7_ROUTES],
+                    payload["identity"][region][profile],
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile][:V7_SEGMENTS],
+                    payload["pb"][region][profile],
+                )
+                self.assertEqual(
+                    migrated["identity"][region][profile][V7_ROUTES:],
+                    [UNSET] * (ROUTES - V7_ROUTES),
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile][V7_SEGMENTS:],
+                    [UNSET] * (SEGMENTS - V7_SEGMENTS),
+                )
+
+        legacy = migrate_v7(payload, V7_PREVIOUS_SCHEMA_HASH)
+        b2_first = ROUTE_FIRST[13]
+        b2_end = b2_first + ROUTE_COUNTS[13] + 1
+        for region in range(REGIONS):
+            self.assertEqual(legacy["stats"][region][13][:2],
+                             payload["stats"][region][13][:2])
+            self.assertEqual(legacy["stats"][region][13][2], 0)
+            self.assertEqual(legacy["best"][region][b2_first:b2_end],
+                             [UNSET] * (b2_end - b2_first))
+            self.assertEqual(legacy["best"][region][b2_end],
+                             payload["best"][region][b2_end])
+            for profile in range(PROFILES):
+                self.assertEqual(legacy["identity"][region][profile][13], UNSET)
+                self.assertEqual(legacy["pb"][region][profile]
+                                 [b2_first:b2_end],
+                                 [UNSET] * (b2_end - b2_first))
+                self.assertEqual(legacy["pb"][region][profile][b2_end],
+                                 payload["pb"][region][profile][b2_end])
+
+        kernel = KERNEL.read_text(encoding="utf-8")
+        self.assertIn("const u32 count = SplitRouteCount[route] + 1;", kernel)
 
     def test_v2_migration_preserves_history_but_resets_changed_routes(self) -> None:
         payload = blank_v2_payload()
@@ -1212,6 +1337,8 @@ class SplitContractTests(unittest.TestCase):
 
     def test_kernel_uses_atomic_ab_and_serial_service(self) -> None:
         source = KERNEL.read_text(encoding="utf-8")
+        self.assertIn("susamune_il_stats_v8_a.bin", source)
+        self.assertIn("susamune_il_stats_v8_b.bin", source)
         self.assertIn("susamune_il_stats_v7_a.bin", source)
         self.assertIn("susamune_il_stats_v7_b.bin", source)
         self.assertIn("susamune_il_stats_v6_a.bin", source)
@@ -1230,6 +1357,8 @@ class SplitContractTests(unittest.TestCase):
         self.assertIn("MigrateSplitStatsV3", source)
         self.assertIn("ReadSplitStatsV6File", source)
         self.assertIn("MigrateSplitStatsV6", source)
+        self.assertIn("ReadSplitStatsV7File", source)
+        self.assertIn("MigrateSplitStatsV7", source)
         self.assertIn("ReadSplitStatsV1File", source)
         self.assertIn("MigrateSplitStatsV1", source)
         self.assertIn("SUSAMUNE_SPLIT_STATS_FLAG_MIGRATED", source)
@@ -1238,7 +1367,13 @@ class SplitContractTests(unittest.TestCase):
         self.assertGreaterEqual(v5_read.count("return PB_READ_UNSAFE;"), 4)
         self.assertIn("struct SusamuneSplitStatsFile, generation", v5_read)
         self.assertIn("file->checksum != SplitStatsChecksum(file)", v5_read)
-        self.assertIn("!SplitStatsSchemaSupported(file->schemaHash)", v5_read)
+        self.assertIn(
+            "file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH",
+            v5_read,
+        )
+        v7_read = source[source.index("static enum PbReadResult ReadSplitStatsV7File") :]
+        v7_read = v7_read[:v7_read.index("static void MigrateSplitStatsV7")]
+        self.assertIn("!SplitStatsV7SchemaSupported(file->schemaHash)", v7_read)
         self.assertIn("SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", source)
         v4_read = source[source.index("static enum PbReadResult ReadSplitStatsV4File") :]
         v4_read = v4_read[:v4_read.index("static bool SplitStatsV4RemovedCheckpoint")]

@@ -94,10 +94,8 @@ bool isWaterSlide(const TMario *mario) {
         return true;
     }
     const TBGCheckData *floor = mario->mFloorTriangle;
-    if (!floor) return false;
-    // frontSlipEffect treats the four wet-ground variants as water.
-    const u16 type = floor->mType & 0x3FFFu;
-    return type == 0x0004u;
+    // Retail includes both wet stage collision and FLUDD's model-water plane.
+    return floor && floor->isWaterSlip();
 }
 
 }  // namespace

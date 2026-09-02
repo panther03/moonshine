@@ -35,16 +35,18 @@ class GelatoGbsContracts(unittest.TestCase):
     def test_catalog_alias_is_append_only_and_distinct(self) -> None:
         entries = ENTRIES.read_text(encoding="utf-8").rstrip()
         iling = ILING.read_text(encoding="utf-8")
-        self.assertTrue(
-            entries.endswith(
-                'SHINE_ROUTE("Gelato GBS", 4, 0, 0, 27, '
-                "GROUP_ANY_PERCENT, 125)"
-            )
+        self.assertIn(
+            'SHINE_ROUTE("Gelato GBS", 4, 0, 0, 27, '
+            "GROUP_ANY_PERCENT, 125)",
+            entries,
         )
         self.assertEqual(iling.count("#define SHINE_ROUTE"), 4)
         self.assertEqual(iling.count("#undef SHINE_ROUTE"), 4)
         self.assertIn("const int kEntryGelatoGbs = 121;", iling)
-        self.assertIn("const int kPbSlotCount = 126;", iling)
+        self.assertIn(
+            "const int kPbSlotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;",
+            iling,
+        )
         self.assertIn('"SE\\0NE\\0CE\\0GGBS"', iling)
         self.assertIn("if (i == kEntryGelatoGbs) continue;", iling)
         self.assertRegex(
@@ -76,21 +78,15 @@ class GelatoGbsContracts(unittest.TestCase):
         header = ILING_HEADER.read_text(encoding="utf-8")
         menu = MENU.read_text(encoding="utf-8")
 
-        self.assertIn("const int kMenuGelatoGbsPosition = 38;", iling)
         self.assertRegex(
             iling,
             r"kMenuGroupFirst\[GROUP_COUNT\]\s*=\s*\{\s*"
-            r"0, 13, 25, 39, 53, 66, 79, 91, 93, 95, 111\s*\}",
+            r"0, 15, 28, 43, 59, 74, 88, 101, 103, 105, 121\s*\}",
         )
-        self.assertIn(
-            "if (position == kMenuGelatoGbsPosition) "
-            "return kEntryGelatoGbs;",
-            iling,
-        )
-        self.assertIn("int entry = position - 1;", iling)
-        self.assertIn("if (entry >= kEntryGelatoGbs) entry++;", iling)
+        self.assertIn("121, 126, 127, 128, 129, 130, 131", iling)
         for declaration in (
             "int menuEntryAt(int position);",
+            "int menuPositionOf(int entry);",
             "int jumpMenuGroup(int position, int direction);",
             "bool beginsMenuGroup(int position);",
             "const char *menuGroupName(int position);",
@@ -103,6 +99,9 @@ class GelatoGbsContracts(unittest.TestCase):
         self.assertIn("ILing::beginsMenuGroup(position)", ils_tab)
         self.assertIn("ILing::menuGroupName(position)", ils_tab)
         self.assertIn("ILing::jumpMenuGroup(position, direction)", ils_tab)
+        loader_tab = menu[menu.index("class StageLoaderTab") :]
+        self.assertIn("ILing::menuEntryAt(position)", loader_tab)
+        self.assertIn("ILing::beginsMenuGroup(position)", loader_tab)
 
     def test_fast_any_uses_route_but_legacy_action_survives(self) -> None:
         source = STAGE_LOADER.read_text(encoding="utf-8")

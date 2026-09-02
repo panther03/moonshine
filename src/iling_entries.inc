@@ -143,3 +143,16 @@ PLAZA("Corona Enter", 9, 9, FINISH_TRANSITION,
       TGameSequence::AREA_COROEX6, 111)
 
 SHINE_ROUTE("Gelato GBS", 4, 0, 0, 27, GROUP_ANY_PERCENT, 125)
+
+// Append-only: these retain their parent-stage starts while awarding the
+// replay Shine inside the secret. Their PB slots must never replace Reds.
+SHINE_FULL_REDS("Bianco 3 Full Reds", 2, 2, 2, 8, GROUP_BIANCO, 126, 2)
+SHINE_FULL_REDS("Bianco 6 Full Reds", 2, 5, 5, 9, GROUP_BIANCO, 127, 5)
+SHINE_FULL_REDS("Ricco 4 Full Reds", 3, 3, 3, 18, GROUP_RICCO, 128, 13)
+SHINE_FULL_REDS("Gelato 1 Full Reds", 4, 0, 0, 28, GROUP_GELATO, 129, 20)
+SHINE_FULL_REDS("Pinna 2 Full Reds", 5, 1, 1, 38, GROUP_PINNA, 130, 31)
+SHINE_FULL_REDS("Pinna 6 Full Reds", 0x0D, 3, 5, 39, GROUP_PINNA, 131, 35)
+SHINE_FULL_REDS("Sirena 2 Full Reds", 6, 1, 1, 48, GROUP_SIRENA, 132, 41)
+SHINE_FULL_REDS("Sirena 4 Full Reds", 6, 3, 3, 49, GROUP_SIRENA, 133, 43)
+SHINE_FULL_REDS("Noki 6 Full Reds", 9, 5, 5, 58, GROUP_NOKI, 134, 55)
+SHINE_FULL_REDS("Pianta 5 Full Reds", 8, 4, 4, 68, GROUP_PIANTA, 135, 64)

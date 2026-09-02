@@ -84,6 +84,10 @@
     SUSAMUNE_MEM1_ADDR(0x803d8e0cu, 0x803b45d4u, 0x803ac3f4u)
 #define SUSAMUNE_VT_POIHANA_COLLISION \
     SUSAMUNE_MEM1_ADDR(0x803dbd78u, 0x803b7530u, 0x803af350u)
+#define SUSAMUNE_VT_BOSS_EEL \
+    SUSAMUNE_MEM1_ADDR(0x803dd4f4u, 0x803b8e1cu, 0x803b0c3cu)
+#define SUSAMUNE_VT_BOSS_EEL_BODY_COLLISION \
+    SUSAMUNE_MEM1_ADDR(0x803dd80cu, 0x803b9134u, 0x803b0f54u)
 
 // TGraphWeb::findNearestNodeIndex. This symbol is absent from the project's
 // generated linker scripts in some checkouts, so Pattern Selector calls the

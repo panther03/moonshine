@@ -9,7 +9,7 @@ FNV_PRIME = 16777619
 EXPECTED_V5_SCHEMA_HASH = 0xA91743AA
 # Filled by the assertion at the bottom. Update only with an intentional
 # append-only route or checkpoint-schema revision.
-EXPECTED_SCHEMA_HASH = 0x8ADD6B7D
+EXPECTED_SCHEMA_HASH = 0xD0AAE2E5
 
 V5_ROUTE_ENTRIES = (
     5, 121, 85, 13, 14, 16, 17, 20, 21, 22,
@@ -32,6 +32,7 @@ ROUTE_ENTRIES = V5_ROUTE_ENTRIES + (
     95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
     105, 106, 107, 108, 109, 114, 116, 117, 118, 119,
     120,
+    122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
 )
 
 # One line per persistent route, in RouteId order. ``@@`` separates its
@@ -172,8 +173,8 @@ def v5_schema_hash() -> int:
 
 assert len(V5_ROUTE_ENTRIES) == len(V5_CHECKPOINTS) == 61
 assert v5_schema_hash() == EXPECTED_V5_SCHEMA_HASH
-assert len(ROUTE_ENTRIES) == len(CHECKPOINTS) == 122
-assert len(set(ROUTE_ENTRIES)) == 122
-assert set(ROUTE_ENTRIES) == set(range(122))
+assert len(ROUTE_ENTRIES) == len(CHECKPOINTS) == 132
+assert len(set(ROUTE_ENTRIES)) == 132
+assert set(ROUTE_ENTRIES) == set(range(132))
 assert sum(map(len, CHECKPOINTS)) == 152
 assert schema_hash() == EXPECTED_SCHEMA_HASH

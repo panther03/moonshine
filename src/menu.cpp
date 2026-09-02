@@ -2669,7 +2669,7 @@ private:
         drawValueRow(menu, x, ry, w, "Unlock popup and chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR5",
+        menu->drawText("Moonshine V2.2.0 PR6",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3196,7 +3196,10 @@ const u8 kDisplayOtherSettings[] = {
     SETTING_SHOW_BGM_SLOTS,
     SETTING_RESTART_QUEUED_FEEDBACK,
     SETTING_PINNA_HIDDEN_ITEMS,
+    SETTING_HIDDEN_ITEM_LABELS,
     SETTING_ENEMY_HURTBOXES,
+    SETTING_HURTBOX_TARGET,
+    SETTING_RICCO_RACE_CHECKPOINTS,
 };
 const SettingPage kDisplayPages[] = {
     {"Movement displays", kDisplayMovementSettings,
@@ -4245,12 +4248,14 @@ public:
         }
         row++;
 
-        for (int entry = 0; entry < entries && row < end; entry++) {
+        for (int position = 0; position < entries && row < end;
+             position++) {
+            const int entry = ILing::menuEntryAt(position);
             if (!catalogueIncludesEntry(entry)) continue;
-            if (ILing::beginsGroup(entry)) {
+            if (ILing::beginsMenuGroup(position)) {
                 if (row >= start) {
                     drawSectionHeader(menu, x, ry, w,
-                                      ILing::groupName(entry));
+                                      ILing::menuGroupName(position));
                     ry += ROW_H;
                 }
                 row++;
@@ -4355,7 +4360,8 @@ private:
         return count;
     }
     int catalogueEntryAt(int index) const {
-        for (int entry = 0; entry < ILing::count(); entry++) {
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
             if (!catalogueIncludesEntry(entry)) continue;
             if (index-- == 0) return entry;
         }
@@ -4363,7 +4369,8 @@ private:
     }
     int catalogueIndexForEntry(int selected) const {
         int index = 0;
-        for (int entry = 0; entry < ILing::count(); entry++) {
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
             if (!catalogueIncludesEntry(entry)) continue;
             if (entry == selected) return index;
             index++;
@@ -4488,15 +4495,19 @@ private:
 
     void jumpCatalogue(int direction) {
         const int entry = catalogueEntry();
-        int groupFirst = entry;
-        while (groupFirst > 0 && !ILing::beginsGroup(groupFirst)) groupFirst--;
-        const int destination = ILing::jumpGroup(entry, direction);
+        const int position = ILing::menuPositionOf(entry);
+        int groupFirst = position;
+        while (groupFirst > 0 && !ILing::beginsMenuGroup(groupFirst)) {
+            groupFirst--;
+        }
+        const int destination = ILing::jumpMenuGroup(position, direction);
         if ((direction < 0 && groupFirst == 0) ||
             (direction > 0 && destination == 0)) {
             mSel = OPTION_MODE;
             return;
         }
-        mSel = catalogueFirst() + catalogueIndexForEntry(destination);
+        mSel = catalogueFirst() + catalogueIndexForEntry(
+            ILing::menuEntryAt(destination));
     }
 
     void jumpFromOptions(int direction) {
@@ -4668,9 +4679,10 @@ private:
 
     int catalogueRowForEntry(int selected) const {
         int row = 0;
-        for (int entry = 0; entry <= selected; entry++) {
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
             if (!catalogueIncludesEntry(entry)) continue;
-            if (ILing::beginsGroup(entry)) row++;
+            if (ILing::beginsMenuGroup(position)) row++;
             if (entry == selected) return row;
             row++;
         }
@@ -4679,9 +4691,10 @@ private:
 
     int catalogueRowCount() const {
         int rows = 0;
-        for (int entry = 0; entry < ILing::count(); entry++) {
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
             if (!catalogueIncludesEntry(entry)) continue;
-            if (ILing::beginsGroup(entry)) rows++;
+            if (ILing::beginsMenuGroup(position)) rows++;
             rows++;
         }
         return rows;

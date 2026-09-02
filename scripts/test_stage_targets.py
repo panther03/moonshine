@@ -19,15 +19,19 @@ STAGE_LOADER = ROOT / "src" / "stage_loader.cpp"
 ILING = ROOT / "src" / "iling.cpp"
 
 MAGIC = 0x53544746
-VERSION = 1
-SLOTS = 128
+VERSION_V1 = 1
+VERSION = 2
+SLOTS_V1 = 128
+SLOTS = 136
 UNSET = -1
 MAX_QF = 0x000AF9B0
-MAILBOX_SIZE = 0x240
-FILE_SIZE = 0x220
-LIVE_SIZE = 0x200
+MAILBOX_SIZE = 0x260
+FILE_SIZE_V1 = 0x220
+FILE_SIZE = 0x240
+LIVE_SIZE = 0x220
 
 FILE_HEADER = struct.Struct(">IHHIII12s")
+TARGET_ARRAY_V1 = struct.Struct(">" + "i" * SLOTS_V1)
 TARGET_ARRAY = struct.Struct(">" + "i" * SLOTS)
 
 
@@ -35,9 +39,11 @@ def hash_word(value: int, word: int) -> int:
     return ((value ^ (word & 0xFFFFFFFF)) * 16777619) & 0xFFFFFFFF
 
 
-def checksum(game_id: int, generation: int, targets: tuple[int, ...]) -> int:
+def checksum(
+    version: int, game_id: int, generation: int, targets: tuple[int, ...]
+) -> int:
     value = 2166136261
-    value = hash_word(value, (VERSION << 16) | SLOTS)
+    value = hash_word(value, (version << 16) | len(targets))
     value = hash_word(value, game_id)
     value = hash_word(value, generation)
     for target in targets:
@@ -49,36 +55,40 @@ def build_file(
     targets: tuple[int, ...], *, game_id: int = 0x474D534A,
     generation: int = 1, version: int = VERSION,
 ) -> bytes:
-    if len(targets) != SLOTS:
+    expected_slots = SLOTS_V1 if version == VERSION_V1 else SLOTS
+    if len(targets) != expected_slots:
         raise ValueError("wrong target count")
-    digest = checksum(game_id, generation, targets)
+    digest = checksum(version, game_id, generation, targets)
     raw = FILE_HEADER.pack(
-        MAGIC, version, SLOTS, game_id, generation, digest, bytes(12)
-    ) + TARGET_ARRAY.pack(*targets)
-    if len(raw) != FILE_SIZE:
+        MAGIC, version, expected_slots, game_id, generation, digest, bytes(12)
+    ) + struct.pack(">" + "i" * expected_slots, *targets)
+    expected_size = FILE_SIZE_V1 if version == VERSION_V1 else FILE_SIZE
+    if len(raw) != expected_size:
         raise AssertionError("target journal layout changed")
     return raw
 
 
 def parse_file(raw: bytes, game_id: int = 0x474D534A) -> tuple[int, tuple[int, ...]]:
-    if len(raw) != FILE_SIZE:
+    if len(raw) not in (FILE_SIZE_V1, FILE_SIZE):
         raise ValueError("wrong file size")
     magic, version, slots, stored_game, generation, digest, reserved = (
         FILE_HEADER.unpack_from(raw)
     )
-    if version != VERSION:
+    if version not in (VERSION_V1, VERSION):
         raise RuntimeError("unknown version must be preserved")
-    targets = TARGET_ARRAY.unpack_from(raw, FILE_HEADER.size)
+    expected_slots = SLOTS_V1 if version == VERSION_V1 else SLOTS
+    if slots != expected_slots:
+        raise ValueError("wrong slot count")
+    targets = struct.unpack_from(">" + "i" * slots, raw, FILE_HEADER.size)
     if (
         magic != MAGIC
-        or slots != SLOTS
         or stored_game != game_id
         or reserved != bytes(12)
-        or digest != checksum(stored_game, generation, targets)
+        or digest != checksum(version, stored_game, generation, targets)
         or any(target < UNSET or target > MAX_QF for target in targets)
     ):
         raise ValueError("invalid target journal")
-    return generation, targets
+    return generation, targets + (UNSET,) * (SLOTS - slots)
 
 
 def generation_is_newer(candidate: int, current: int) -> bool:
@@ -98,6 +108,16 @@ class StageTargetJournalTests(unittest.TestCase):
         self.assertEqual(MAILBOX_SIZE, 0x40 + LIVE_SIZE)
         self.assertEqual(generation, 7)
         self.assertEqual(decoded, targets)
+
+    def test_v1_file_migrates_without_reusing_new_slots(self) -> None:
+        old_targets = tuple(300 + slot for slot in range(SLOTS_V1))
+        generation, decoded = parse_file(
+            build_file(old_targets, version=VERSION_V1, generation=19)
+        )
+        self.assertEqual(TARGET_ARRAY_V1.size, 0x200)
+        self.assertEqual(generation, 19)
+        self.assertEqual(decoded[:SLOTS_V1], old_targets)
+        self.assertEqual(decoded[SLOTS_V1:], (UNSET,) * 8)
 
     def test_corruption_and_out_of_range_values_are_rejected(self) -> None:
         raw = bytearray(build_file((UNSET,) * SLOTS))
@@ -134,13 +154,16 @@ class StageTargetSourceContractTests(unittest.TestCase):
         cls.stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
         cls.iling = ILING.read_text(encoding="utf-8")
 
-    def test_shared_abi_matches_the_v1_journal(self) -> None:
+    def test_shared_abi_keeps_v1_and_expands_v2(self) -> None:
         for contract in (
-            "#define SUSAMUNE_STAGE_TARGET_VERSION        1u",
-            "#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT     128u",
+            "#define SUSAMUNE_STAGE_TARGET_VERSION_V1     1u",
+            "#define SUSAMUNE_STAGE_TARGET_VERSION        2u",
+            "#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1  128u",
+            "#define SUSAMUNE_STAGE_TARGET_SLOT_COUNT     136u",
             "#define SUSAMUNE_STAGE_TARGET_UNSET          (-1)",
             "sizeof(struct SusamuneStageTargetsCfg) == SUSAMUNE_STAGE_TARGETS_CFG_SIZE",
-            "sizeof(struct SusamuneStageTargetsFile) == 0x220",
+            "sizeof(struct SusamuneStageTargetsFile) == 0x240",
+            "sizeof(struct SusamuneStageTargetsFileV1) == 0x220",
             "__builtin_offsetof(struct SusamuneStageTargetsCfg, targets) == 0x40",
         ):
             self.assertIn(contract, self.header)
@@ -150,11 +173,11 @@ class StageTargetSourceContractTests(unittest.TestCase):
         dolphin_base = 0x70FF4800 + 0x100
         self.assertEqual(console_base, 0x92EF5500)
         self.assertEqual(dolphin_base, 0x70FF4900)
-        self.assertLessEqual(console_base + MAILBOX_SIZE + LIVE_SIZE, 0x92EF8800)
-        self.assertLessEqual(dolphin_base + MAILBOX_SIZE + LIVE_SIZE, 0x70FF8800)
+        self.assertLessEqual(console_base + MAILBOX_SIZE + LIVE_SIZE, 0x92EF8280)
+        self.assertLessEqual(dolphin_base + MAILBOX_SIZE + LIVE_SIZE, 0x70FF8280)
         self.assertIn("SUSAMUNE_CONSOLE_STAGE_LOADER_QUEUE_PPC_BASE +", self.mem2)
         self.assertIn("SUSAMUNE_DOLPHIN_STAGE_LOADER_QUEUE_PPC_BASE +", self.mem2)
-        self.assertIn("SUSAMUNE_SPLIT_STATS_CFG_OFFSET 0x8800u", self.header)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_CFG_OFFSET 0x8280u", self.header)
         self.assertIn("susamune_split_stats_stage_target_gap_check", self.header)
         self.assertNotIn("0x6D40", self.mem2)
 
@@ -163,6 +186,9 @@ class StageTargetSourceContractTests(unittest.TestCase):
         self.assertIn('"%s/susamune_stage_targets_%s_b.bin"', self.kernel)
         self.assertIn("PbGenerationIsNewer(file.generation", self.kernel)
         self.assertIn("file->version != SUSAMUNE_STAGE_TARGET_VERSION", self.kernel)
+        self.assertIn("StageTargetChecksumV1", self.kernel)
+        self.assertIn("*migrated = true;", self.kernel)
+        self.assertIn("targets->saveSeq = 1;", self.kernel)
         self.assertIn("f_sync(&f)", self.kernel)
 
     def test_ui_loads_only_committed_routes_and_saves_only_edits(self) -> None:

@@ -52,8 +52,15 @@ class ClassicInputDisplayContracts(unittest.TestCase):
 
     def test_small_start_press_has_a_visible_center(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("down && scale(radius) <= 2", source)
-        self.assertIn("menu->fillBox(x(lx) - 1, y(ly) - 1, 3, 3, c);", source)
+        self.assertIn("if (scale(radius) <= 2)", source)
+        self.assertIn("menu->fillBox(cx - 1, cy - 1, 3, 3, c);", source)
+        self.assertIn("menu->fillBox(cx - 1, cy, 1, 1, c);", source)
+        self.assertIn("menu->fillBox(cx + 1, cy, 1, 1, c);", source)
+        tiny = source.split("if (scale(radius) <= 2)", 1)[1].split(
+            "return;", 1
+        )[0]
+        self.assertIn("if (down)", tiny)
+        self.assertIn("else", tiny)
 
 
 if __name__ == "__main__":

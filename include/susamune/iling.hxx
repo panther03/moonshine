@@ -17,7 +17,7 @@ void onPersistenceReady();
 int count();
 const char *label(int entry);
 const char *shortLabel(int entry);
-// Streaking repeats episodes, so bonus/100-coin Shines are not start choices.
+// All IL catalogue entries, including bonus and 100-coin Shines, may streak.
 bool streakEntrySelectable(int entry);
 // A Streaking finish may be any Shine collected from the selected start scene.
 bool sameEpisodeShine(int selectedEntry, int completedEntry);
@@ -36,8 +36,9 @@ void setPbProfileName(int profile, const char *name);
 int jumpGroup(int entry, int direction);
 bool beginsGroup(int entry);
 const char *groupName(int entry);
-// The ILs tab projects GBS into Gelato without changing persisted entry ids.
+// Menus project appended routes into their courses without changing saved ids.
 int menuEntryAt(int position);
+int menuPositionOf(int entry);
 int jumpMenuGroup(int position, int direction);
 bool beginsMenuGroup(int position);
 const char *menuGroupName(int position);

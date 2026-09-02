@@ -16,6 +16,10 @@ patches = [
      'sym': 'onPauseMenuNextState', 'type': PatchType.BL},
     # gameLoop__12TApplicationFv + 0x210: director->direct() call.
     {'jp': 0x800f9b64, 'us': 0x802a6160, 'pal': 0x8029e070, 'sym': 'onUpdate', 'type': PatchType.BL, 'nop_count': 3},
+    # TGCConsole2::perform: bracket the main HUD screen draw so the Pinna 8
+    # balloon counter can move without touching the timer or TExPane state.
+    {'jp': 0x80206770, 'us': 0x80143f50, 'pal': 0x80138b8c,
+     'sym': 'susamuneDrawHudScreen', 'type': PatchType.BL},
     # direct__12TMarDirectorFv + 0x80: setupObjects() call.
     {'jp': 0x800ece3c, 'us': 0x802998b8, 'pal': 0x80291750, 'sym': 'onSetup', 'type': PatchType.BL},
     # TMario::winDemo + 0x88: preserve fireGetStar while publishing one

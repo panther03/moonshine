@@ -2862,9 +2862,30 @@ bool importPlayback(const void *data, u32 size) {
     installCanonicalTrack(sPlayback, data, header);
     sPlaybackPinned = true;
     rewindPlayback();
+
+    // A target that arrives mid-attempt was not present for that recording.
+    // Keep an already finished save candidate, but never let the live prefix
+    // block the first complete challenger after the player restarts.
+    if (sRecording || !sRecord.valid) clearRecord();
+    sRecording = false;
     sGhostVisible = false;
-    // Playback has its own buffer. Keep the current recorder and clock alive
-    // so selecting a race target cannot erase the challenger being captured.
+    sStageRoutePending = false;
+    sPendingHadLiveRoute = false;
+    sPendingContinueRecording = false;
+    sBoundaryPending = false;
+    sAttemptSerial = gQFTTimer.attemptSerial();
+    if (gpMarDirector) captureLiveRoute();
+
+    s32 qf;
+    bool stopped;
+    if (gQFTTimer.currentQf(&qf, &stopped)) {
+        sClockPhase = stopped ? CLOCK_FINISHED : CLOCK_PROVISIONAL;
+        sClockObservations = 1;
+        sClockLastQf = qf;
+        sClockEpochStartQf = qf;
+    } else {
+        sClockPhase = CLOCK_UNAVAILABLE;
+    }
     return true;
 }
 

@@ -116,6 +116,9 @@ const u8 kNoShine = 0xFF;
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
         ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
+        ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -137,6 +140,7 @@ constexpr Entry kEntries[] = {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 #undef ENTRY_STATE
@@ -151,11 +155,11 @@ constexpr bool isSecretOnlyPbSlot(int slot) {
 constexpr u8 kGroupFirst[GROUP_COUNT] = {
     0, 13, 25, 38, 52, 65, 78, 90, 92, 94, 110
 };
-// GBS remains append-only entry 121; the ILs tab projects it into Gelato.
+// Appended catalogue entries are projected beside their course without
+// changing the byte ids already stored in playlists.
 constexpr u8 kMenuGroupFirst[GROUP_COUNT] = {
-    0, 13, 25, 39, 53, 66, 79, 91, 93, 95, 111
+    0, 15, 28, 43, 59, 74, 88, 101, 103, 105, 121
 };
-const int kMenuGelatoGbsPosition = 38;
 const int kGeneratedLabelCount = 90;
 const int kRegularLabelSize = 18;
 // Fixed-width names and computed suffix offsets cost less than lookup tables.
@@ -286,6 +290,9 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
         ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    static_assert((slot) >= 126 && (slot) <= 135 && (required) < 70, \
+                  "Full Reds identity changed");
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -302,6 +309,7 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 
@@ -330,6 +338,7 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #define SHINE_ROUTE(label, area, episode, parent, id, group, slot) \
     ENTRY_LABEL(group, label)
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) ENTRY_LABEL(group, label)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required)
 #define PLAZA(label, source, scenario, finish, result, slot) label "\0"
 #define RAW(label, area, episode, parent, finish, result, group, flags, prerequisite) \
     ENTRY_LABEL(group, label)
@@ -361,6 +370,7 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 #undef ENTRY_LABEL_GROUP_BIANCO
@@ -412,6 +422,9 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     static_assert(isSecretOnlyPbSlot(slot), \
                   "Secret-only IL left its reserved PB slot range");
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    static_assert(!isSecretOnlyPbSlot(slot), \
+                  "Full Reds entered the Secret-only PB slot range");
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -428,14 +441,17 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 
 const u8 kPlazaStoryHigh[10] = {0x00, 0x10, 0xF0, 0xF0, 0xF0,
                                 0x30, 0xF0, 0xF0, 0xF0, 0xF0};
-const int kPbSlotCount = 126;
+const int kPbSlotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;
 const int kEntryGelato4Inside = 31;
 const int kEntryGelatoGbs = 121;
+const int kEntryFullRedsFirst = 122;
+const int kEntryFullRedsLast = 131;
 const int kEntryPinnaEyg = 46;
 const int kEntryPinna8 = 50;
 const u8 kPinnaEygParentEpisode = 2;
@@ -505,7 +521,7 @@ const u32 kPbSaveTimeoutFrames = 300;
 const u32 kPbRetryDelayFrames = 300;
 
 static_assert(sizeof(Entry) == 6, "ILing entry layout changed");
-static_assert(kEntryCount == 122, "ILing entry count changed");
+static_assert(kEntryCount == 132, "ILing entry count changed");
 static_assert(kEntryCount <= 0x100, "recent IL entry index exceeds u8");
 static_assert(sizeof(kAnyPercentTheorySlots) == 55,
               "Any% theory route changed");
@@ -513,7 +529,7 @@ static_assert(kGroupFirst[GROUP_AIRSTRIP] == kGeneratedLabelCount,
               "generated IL label range changed");
 static_assert(packedLabelCount(kLiteralShortLabels,
                               sizeof(kLiteralShortLabels)) ==
-                  kEntryCount - kGeneratedLabelCount,
+                  kEntryFullRedsFirst - kGeneratedLabelCount,
               "short IL label table changed");
 
 struct AttemptState {
@@ -752,7 +768,7 @@ void adoptPBs(const volatile SusamuneCfg *cfg) {
     if ((cfg->flags & SUSAMUNE_CFG_FLAG_ILING_PBS) &&
         pbs->magic == SUSAMUNE_ILING_PB_MAGIC &&
         pbs->version == SUSAMUNE_ILING_PB_VERSION &&
-        pbs->count <= SUSAMUNE_ILING_PB_MAX_SLOTS) {
+        pbs->count <= SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS) {
         for (u16 slot = 0; slot < pbs->count; slot++) {
             const s32 value = pbs->values[slot];
             if (value >= 0 && value <= SUSAMUNE_ILING_PB_MAX_QF) {
@@ -944,6 +960,14 @@ bool acceptsSkipOrigin(const Entry &item) {
     return isBonusShine(item) && sameCourse(sAttemptStart, item.start);
 }
 
+int fullRedsBaseShine(int entry) {
+    static const u8 kBaseShines[] = {2, 5, 13, 20, 31,
+                                     35, 41, 43, 55, 64};
+    return entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast
+               ? kBaseShines[entry - kEntryFullRedsFirst]
+               : -1;
+}
+
 bool sceneMatches(const TGameSequence &scene, const LevelWarp::Dest &dest) {
     return scene.mAreaID == dest.area && scene.mEpisodeID == dest.episode;
 }
@@ -1043,7 +1067,8 @@ int entryForResult(u8 result) {
     if (validEntry(sSelectedEntry)) {
         const Entry &selected = kEntries[sSelectedEntry];
         if ((acceptsAnySelectedOrigin(selected) ||
-             sSelectedEntry == kEntryGelatoGbs) &&
+             sSelectedEntry == kEntryGelatoGbs ||
+             fullRedsBaseShine(sSelectedEntry) >= 0) &&
             entryFinish(selected) == FINISH_SHINE &&
             selected.result == result) {
             return sSelectedEntry;
@@ -1122,8 +1147,11 @@ void applyEntryOverlay(int entry) {
         return;
     }
 
-    if (item.prerequisite != kNoShine &&
-        !(item.flags & ENTRY_PB_OVERRIDE)) {
+    const int fullRedsBase = fullRedsBaseShine(entry);
+    if (fullRedsBase >= 0) {
+        applyOverlayFlag(0x10000u + fullRedsBase, true, false);
+    } else if (item.prerequisite != kNoShine &&
+               !(item.flags & ENTRY_PB_OVERRIDE)) {
         applyOverlayFlag(0x10000u + item.prerequisite, true, false);
     }
     if (item.flags & ENTRY_CLEAR_RESULT) {
@@ -1435,8 +1463,7 @@ void onPersistenceReady() {
 int count() { return kEntryCount; }
 
 bool streakEntrySelectable(int entry) {
-    return entry >= 0 && entry < kEntryCount &&
-           !isBonusShine(kEntries[entry]);
+    return entry >= 0 && entry < kEntryCount;
 }
 
 bool sameEpisodeShine(int selectedEntry, int completedEntry) {
@@ -1446,6 +1473,10 @@ bool sameEpisodeShine(int selectedEntry, int completedEntry) {
     }
     const Entry &selected = kEntries[selectedEntry];
     const Entry &completed = kEntries[completedEntry];
+    if (selectedEntry >= kEntryFullRedsFirst &&
+        selectedEntry <= kEntryFullRedsLast) {
+        return completedEntry == selectedEntry;
+    }
     return entryFinish(selected) == FINISH_SHINE &&
            entryFinish(completed) == FINISH_SHINE &&
            sameCourse(selected.start, completed.start) &&
@@ -1454,6 +1485,15 @@ bool sameEpisodeShine(int selectedEntry, int completedEntry) {
 }
 
 const char *label(int entry) {
+    static const char kFullRedsLabels[] =
+        "Bianco 3 Full Reds\0Bianco 6 Full Reds\0Ricco 4 Full Reds\0"
+        "Gelato 1 Full Reds\0Pinna 2 Full Reds\0Pinna 6 Full Reds\0"
+        "Sirena 2 Full Reds\0Sirena 4 Full Reds\0Noki 6 Full Reds\0"
+        "Pianta 5 Full Reds";
+    if (entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast) {
+        return PackedText::at(kFullRedsLabels,
+                              entry - kEntryFullRedsFirst);
+    }
     if (entry < kGeneratedLabelCount) {
         const Entry &item = kEntries[entry];
         if (entry == kEntryPinnaEyg) return "Pinna Park EYG";
@@ -1481,6 +1521,13 @@ const char *label(int entry) {
 }
 
 const char *shortLabel(int entry) {
+    static const char kFullRedsShortLabels[] =
+        "BH3FR\0BH6FR\0RH4FR\0GB1FR\0PP2FR\0PP6FR\0SB2FR\0SB4FR\0"
+        "NB6FR\0PV5FR";
+    if (entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast) {
+        return PackedText::at(kFullRedsShortLabels,
+                              entry - kEntryFullRedsFirst);
+    }
     if (entry >= kGeneratedLabelCount) {
         return PackedText::at(kLiteralShortLabels,
                               entry - kGeneratedLabelCount);
@@ -1605,11 +1652,30 @@ const char *groupName(int entry) {
 
 int menuEntryAt(int position) {
     if (position < 0 || position >= kEntryCount) return -1;
-    if (position < kMenuGelatoGbsPosition) return position;
-    if (position == kMenuGelatoGbsPosition) return kEntryGelatoGbs;
-    int entry = position - 1;
-    if (entry >= kEntryGelatoGbs) entry++;
-    return entry;
+    static const u8 kInsertAfter[] = {
+        4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84
+    };
+    static const u8 kInsertedEntry[] = {
+        122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131
+    };
+    int projected = 0;
+    for (int entry = 0; entry < kEntryGelatoGbs; entry++) {
+        if (projected++ == position) return entry;
+        for (u32 insert = 0; insert < sizeof(kInsertAfter); insert++) {
+            if (kInsertAfter[insert] == entry) {
+                if (projected++ == position) return kInsertedEntry[insert];
+                break;
+            }
+        }
+    }
+    return -1;
+}
+
+int menuPositionOf(int entry) {
+    for (int position = 0; position < kEntryCount; position++) {
+        if (menuEntryAt(position) == entry) return position;
+    }
+    return -1;
 }
 
 int jumpMenuGroup(int position, int direction) {

@@ -1479,6 +1479,13 @@ World worldForArea(Area area) {
 
 World worldForEntry(int entry) {
     if (entry == 121) return WORLD_GELATO;
+    if (entry == 122 || entry == 123) return WORLD_BIANCO;
+    if (entry == 124) return WORLD_RICCO;
+    if (entry == 125) return WORLD_GELATO;
+    if (entry == 126 || entry == 127) return WORLD_PINNA;
+    if (entry == 128 || entry == 129) return WORLD_SIRENA;
+    if (entry == 130) return WORLD_NOKI;
+    if (entry == 131) return WORLD_PIANTA;
     if (entry >= 0 && entry < 13) return WORLD_BIANCO;
     if (entry < 25) return entry >= 13 ? WORLD_RICCO : WORLD_INVALID;
     if (entry < 38) return WORLD_GELATO;

@@ -97,9 +97,8 @@ class MovementDisplayContracts(unittest.TestCase):
         self.assertIn("mAttributes.mIsWater", water)
         self.assertIn("mAttributes.mIsShallowWater", water)
         self.assertIn("mFloorTriangle", water)
-        self.assertIn("floor->mType & 0x3FFFu", water)
-        self.assertIn("type == 0x0004u", water)
-        self.assertNotIn("0x0500u", water)
+        self.assertIn("floor->isWaterSlip()", water)
+        self.assertNotIn("floor->mType", water)
         self.assertIn("sGroundDry = !isWaterSlide(sMario);", after)
         self.assertIn("dustEnabled() && dryLanding", after)
 

@@ -360,6 +360,7 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
          wheelOpenBeforeDirect || WarpWheel::promptPending()))
         WarpWheel::update(gpApplication.mGamePads[0]);
     PatternSelector::update(!creationEditing && !sessionResultBeforeDirect);
+    PracticeVisuals::update();
     rngControlApply();
 
     // Freeze the stage while an overlay is up. direct() runs the movement and

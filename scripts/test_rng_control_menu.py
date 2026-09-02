@@ -75,7 +75,12 @@ class RngControlMenuTests(unittest.TestCase):
         menu = (ROOT / "src/menu.cpp").read_text()
 
         rows = re.findall(r"X\((SETTING_[A-Z0-9_]+),", setting_list)
-        self.assertEqual(rows[-1], "SETTING_RNG_FAVORITES")
+        self.assertEqual(rows[-4], "SETTING_RNG_FAVORITES")
+        self.assertEqual(rows[-3:], [
+            "SETTING_HIDDEN_ITEM_LABELS",
+            "SETTING_HURTBOX_TARGET",
+            "SETTING_RICCO_RACE_CHECKPOINTS",
+        ])
         live_size = (((((len(rows) + 3) & ~1) + 5) & ~3) + 8)
         mem2 = (ROOT / "include/susamune/mem2_map.h").read_text()
         slot = re.search(
@@ -84,8 +89,9 @@ class RngControlMenuTests(unittest.TestCase):
         self.assertIsNotNone(slot)
         assert slot is not None
         self.assertLessEqual(live_size, int(slot.group(1), 16))
+        self.assertIn('SBOOL("", 0, SETTING_CAT_HIDDEN)', descs)
         self.assertEqual(descs.strip().splitlines()[-1],
-                         'SBOOL("", 0, SETTING_CAT_HIDDEN)')
+                         'SBOOL("Ricco 2 checkpoints", 0, SETTING_CAT_UI)')
         self.assertIn("static bool favoriteable(SettingId id);", settings)
         self.assertIn("id == SETTING_RNG_FAVORITES", implementation)
         self.assertIn("value &= 0x7F;", implementation)

@@ -335,28 +335,38 @@ class StorageEnvelopeTests(unittest.TestCase):
                 "copyCatalogName", source_function(ppc, function)
             )
 
-    def test_race_load_preserves_the_recording_save_source(self) -> None:
+    def test_race_load_starts_with_a_clean_challenger(self) -> None:
         root = Path(__file__).resolve().parents[1]
         ghost_path = root / "src/ghost.cpp"
+        storage_path = root / "src/ghost_storage.cpp"
         source = ghost_path.read_text(encoding="utf-8")
         race_load = source_function(ghost_path, "importPlayback")
 
-        # Loading playback uses the other fixed MEM2 track. It must not reset
-        # the live challenger or its clock while the file request completes.
-        for forbidden in (
-            "clearRecord()",
-            "sRecording = false",
-            "sAttemptSerial =",
-            "sClockPhase =",
-            "sBoundaryPending = false",
-        ):
-            self.assertNotIn(forbidden, race_load)
+        # An asynchronous target can arrive after the player has already left
+        # the menu. That prefix was recorded without its opponent and must not
+        # be retained as the challenger on the first restart. A finished run
+        # remains available for an explicit save.
+        self.assertIn(
+            "if (sRecording || !sRecord.valid) clearRecord();", race_load
+        )
+        self.assertIn("sRecording = false", race_load)
+        self.assertIn("sAttemptSerial = gQFTTimer.attemptSerial()", race_load)
+        self.assertIn("sBoundaryPending = false", race_load)
         self.assertIn("sPlaybackPinned = true", race_load)
         self.assertIn("sGhostVisible = false", race_load)
+        self.assertLess(
+            race_load.index("installCanonicalTrack(sPlayback"),
+            race_load.index("clearRecord()"),
+        )
 
-        # A challenger still being captured or waiting to be saved survives a
-        # race import. Once storage has acknowledged it, the next race attempt
-        # must reuse that buffer instead of treating the saved run as pending.
+        complete = source_function(storage_path, "completeRequest")
+        self.assertIn("notify(kRaceLoaded)", complete)
+        self.assertIn('"Ghost ready - restart to race"',
+                      storage_path.read_text(encoding="utf-8"))
+
+        # Once the clean attempt completes, it remains the save source while
+        # the selected opponent stays pinned. Storage acknowledgement releases
+        # it for a later race without touching the opponent.
         begin_attempt = source_function(ghost_path, "beginAttempt")
         self.assertIn(
             "recordPromotable && sPlaybackPinned && !sRecord.saved",

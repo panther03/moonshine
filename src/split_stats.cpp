@@ -94,7 +94,10 @@ const RouteDesc kRoutes[SplitStats::ROUTE_COUNT] = {
     {264, 105, 0},   {265, 106, 0},   {266, 107, 0},
     {267, 108, 0},   {268, 109, 0},   {269, 114, 0},
     {270, 116, 0},   {271, 117, 0},   {272, 118, 0},
-    {273, 119, 0},   {274, 120, 0},
+    {273, 119, 0},   {274, 120, 0},   {275, 122, 0},
+    {276, 123, 0},   {277, 124, 0},   {278, 125, 0},
+    {279, 126, 0},   {280, 127, 0},   {281, 128, 0},
+    {282, 129, 0},   {283, 130, 0},   {284, 131, 0},
 };
 
 struct Runtime {
@@ -122,13 +125,13 @@ struct Runtime {
 
 Runtime sStateStorage;
 Runtime *const sState = &sStateStorage;
-static_assert(sizeof(Runtime) == 0x6E90,
+static_assert(sizeof(Runtime) == 0x74A8,
               "split runtime layout drifted");
 static_assert(SplitStats::ROUTE_COUNT == SUSAMUNE_SPLIT_STATS_ROUTE_COUNT,
               "split route schema drifted");
 static_assert(sizeof(RouteDesc) == 4, "split route descriptor drifted");
 // Segment 50 stays reserved so every route after Bianco 2 keeps its old slot.
-static_assert(274 + 1 == SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT,
+static_assert(284 + 1 == SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT,
               "split segment layout or reserved slot changed");
 static_assert(sizeof(kFreezeFrames) == 6,
               "split overlay duration choices changed");

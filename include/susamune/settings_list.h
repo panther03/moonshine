@@ -188,7 +188,11 @@
     X(SETTING_PINNA_HIDDEN_ITEMS,            "pinna_hidden_items")           \
     X(SETTING_ENEMY_HURTBOXES,               "enemy_hurtboxes")              \
     /* -- Post-V2.1 Shined storage (append-only persisted id) -- */          \
-    X(SETTING_RNG_FAVORITES,                 "rng_favorites")
+    X(SETTING_RNG_FAVORITES,                 "rng_favorites")              \
+    /* -- V2.2 PR6 practice visuals (append-only persisted ids) -- */        \
+    X(SETTING_HIDDEN_ITEM_LABELS,            "hidden_item_labels")         \
+    X(SETTING_HURTBOX_TARGET,                "hurtbox_target")             \
+    X(SETTING_RICCO_RACE_CHECKPOINTS,        "ricco_race_checkpoints")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

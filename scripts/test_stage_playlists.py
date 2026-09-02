@@ -29,7 +29,7 @@ BUILTINS = 3
 TOTAL = BUILTINS + SLOTS
 REGIONS = 3
 CAPACITY = 120
-ROUTES = 122
+ROUTES = 132
 ACTION_BYTES = CAPACITY // 8
 ACTION_SCHEMA = 1
 ACTION_ROUTES = frozenset((0, 25, 82))
@@ -463,7 +463,7 @@ class PlaylistFormatTests(unittest.TestCase):
             r"expectedStartEntry\(\)\s*:\s*entry",
         )
 
-    def test_streak_catalogue_omits_bonus_and_hundred_shines_only(self) -> None:
+    def test_streak_catalogue_restores_hidden_and_hundred_shines(self) -> None:
         entries = ILING_ENTRIES.read_text(encoding="utf-8")
         iling = ILING.read_text(encoding="utf-8")
         stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
@@ -503,7 +503,12 @@ class PlaylistFormatTests(unittest.TestCase):
         ]
         for result in (29, 59, 69, 100, 107):
             self.assertIn(str(result), bonus_filter)
-        self.assertIn("!isBonusShine(kEntries[entry])", iling)
+        selectable = iling[
+            iling.index("bool streakEntrySelectable"):
+            iling.index("bool sameEpisodeShine")
+        ]
+        self.assertIn("entry >= 0 && entry < kEntryCount", selectable)
+        self.assertNotIn("isBonusShine", selectable)
 
         start = stage_loader[
             stage_loader.index("bool startStreak"):
