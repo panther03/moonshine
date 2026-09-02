@@ -79,6 +79,38 @@ class FullRedsContracts(unittest.TestCase):
             start[full_reds:no_fludd],
         )
 
+    def test_full_reds_replay_flag_survives_the_parent_stage(self) -> None:
+        setup = ILING[ILING.index("void onStageSetup()") :]
+        setup = setup[: setup.index("void update()")]
+        carry = setup.split(
+            "(kEntries[sSelectedEntry].flags & ENTRY_CARRY_OVERLAY)", 1
+        )[1].split("} else {", 1)[0]
+        self.assertIn("const bool keepForChild = atStart", carry)
+        self.assertIn("fullRedsBaseShine(sSelectedEntry) >= 0", carry)
+        self.assertIn(
+            "sCarryRestorePending = !keepForChild && sOverlayCount != 0;",
+            carry,
+        )
+
+        before = ILING[ILING.index("void beforeStageSetup()") :]
+        before = before[: before.index("void onStageSetup()")]
+        internal = before.split(
+            "isInternalScene(sAttemptStart, scene)", 1
+        )[1].split("clearAttempt();", 1)[0]
+        self.assertIn("applyEntryOverlay(sSelectedEntry);", internal)
+        self.assertIn("return;", internal)
+
+    def test_full_reds_overlay_cannot_reach_a_card_save(self) -> None:
+        update = ILING[ILING.index("void update()") :]
+        guard = update[update.index("const bool temporaryProgression") :]
+        guard = guard[: guard.index("if (sTransitionPending")]
+        self.assertIn("isPlazaEntry(sSelectedEntry)", guard)
+        self.assertIn("sOverlayCount != 0", guard)
+        self.assertIn("sHavePlazaStoryFlags", guard)
+        self.assertIn("TMarDirector::STATE_PAUSE_MENU", guard)
+        self.assertIn("TMarDirector::STATE_SAVE_CARD", guard)
+        self.assertIn("clearAttempt();", guard)
+
     def test_pinna_six_park_secret_keeps_full_route_identity(self) -> None:
         self.assertIn(
             'SHINE_FULL("Pinna 6 (Full)", 0x0D, 3, 5, 35, GROUP_PINNA)',

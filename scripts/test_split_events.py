@@ -118,6 +118,7 @@ CARRY_ROWS = (
     ("ROUTE_RICCO_1", 3, 0, 0x3B, 0),
     ("ROUTE_RICCO_2", 3, 1, 0x1E, 0),
     ("ROUTE_RICCO_4", 3, 3, 0x30, 0),
+    ("ROUTE_BIANCO_2", 2, 0, 0x37, 0),
     ("ROUTE_BIANCO_3_FULL", 2, 2, 0x2F, 0),
     ("ROUTE_BIANCO_6_FULL", 2, 5, 0x2E, 0),
     ("ROUTE_PIANTA_5_FULL", 8, 4, 0x2A, 0),
@@ -162,8 +163,8 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertEqual(
             tuple(map(len, checkpoint_schema.CHECKPOINTS)), ROUTE_COUNTS
         )
-        self.assertEqual(sum(ROUTE_COUNTS), 152)
-        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 284)
+        self.assertEqual(sum(ROUTE_COUNTS), 153)
+        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 285)
         self.assertEqual(
             checkpoint_schema.schema_hash(),
             checkpoint_schema.EXPECTED_SCHEMA_HASH,
@@ -172,8 +173,6 @@ class SplitEventContractTests(unittest.TestCase):
         for route, (first, _, count) in enumerate(rows):
             self.assertEqual(first, cursor)
             cursor += count + 1
-            if route == 13:
-                cursor += 1  # retired FMV segment keeps later stats stable
 
     def test_manifest_keeps_only_the_three_legacy_static_hooks(self) -> None:
         for symbol, (kind, addresses) in STATIC_HOOKS.items():
@@ -297,15 +296,15 @@ class SplitEventContractTests(unittest.TestCase):
         petey = text.split("void notePeteyDamage", 1)[1].split(
             "void notePetey(", 1
         )[0]
-        self.assertIn("publishEvent(sActiveRoute, sPeteyHits)", petey)
-        self.assertNotIn("sPeteyHits + 1", petey)
+        self.assertIn("publishEvent(sActiveRoute, sPeteyHits + 1)", petey)
         hip_drop = text.rsplit(
             'extern "C" void susamuneSplitPeteyHipDrop', 1
         )[1].split(
             'extern "C" void susamuneSplitGessoTentacleDamage', 1
         )[0]
-        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0)", hip_drop)
-        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1)", hip_drop)
+        self.assertIn(
+            "routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0)", hip_drop
+        )
         self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", hip_drop)
         self.assertEqual(hip_drop.count("notePeteyDamage("), 1)
         self.assertLess(hip_drop.index("sPeteyHipDropTrampoline"),
@@ -404,6 +403,10 @@ class SplitEventContractTests(unittest.TestCase):
             "sArmedCarryRoute == SplitStats::ROUTE_PINNA_1", text
         )
         self.assertIn(
+            "sArmedCarryRoute == SplitStats::ROUTE_BIANCO_2", text
+        )
+        self.assertIn("sceneMatches(current, 0x37, 0)", text)
+        self.assertIn(
             "routeScene(sActiveRoute, 0x0D, 6)", text
         )
         self.assertIn(
@@ -412,6 +415,11 @@ class SplitEventContractTests(unittest.TestCase):
         transitions = text.split("void updateTransitions()", 1)[1].split(
             "bool crossedAbove", 1
         )[0]
+        bianco = transitions.split(
+            "case SplitStats::ROUTE_BIANCO_2:", 1
+        )[1].split("break;", 1)[0]
+        self.assertIn("routeScene(sActiveRoute, 2, 0)", bianco)
+        self.assertIn("publishTransition(sActiveRoute, 1, 0x37)", bianco)
         corona = transitions.split("case SplitStats::ROUTE_CORONA:", 1)[1]
         corona = corona.split("break;", 1)[0]
         self.assertIn("publishTransition(sActiveRoute, 2, 0x3C)", corona)
@@ -482,6 +490,8 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn("status == kMarioRolloutStatus", b2)
         self.assertIn("mario->mTranslation.y >= 3200.0f", b2)
         self.assertIn("publishEvent(sActiveRoute, 0)", b2)
+        self.assertIn("routeScene(sActiveRoute, 2, 0)", b2)
+        self.assertNotIn("routeScene(sActiveRoute, 2, 1)", b2)
         entries = ILING_ENTRIES.read_text(encoding="utf-8")
         self.assertIn(
             'SHINE("Bianco 1", 2, 0, 0, 0, GROUP_BIANCO)', entries
@@ -493,7 +503,7 @@ class SplitEventContractTests(unittest.TestCase):
         petey = text.split("void notePeteyDamage", 1)[1].split(
             "void notePetey(", 1
         )[0]
-        self.assertIn("publishEvent(sActiveRoute, sPeteyHits)", petey)
+        self.assertIn("publishEvent(sActiveRoute, sPeteyHits + 1)", petey)
         wake = text.split("void notePetey(", 1)[1].split(
             "void noteBossGesso", 1
         )[0]

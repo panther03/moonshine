@@ -1981,7 +1981,11 @@ void onStageSetup() {
         }
     } else if (validEntry(sSelectedEntry) &&
                (kEntries[sSelectedEntry].flags & ENTRY_CARRY_OVERLAY)) {
-        sCarryRestorePending = sOverlayCount != 0;
+        // Full Reds enters the secret through its parent stage. The completed
+        // main-Shine flag must survive until the portal chooses replay mode.
+        const bool keepForChild = atStart &&
+            fullRedsBaseShine(sSelectedEntry) >= 0;
+        sCarryRestorePending = !keepForChild && sOverlayCount != 0;
     } else {
         restoreOverlayFlags();
     }
@@ -2096,7 +2100,10 @@ void update() {
         return;
     }
 
-    if (isPlazaEntry(sSelectedEntry) && stageObjectsLive() &&
+    const bool temporaryProgression = isPlazaEntry(sSelectedEntry) ||
+                                      sOverlayCount != 0 ||
+                                      sHavePlazaStoryFlags;
+    if (temporaryProgression && stageObjectsLive() &&
         (gpMarDirector->mCurState == TMarDirector::STATE_PAUSE_MENU ||
          gpMarDirector->mCurState == TMarDirector::STATE_SAVE_CARD)) {
         // Never let temporary route progression reach a card save.

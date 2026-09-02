@@ -82,7 +82,7 @@ V5_ROUTE_COUNTS = (
 )
 ROUTE_COUNTS = tuple(len(row) + 1 for row in checkpoint_schema.CHECKPOINTS)
 ROUTE_FIRST = tuple(
-    sum(ROUTE_COUNTS[:route]) + (1 if route > 13 else 0)
+    sum(ROUTE_COUNTS[:route])
     for route in range(ROUTES)
 )
 ROUTE_CHECKPOINTS = tuple(count - 1 for count in ROUTE_COUNTS)
@@ -464,7 +464,9 @@ def migrate_v4(v4: dict[str, list]) -> dict[str, list]:
             out["stats"][region][route][:2] = v4["stats"][region][route][:2]
             if removed is None and not terminal and not b2:
                 out["stats"][region][route][2] = v4["stats"][region][route][2]
-            for local in range(1 if b2 else 0, ROUTE_COUNTS[route]):
+            for local in range(ROUTE_COUNTS[route]):
+                if b2:
+                    continue
                 if terminal:
                     continue
                 if local != removed:
@@ -516,12 +518,22 @@ def migrate_v5(v5: dict[str, list]) -> dict[str, list]:
                         v5["best"][region][V5_ROUTE_FIRST[route] + local]
                     )
             elif route == 13:
-                for local in range(1, ROUTE_COUNTS[route]):
-                    out["best"][region][ROUTE_FIRST[route] + local] = (
+                for local in range(1, V5_ROUTE_COUNTS[route]):
+                    out["best"][region][ROUTE_FIRST[route] + local + 1] = (
                         v5["best"][region][V5_ROUTE_FIRST[route] + local]
                     )
             for profile in range(PROFILES):
                 if route == 13:
+                    out["identity"][region][profile][route] = (
+                        v5["identity"][region][profile][route]
+                    )
+                    for local in range(1, V5_ROUTE_COUNTS[route]):
+                        out["pb"][region][profile][
+                            ROUTE_FIRST[route] + local + 1
+                        ] = (
+                            v5["pb"][region][profile]
+                              [V5_ROUTE_FIRST[route] + local]
+                        )
                     continue
                 identity = v5["identity"][region][profile][route]
                 out["identity"][region][profile][route] = identity
@@ -552,11 +564,22 @@ def migrate_v7(v7: dict[str, list], schema: int = V7_SCHEMA_HASH
                 v7["pb"][region][profile]
             )
 
-    if schema != V7_SCHEMA_HASH:
-        route = 13
-        first = ROUTE_FIRST[route]
-        # Five live segments plus the retired FMV slot immediately after them.
-        end = first + ROUTE_COUNTS[route] + 1
+    route = 13
+    first = ROUTE_FIRST[route]
+    end = first + ROUTE_COUNTS[route]
+    if schema == V7_SCHEMA_HASH:
+        for region in range(REGIONS):
+            out["stats"][region][route][2] = 0
+            old_best = list(out["best"][region][first:first + 5])
+            out["best"][region][first + 1:first + 3] = [UNSET, UNSET]
+            out["best"][region][first + 3:end] = old_best[2:5]
+            for profile in range(PROFILES):
+                old_pb = list(out["pb"][region][profile][first:first + 5])
+                out["pb"][region][profile][first + 1:first + 3] = [
+                    UNSET, UNSET
+                ]
+                out["pb"][region][profile][first + 3:end] = old_pb[2:5]
+    else:
         for region in range(REGIONS):
             out["stats"][region][route][2] = 0
             out["best"][region][first:end] = [UNSET] * (end - first)
@@ -846,7 +869,7 @@ class SplitContractTests(unittest.TestCase):
                             payload["pb"][region][profile][first:end],
                         )
 
-    def test_v7_migration_retains_every_old_slot_and_appends_clean_routes(self) -> None:
+    def test_v7_migration_remaps_b2_and_appends_clean_routes(self) -> None:
         payload = blank_v7_payload()
         for region in range(REGIONS):
             for route in range(V7_ROUTES):
@@ -864,13 +887,43 @@ class SplitContractTests(unittest.TestCase):
 
         migrated = migrate_v7(payload)
         self.assertTrue(valid_payload(migrated))
+        b2_first = ROUTE_FIRST[13]
+        b2_end = b2_first + ROUTE_COUNTS[13]
         for region in range(REGIONS):
-            self.assertEqual(migrated["stats"][region][:V7_ROUTES],
-                             payload["stats"][region])
+            for route in range(V7_ROUTES):
+                if route == 13:
+                    self.assertEqual(
+                        migrated["stats"][region][route][:2],
+                        payload["stats"][region][route][:2],
+                    )
+                    self.assertEqual(migrated["stats"][region][route][2], 0)
+                else:
+                    self.assertEqual(
+                        migrated["stats"][region][route],
+                        payload["stats"][region][route],
+                    )
             self.assertEqual(migrated["played"][region][:V7_ROUTES],
                              payload["played"][region])
-            self.assertEqual(migrated["best"][region][:V7_SEGMENTS],
-                             payload["best"][region])
+            self.assertEqual(
+                migrated["best"][region][:b2_first],
+                payload["best"][region][:b2_first],
+            )
+            self.assertEqual(
+                migrated["best"][region][b2_first],
+                payload["best"][region][b2_first],
+            )
+            self.assertEqual(
+                migrated["best"][region][b2_first + 1:b2_first + 3],
+                [UNSET, UNSET],
+            )
+            self.assertEqual(
+                migrated["best"][region][b2_first + 3:b2_end],
+                payload["best"][region][b2_first + 2:b2_first + 5],
+            )
+            self.assertEqual(
+                migrated["best"][region][b2_end:V7_SEGMENTS],
+                payload["best"][region][b2_end:V7_SEGMENTS],
+            )
             self.assertEqual(migrated["stats"][region][V7_ROUTES:],
                              [[0, 0, 0]] * (ROUTES - V7_ROUTES))
             self.assertEqual(migrated["played"][region][V7_ROUTES:],
@@ -883,8 +936,26 @@ class SplitContractTests(unittest.TestCase):
                     payload["identity"][region][profile],
                 )
                 self.assertEqual(
-                    migrated["pb"][region][profile][:V7_SEGMENTS],
-                    payload["pb"][region][profile],
+                    migrated["pb"][region][profile][:b2_first],
+                    payload["pb"][region][profile][:b2_first],
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile][b2_first],
+                    payload["pb"][region][profile][b2_first],
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile]
+                            [b2_first + 1:b2_first + 3],
+                    [UNSET, UNSET],
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile][b2_first + 3:b2_end],
+                    payload["pb"][region][profile]
+                           [b2_first + 2:b2_first + 5],
+                )
+                self.assertEqual(
+                    migrated["pb"][region][profile][b2_end:V7_SEGMENTS],
+                    payload["pb"][region][profile][b2_end:V7_SEGMENTS],
                 )
                 self.assertEqual(
                     migrated["identity"][region][profile][V7_ROUTES:],
@@ -896,8 +967,6 @@ class SplitContractTests(unittest.TestCase):
                 )
 
         legacy = migrate_v7(payload, V7_PREVIOUS_SCHEMA_HASH)
-        b2_first = ROUTE_FIRST[13]
-        b2_end = b2_first + ROUTE_COUNTS[13] + 1
         for region in range(REGIONS):
             self.assertEqual(legacy["stats"][region][13][:2],
                              payload["stats"][region][13][:2])
@@ -915,7 +984,7 @@ class SplitContractTests(unittest.TestCase):
                                  payload["pb"][region][profile][b2_end])
 
         kernel = KERNEL.read_text(encoding="utf-8")
-        self.assertIn("const u32 count = SplitRouteCount[route] + 1;", kernel)
+        self.assertIn("const u32 count = SplitRouteCount[route];", kernel)
 
     def test_v2_migration_preserves_history_but_resets_changed_routes(self) -> None:
         payload = blank_v2_payload()
@@ -1029,13 +1098,10 @@ class SplitContractTests(unittest.TestCase):
 
                 if route == 13:
                     self.assertEqual(migrated["stats"][region][route][2], 0)
-                    self.assertEqual(migrated["best"][region][first], UNSET)
-                    for local in range(1, ROUTE_COUNTS[route]):
-                        old = V3_ROUTE_FIRST[route] + local
-                        self.assertEqual(
-                            migrated["best"][region][first + local],
-                            payload["best"][region][old],
-                        )
+                    self.assertEqual(
+                        migrated["best"][region][first:end],
+                        [UNSET] * ROUTE_COUNTS[route],
+                    )
                     for profile in range(PROFILES):
                         self.assertEqual(
                             migrated["identity"][region][profile][route], UNSET
@@ -1200,7 +1266,7 @@ class SplitContractTests(unittest.TestCase):
         self.assertFalse(generation_is_newer(0x80000000, 0))
 
     def test_terminal_segment_completes_sum_of_best(self) -> None:
-        self.assertEqual(sum(ROUTE_COUNTS) + 1, SEGMENTS)
+        self.assertEqual(sum(ROUTE_COUNTS), SEGMENTS)
         source = SPLITS.read_text(encoding="utf-8")
         result = source[source.index("void onILResult(") :]
         result = result[: result.index("void onPBDeleted")]
@@ -1367,10 +1433,7 @@ class SplitContractTests(unittest.TestCase):
         self.assertGreaterEqual(v5_read.count("return PB_READ_UNSAFE;"), 4)
         self.assertIn("struct SusamuneSplitStatsFile, generation", v5_read)
         self.assertIn("file->checksum != SplitStatsChecksum(file)", v5_read)
-        self.assertIn(
-            "file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH",
-            v5_read,
-        )
+        self.assertIn("!SplitStatsV8SchemaSupported(file->schemaHash)", v5_read)
         v7_read = source[source.index("static enum PbReadResult ReadSplitStatsV7File") :]
         v7_read = v7_read[:v7_read.index("static void MigrateSplitStatsV7")]
         self.assertIn("!SplitStatsV7SchemaSupported(file->schemaHash)", v7_read)

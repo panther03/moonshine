@@ -110,6 +110,16 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertIn("manager->getCubeInfo<TCubeGeneralInfo>()", self.source)
         self.assertIn("info->mChildren.begin()", self.source)
         self.assertIn('char label[] = "CP A"', self.source)
+        cube = self.source.split("void drawRaceCube", 1)[1].split(
+            "void drawRaceManager", 1
+        )[0]
+        self.assertIn("static const u8 kFaces[24]", cube)
+        self.assertIn("JUtility::TColor fill(color.r, color.g, color.b, 48)",
+                      cube)
+        self.assertIn("menu->fillPoly(xy, 4, fill)", cube)
+        self.assertIn("maxX - minX <= 400", cube)
+        self.assertIn("maxY - minY <= 360", cube)
+        self.assertNotIn("drawSegment", cube)
         self.assertIn("menu->fillBox(x - 5, y - 1, 11, 3, color)",
                       self.source)
         self.assertIn("y - 8, 14, 14, color", self.source)
@@ -120,13 +130,30 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertLess(self.main.index("PracticeVisuals::update();"), direct)
         self.assertIn("SETTING_RICCO_RACE_CHECKPOINTS", self.source)
 
-    def test_pinna_balloon_counter_is_left_in_its_retail_position(self) -> None:
-        self.assertNotIn("->add(", self.source)
-        self.assertNotIn("susamuneDrawHudScreen", self.source)
-        self.assertNotIn("susamuneDrawHudScreen", self.patches)
+    def test_pinna_timer_shift_brackets_the_actual_retail_hud_draw(self) -> None:
+        draw = self.source.split("void drawHudScreen", 1)[1].split(
+            "void draw(Menu", 1
+        )[0]
+        self.assertLess(draw.index("shiftPinnaTimerPanel(screen)"),
+                        draw.index("screen->draw(x, y, context)"))
+        self.assertGreater(draw.index("shift.pane->add(0, -shift.y)"),
+                           draw.index("screen->draw(x, y, context)"))
+        shift = self.source.split("PaneShift shiftPinnaTimerPanel", 1)[1]
+        shift = shift.split("}  // namespace", 1)[0]
+        self.assertIn("timer->add(0, y)", shift)
+        self.assertNotIn("balloon->add", shift)
+        self.assertIn("gap >= kMissionCounterGap", shift)
+        self.assertIn("TGameSequence::AREA_PINNABOSS", shift)
+        self.assertIn("screen->search('\\0b_0')", shift)
+        self.assertIn("screen->search('\\0t_0')", shift)
+        self.assertIn("'jp': 0x80206770", self.patches)
+        self.assertIn("'us': 0x80143f50", self.patches)
+        self.assertIn("'pal': 0x80138b8c", self.patches)
+        self.assertIn("'sym': 'susamuneDrawHudScreen'", self.patches)
+
+        # Draw timing is fixed outside the protected timer implementation.
         qft = (ROOT / "src/qft_timer.cpp").read_text()
-        self.assertIn("paneOnScreen(hudPane(console, '\\0b_0'))", qft)
-        self.assertIn("pane->add(0, -60)", qft)
+        self.assertNotIn("shiftPinnaTimerPanel", qft)
 
     def test_visuals_are_drawn_only_over_live_gameplay(self) -> None:
         self.assertIn("TApplication::CONTEXT_DIRECT_STAGE", self.source)

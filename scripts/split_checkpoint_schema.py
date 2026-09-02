@@ -9,7 +9,7 @@ FNV_PRIME = 16777619
 EXPECTED_V5_SCHEMA_HASH = 0xA91743AA
 # Filled by the assertion at the bottom. Update only with an intentional
 # append-only route or checkpoint-schema revision.
-EXPECTED_SCHEMA_HASH = 0xD0AAE2E5
+EXPECTED_SCHEMA_HASH = 0x1AF7E430
 
 V5_ROUTE_ENTRIES = (
     5, 121, 85, 13, 14, 16, 17, 20, 21, 22,
@@ -111,13 +111,14 @@ V5_CHECKPOINTS = tuple(
 _current = list(V5_CHECKPOINTS)
 _current[10] = ()
 _current[31] = ()
-# Bianco 2 runs in Bianco 1's physical scene. The FMV trigger is unreliable,
-# so the three Petey hits follow the rollout directly.
+# Bianco 2 starts in Bianco 1, then retail's accepted 0x37 transition owns the
+# Pakkun FMV and loads the Windmill boss scene.
 _current[13] = (
     "scene=02:00;trigger=mario-status-enter;status=rollout;y>=3200",
-    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=1",
-    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=2",
-    "scene=02:00;trigger=actor-damage-ordinal;actor=petey;value=3",
+    "scene=02:00->37:00;trigger=scene-transition;target=37:00;meaning=pakkun-fmv",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=1",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=2",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=3",
 )
 _current.extend([()] * (len(ROUTE_ENTRIES) - len(V5_ROUTE_ENTRIES)))
 CHECKPOINTS = tuple(_current)
@@ -176,5 +177,5 @@ assert v5_schema_hash() == EXPECTED_V5_SCHEMA_HASH
 assert len(ROUTE_ENTRIES) == len(CHECKPOINTS) == 132
 assert len(set(ROUTE_ENTRIES)) == 132
 assert set(ROUTE_ENTRIES) == set(range(132))
-assert sum(map(len, CHECKPOINTS)) == 152
+assert sum(map(len, CHECKPOINTS)) == 153
 assert schema_hash() == EXPECTED_SCHEMA_HASH

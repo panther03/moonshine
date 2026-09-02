@@ -59,6 +59,7 @@ const CarryDesc kCarryRoutes[] = {
     {SplitStats::ROUTE_RICCO_1, 3, 0, 0x3B, 0},
     {SplitStats::ROUTE_RICCO_2, 3, 1, 0x1E, 0},
     {SplitStats::ROUTE_RICCO_4, 3, 3, 0x30, 0},
+    {SplitStats::ROUTE_BIANCO_2, 2, 0, 0x37, 0},
     {SplitStats::ROUTE_BIANCO_3_FULL, 2, 2, 0x2F, 0},
     {SplitStats::ROUTE_BIANCO_6_FULL, 2, 5, 0x2E, 0},
     {SplitStats::ROUTE_PIANTA_5_FULL, 8, 4, 0x2A, 0},
@@ -587,8 +588,7 @@ void noteMarioStatus(TMario *mario, u32 status) {
             publishEvent(sActiveRoute, 0);
         break;
     case SplitStats::ROUTE_BIANCO_2:
-        if ((routeScene(sActiveRoute, 2, 0) ||
-             routeScene(sActiveRoute, 2, 1)) &&
+        if (routeScene(sActiveRoute, 2, 0) &&
             status == kMarioRolloutStatus &&
             mario->mTranslation.y >= 3200.0f)
             publishEvent(sActiveRoute, 0);
@@ -705,7 +705,7 @@ void notePeteyDamage(u8 healthBefore, u8 healthAfter) {
     for (u8 i = 0; i < hits; ++i) {
         ++sPeteyHits;
         if (sActiveRoute == SplitStats::ROUTE_BIANCO_2)
-            publishEvent(sActiveRoute, sPeteyHits);
+            publishEvent(sActiveRoute, sPeteyHits + 1);
         else if (sActiveRoute == SplitStats::ROUTE_BIANCO_5)
             publishEvent(sActiveRoute, sPeteyHits);
     }
@@ -983,6 +983,10 @@ void updateTransitions() {
         if (routeScene(sActiveRoute, 3, 3))
             publishTransition(sActiveRoute, 1, 0x30);
         break;
+    case SplitStats::ROUTE_BIANCO_2:
+        if (routeScene(sActiveRoute, 2, 0))
+            publishTransition(sActiveRoute, 1, 0x37);
+        break;
     case SplitStats::ROUTE_BIANCO_3_FULL:
         if (routeScene(sActiveRoute, 2, 2))
             publishTransition(sActiveRoute, 1, 0x2F);
@@ -1129,8 +1133,7 @@ void updateBossGesso() {
 }
 
 void updatePetey() {
-    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0) ||
-                    routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1);
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0);
     const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
     if (!b2 && !b5) return;
     if (!sPetey) {
@@ -1314,6 +1317,12 @@ void beforeStageSetup() {
     if (sameAttempt && sActiveRoute == SplitStats::ROUTE_RICCO_1 &&
         sArmedCarryRoute == SplitStats::ROUTE_RICCO_1 &&
         sceneMatches(current, 0x3B, 0)) {
+        sCarryAttempt = true;
+    }
+    if (sameAttempt && sActiveRoute == SplitStats::ROUTE_BIANCO_2 &&
+        sArmedCarryRoute == SplitStats::ROUTE_BIANCO_2 &&
+        sceneMatches(current, 0x37, 0)) {
+        // The movie director overwrites mPrevScene before the boss setup.
         sCarryAttempt = true;
     }
 
@@ -1534,8 +1543,7 @@ extern "C" void susamuneSplitPeteyHipDrop(void *petey) {
     const u8 before = enemy->mHealth;
     reinterpret_cast<PeteyHipDropFn>(sPeteyHipDropTrampoline)(petey);
     if (!sRetailDirectOpen || !stageIdentityValid()) return;
-    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0) ||
-                    routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1);
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0);
     const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
     if (b2 || b5) {
         const u8 after = enemy->mHealth;

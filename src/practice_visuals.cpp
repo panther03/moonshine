@@ -3,6 +3,7 @@
 #include "Dolphin/MTX.h"
 #include "Dolphin/math.h"
 #include "Dolphin/string.h"
+#include "JSystem/J2D/J2DScreen.hxx"
 #include "SMS/Camera/CubeManagerBase.hxx"
 #include "SMS/Camera/CubeMapTool.hxx"
 #include "SMS/Camera/PolarSubCamera.hxx"
@@ -51,6 +52,7 @@ const u32 kEelTooth = 0x08000022u;
 const u32 kYoshiTongue = 0x08000083u;
 const int kScreenWidth = 640;
 const int kScreenHeight = 480;
+const int kMissionCounterGap = 60;
 
 struct Projection {
     Mtx view;
@@ -406,26 +408,50 @@ void drawRaceCube(Menu *menu, const Projection &projection,
         -1, 0, -1, 1, 0, -1, 1, 0, 1, -1, 0, 1,
         -1, 1, -1, 1, 1, -1, 1, 1, 1, -1, 1, 1,
     };
-    static const u8 kEdges[24] = {
-        0, 1, 1, 2, 2, 3, 3, 0,
-        4, 5, 5, 6, 6, 7, 7, 4,
-        0, 4, 1, 5, 2, 6, 3, 7,
+    static const u8 kFaces[24] = {
+        0, 3, 2, 1, 4, 5, 6, 7,
+        0, 1, 5, 4, 1, 2, 6, 5,
+        2, 3, 7, 6, 3, 0, 4, 7,
     };
     s16 screen[16];
-    bool visible[8];
+    bool fillSafe = true;
+    int minX = kScreenWidth;
+    int maxX = 0;
+    int minY = kScreenHeight;
+    int maxY = 0;
     for (int i = 0; i < 8; ++i) {
         const TVec3f world = cubePoint(
             cube, kCorners[i * 3] * cube->mScale.x * 0.5f,
             kCorners[i * 3 + 1] * cube->mScale.y,
             kCorners[i * 3 + 2] * cube->mScale.z * 0.5f);
-        visible[i] = projection.point(world, &screen[i * 2],
-                                      &screen[i * 2 + 1]);
+        if (!projection.point(world, &screen[i * 2],
+                              &screen[i * 2 + 1])) {
+            fillSafe = false;
+            continue;
+        }
+        const int x = screen[i * 2];
+        const int y = screen[i * 2 + 1];
+        fillSafe = fillSafe && x >= 1 && x < kScreenWidth - 1 &&
+                   y >= 1 && y < kScreenHeight - 1;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
     }
-    for (int i = 0; i < 12; ++i) {
-        const u8 a = kEdges[i * 2];
-        const u8 b = kEdges[i * 2 + 1];
-        if (visible[a] && visible[b])
-            drawSegment(menu, &screen[a * 2], &screen[b * 2], color);
+    // Refuse fills that cross the viewport or engulf it near the camera.
+    // Labels still identify those checkpoints without feeding GX a giant fan.
+    fillSafe = fillSafe && maxX - minX <= 400 && maxY - minY <= 360;
+    if (fillSafe) {
+        const JUtility::TColor fill(color.r, color.g, color.b, 48);
+        for (int face = 0; face < 6; ++face) {
+            s16 xy[8];
+            for (int corner = 0; corner < 4; ++corner) {
+                const int index = kFaces[face * 4 + corner];
+                xy[corner * 2] = screen[index * 2];
+                xy[corner * 2 + 1] = screen[index * 2 + 1];
+            }
+            menu->fillPoly(xy, 4, fill);
+        }
     }
 
     const TVec3f labelPoint =
@@ -473,6 +499,48 @@ void drawRiccoCheckpoints(Menu *menu, const Projection &projection) {
                     JUtility::TColor(95, 255, 145, 255));
 }
 
+bool paneOnScreen(const J2DPane *pane) {
+    return pane && pane->mIsVisible && pane->mRect.mY1 < kScreenHeight - 1 &&
+           pane->mRect.mY2 > 1;
+}
+
+struct PaneShift {
+    J2DPane *pane;
+    int y;
+};
+
+PaneShift shiftPinnaTimerPanel(J2DScreen *screen) {
+    PaneShift shift = {nullptr, 0};
+    if (!screen ||
+        gpApplication.mContext != TApplication::CONTEXT_DIRECT_STAGE ||
+        gpApplication.mCurrentScene.mAreaID !=
+            TGameSequence::AREA_PINNABOSS ||
+        gpApplication.mCurrentScene.mEpisodeID != 0 || !gpMarDirector ||
+        !gpMarDirector->mGCConsole ||
+        gpMarDirector->mGCConsole->mMainScreen != screen) {
+        return shift;
+    }
+
+    J2DPane *balloon = screen->search('\0b_0');
+    J2DPane *timer = screen->search('\0t_0');
+    if (!paneOnScreen(balloon) || !paneOnScreen(timer)) return shift;
+
+    const int gap = balloon->mRect.mY1 - timer->mRect.mY1;
+    if (gap >= kMissionCounterGap) return shift;
+    const int y = gap - kMissionCounterGap;
+    if (timer->mRect.mY1 + y < 1 ||
+        timer->mRect.mY2 + y >= kScreenHeight - 1) {
+        return shift;
+    }
+
+    // Bracket only the actual HUD draw. TExPane never observes the offset,
+    // and an already-separated timer is left exactly where it is.
+    timer->add(0, y);
+    shift.pane = timer;
+    shift.y = y;
+    return shift;
+}
+
 }  // namespace
 
 void update() {
@@ -481,6 +549,13 @@ void update() {
         gSettings.getBool(SETTING_RICCO_RACE_CHECKPOINTS)) {
         ILing::invalidateForAssist();
     }
+}
+
+void drawHudScreen(J2DScreen *screen, int x, int y,
+                   const J2DGrafContext *context) {
+    const PaneShift shift = shiftPinnaTimerPanel(screen);
+    screen->draw(x, y, context);
+    if (shift.pane) shift.pane->add(0, -shift.y);
 }
 
 void draw(Menu *menu) {
@@ -518,3 +593,8 @@ void draw(Menu *menu) {
 }
 
 }  // namespace PracticeVisuals
+
+extern "C" void susamuneDrawHudScreen(J2DScreen *screen, int x, int y,
+                                       const J2DGrafContext *context) {
+    PracticeVisuals::drawHudScreen(screen, x, y, context);
+}
