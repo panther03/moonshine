@@ -1002,6 +1002,11 @@ bool stageObjectsLive() {
 bool isInternalScene(const LevelWarp::Dest &start,
                      const TGameSequence &scene) {
     if (start.area == TGameSequence::AREA_PINNAPARCO &&
+        start.episode == 3 && start.gameInt3 == 5 &&
+        scene.mAreaID == 0x29 && scene.mEpisodeID == 0) {
+        return true;
+    }
+    if (start.area == TGameSequence::AREA_PINNAPARCO &&
         start.episode == 5 && scene.mAreaID == 0x3A &&
         scene.mEpisodeID == 0) {
         return true;
@@ -1797,7 +1802,9 @@ bool start(int entry, u32 approvedDiscardToken) {
     sWarpRollbackFluddSecrets = gSettings.get(SETTING_FLUDD_SECRETS);
     const Entry &item = kEntries[entry];
     const u8 routeFlags = item.flags & ENTRY_FLAG_MASK;
-    if ((routeFlags & (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) ==
+    if (fullRedsBaseShine(entry) >= 0) {
+        gSettings.set(SETTING_FLUDD_SECRETS, 2);
+    } else if ((routeFlags & (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) ==
         (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) {
         gSettings.set(SETTING_FLUDD_SECRETS, 1);
     } else if (routeFlags == ENTRY_CARRY_OVERLAY) {

@@ -3,11 +3,9 @@
 #include "Dolphin/MTX.h"
 #include "Dolphin/math.h"
 #include "Dolphin/string.h"
-#include "JSystem/J2D/J2DScreen.hxx"
 #include "SMS/Camera/CubeManagerBase.hxx"
 #include "SMS/Camera/CubeMapTool.hxx"
 #include "SMS/Camera/PolarSubCamera.hxx"
-#include "SMS/GC2D/GCConsole2.hxx"
 #include "SMS/MapObj/MapObjHide.hxx"
 #include "SMS/Strategic/Strategy.hxx"
 #include "SMS/System/Application.hxx"
@@ -51,7 +49,8 @@ const u32 kFruitFirst = 0x40000390u;
 const u32 kFruitLast = 0x40000395u;
 const u32 kEelTooth = 0x08000022u;
 const u32 kYoshiTongue = 0x08000083u;
-const int kBalloonPanelShift = 60;
+const int kScreenWidth = 640;
+const int kScreenHeight = 480;
 
 struct Projection {
     Mtx view;
@@ -137,8 +136,40 @@ bool validVolume(const THitActor *actor, u8 target) {
 
 void drawSegment(Menu *menu, const s16 *a, const s16 *b,
                  const JUtility::TColor &color) {
-    const s16 points[4] = {a[0], a[1], b[0], b[1]};
-    menu->strokePoly(points, 2, color);
+    int x0 = a[0];
+    int y0 = a[1];
+    int x1 = b[0];
+    int y1 = b[1];
+    const int left = 1;
+    const int right = kScreenWidth - 2;
+    const int top = 1;
+    const int bottom = kScreenHeight - 2;
+
+    // Clip before feeding GX. Near-camera volumes can otherwise create
+    // enormous off-screen primitives that the hardware clips unpredictably.
+    if ((x0 < left && x1 < left) || (x0 > right && x1 > right) ||
+        (y0 < top && y1 < top) || (y0 > bottom && y1 > bottom)) return;
+    if (x0 < left) x0 = left;
+    if (x0 > right) x0 = right;
+    if (x1 < left) x1 = left;
+    if (x1 > right) x1 = right;
+    if (y0 < top) y0 = top;
+    if (y0 > bottom) y0 = bottom;
+    if (y1 < top) y1 = top;
+    if (y1 > bottom) y1 = bottom;
+
+    const int dx = x1 - x0;
+    const int dy = y1 - y0;
+    if (!dx && !dy) return;
+    const int ox = (dy > 0) - (dy < 0);
+    const int oy = (dx < 0) - (dx > 0);
+    const s16 quad[8] = {
+        static_cast<s16>(x0 + ox), static_cast<s16>(y0 + oy),
+        static_cast<s16>(x1 + ox), static_cast<s16>(y1 + oy),
+        static_cast<s16>(x1 - ox), static_cast<s16>(y1 - oy),
+        static_cast<s16>(x0 - ox), static_cast<s16>(y0 - oy),
+    };
+    menu->fillPoly(quad, 4, color);
 }
 
 void fillCylinder(Menu *menu, const s16 *lower, const s16 *upper,
@@ -170,6 +201,11 @@ void drawCylinder(Menu *menu, const Projection &projection,
     bool lowerValid[8];
     bool upperValid[8];
     bool allValid = true;
+    bool fillSafe = true;
+    int minX = kScreenWidth;
+    int maxX = 0;
+    int minY = kScreenHeight;
+    int maxY = 0;
     for (int i = 0; i < 8; ++i) {
         TVec3f p(actor->mTranslation.x +
                      actor->mReceiveRadius * kCircle[i * 2] * 0.01f,
@@ -182,20 +218,43 @@ void drawCylinder(Menu *menu, const Projection &projection,
         upperValid[i] =
             projection.point(p, &upper[i * 2], &upper[i * 2 + 1]);
         allValid = allValid && lowerValid[i] && upperValid[i];
+        if (lowerValid[i] && upperValid[i]) {
+            const int lx = lower[i * 2];
+            const int ly = lower[i * 2 + 1];
+            const int ux = upper[i * 2];
+            const int uy = upper[i * 2 + 1];
+            fillSafe = fillSafe && lx >= 0 && lx < kScreenWidth &&
+                       ly >= 0 && ly < kScreenHeight && ux >= 0 &&
+                       ux < kScreenWidth && uy >= 0 && uy < kScreenHeight;
+            if (lx < minX) minX = lx;
+            if (ux < minX) minX = ux;
+            if (lx > maxX) maxX = lx;
+            if (ux > maxX) maxX = ux;
+            if (ly < minY) minY = ly;
+            if (uy < minY) minY = uy;
+            if (ly > maxY) maxY = ly;
+            if (uy > maxY) maxY = uy;
+        } else {
+            fillSafe = false;
+        }
     }
+    fillSafe = fillSafe && maxX - minX <= 400 && maxY - minY <= 360;
 
     const JUtility::TColor line(35, 255, 120, 235);
     if (allValid) {
-        if (mode == HURTBOX_TRANSPARENT)
+        if (fillSafe && mode == HURTBOX_TRANSPARENT)
             fillCylinder(menu, lower, upper,
                          JUtility::TColor(35, 255, 120, 64));
-        else if (mode == HURTBOX_SOLID)
+        else if (fillSafe && mode == HURTBOX_SOLID)
             fillCylinder(menu, lower, upper,
                          JUtility::TColor(35, 255, 120, 255));
-        menu->strokePoly(lower, 8, line);
-        menu->strokePoly(upper, 8, line);
-        for (int i = 0; i < 8; i += 2)
-            drawSegment(menu, &lower[i * 2], &upper[i * 2], line);
+        for (int i = 0; i < 8; ++i) {
+            const int next = (i + 1) & 7;
+            drawSegment(menu, &lower[i * 2], &lower[next * 2], line);
+            drawSegment(menu, &upper[i * 2], &upper[next * 2], line);
+            if ((i & 1) == 0)
+                drawSegment(menu, &lower[i * 2], &upper[i * 2], line);
+        }
         return;
     }
 
@@ -265,6 +324,8 @@ void drawHiddenMarker(Menu *menu, const Projection &projection,
     s16 x;
     s16 y;
     if (!projection.point(world, &x, &y)) return;
+    if (x < 8 || x >= kScreenWidth - 8 || y < 8 ||
+        y >= kScreenHeight - 8) return;
 
     JUtility::TColor line(255, 135, 35, 255);
     JUtility::TColor fill(125, 45, 0, 190);
@@ -283,7 +344,9 @@ void drawHiddenMarker(Menu *menu, const Projection &projection,
         x, static_cast<s16>(y + 7), static_cast<s16>(x - 7), y,
     };
     menu->fillPoly(diamond, 4, fill);
-    menu->strokePoly(diamond, 4, line);
+    for (int i = 0; i < 4; ++i)
+        drawSegment(menu, &diamond[i * 2], &diamond[((i + 1) & 3) * 2],
+                    line);
     if (labels)
         menu->drawText(label, x + 10, y - 6, 10, 10, line);
 }
@@ -369,10 +432,17 @@ void drawRaceCube(Menu *menu, const Projection &projection,
         cubePoint(cube, 0.0f, cube->mScale.y * 0.5f, 0.0f);
     s16 x;
     s16 y;
-    if (projection.point(labelPoint, &x, &y)) {
+    if (projection.point(labelPoint, &x, &y) && x >= 6 &&
+        x < kScreenWidth - 53 && y >= 10 && y < kScreenHeight - 10) {
         char label[] = "CP A";
         label[3] = letter;
-        menu->drawText(label, x + 5, y - 6, 11, 11, color);
+        menu->fillBox(x - 6, y - 6, 13, 13,
+                      JUtility::TColor(0, 0, 0, 205));
+        menu->fillBox(x - 5, y - 1, 11, 3, color);
+        menu->fillBox(x - 1, y - 5, 3, 11, color);
+        menu->fillBox(x + 9, y - 10, 35, 18,
+                      JUtility::TColor(0, 0, 0, 205));
+        menu->drawText(label, x + 13, y - 8, 14, 14, color);
     }
 }
 
@@ -396,36 +466,11 @@ void drawRiccoCheckpoints(Menu *menu, const Projection &projection) {
         return;
     }
     drawRaceManager(menu, projection, gpCubeFastA, 'A',
-                    JUtility::TColor(75, 190, 255, 245));
+                    JUtility::TColor(75, 210, 255, 255));
     drawRaceManager(menu, projection, gpCubeFastB, 'B',
-                    JUtility::TColor(255, 185, 45, 245));
+                    JUtility::TColor(255, 205, 45, 255));
     drawRaceManager(menu, projection, gpCubeFastC, 'C',
-                    JUtility::TColor(95, 255, 130, 245));
-}
-
-bool paneOnScreen(const J2DPane *pane) {
-    return pane && pane->mIsVisible && pane->mRect.mY1 < 448 &&
-           pane->mRect.mY2 > 0;
-}
-
-J2DPane *shiftPinnaBalloonPanel(J2DScreen *screen) {
-    if (!screen ||
-        gpApplication.mContext != TApplication::CONTEXT_DIRECT_STAGE ||
-        gpApplication.mCurrentScene.mAreaID != TGameSequence::AREA_PINNABOSS ||
-        gpApplication.mCurrentScene.mEpisodeID != 0 || !gpMarDirector ||
-        !gpMarDirector->mGCConsole ||
-        gpMarDirector->mGCConsole->mMainScreen != screen) {
-        return nullptr;
-    }
-
-    J2DPane *balloon = screen->search('\0b_0');
-    J2DPane *timer = screen->search('\0t_0');
-    if (!paneOnScreen(balloon) || !paneOnScreen(timer)) return nullptr;
-
-    // This hook runs after retail's TExPane updates and immediately before the
-    // screen draws, so neither pane's animation state learns about the shift.
-    balloon->add(0, kBalloonPanelShift);
-    return balloon;
+                    JUtility::TColor(95, 255, 145, 255));
 }
 
 }  // namespace
@@ -436,13 +481,6 @@ void update() {
         gSettings.getBool(SETTING_RICCO_RACE_CHECKPOINTS)) {
         ILing::invalidateForAssist();
     }
-}
-
-void drawHudScreen(J2DScreen *screen, int x, int y,
-                   const J2DGrafContext *context) {
-    J2DPane *shifted = shiftPinnaBalloonPanel(screen);
-    screen->draw(x, y, context);
-    if (shifted) shifted->add(0, -kBalloonPanelShift);
 }
 
 void draw(Menu *menu) {
@@ -480,8 +518,3 @@ void draw(Menu *menu) {
 }
 
 }  // namespace PracticeVisuals
-
-extern "C" void susamuneDrawHudScreen(J2DScreen *screen, int x, int y,
-                                       const J2DGrafContext *context) {
-    PracticeVisuals::drawHudScreen(screen, x, y, context);
-}

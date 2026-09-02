@@ -109,16 +109,16 @@ struct Painter {
 
     void button(int lx, int ly, int radius, bool down, int slot) const {
         const Color c = lit(slot, 0xbf);
-        if (scale(radius) <= 2) {
+        if (scale(radius) <= 3) {
             const int cx = x(lx);
             const int cy = y(ly);
             if (down) {
-                menu->fillBox(cx - 1, cy - 1, 3, 3, c);
+                menu->fillBox(cx - 2, cy - 2, 5, 5, c);
             } else {
-                menu->fillBox(cx - 1, cy - 1, 3, 1, c);
-                menu->fillBox(cx - 1, cy + 1, 3, 1, c);
-                menu->fillBox(cx - 1, cy, 1, 1, c);
-                menu->fillBox(cx + 1, cy, 1, 1, c);
+                menu->fillBox(cx - 2, cy - 2, 5, 1, c);
+                menu->fillBox(cx - 2, cy + 2, 5, 1, c);
+                menu->fillBox(cx - 2, cy - 1, 1, 3, c);
+                menu->fillBox(cx + 2, cy - 1, 1, 3, c);
             }
             return;
         }
@@ -429,7 +429,7 @@ void InputDisplay::draw(Menu *menu, bool force) const {
     p.button(164, 50, 8, buttons & JUTGamePad::X, SUSAMUNE_INPUT_COLOR_X);
     p.button(119, 41, 8, buttons & JUTGamePad::Y, SUSAMUNE_INPUT_COLOR_Y);
     p.button(144, 34, 6, buttons & JUTGamePad::Z, SUSAMUNE_INPUT_COLOR_Z);
-    p.button(91, 64, 5, buttons & JUTGamePad::START,
+    p.button(91, 64, 9, buttons & JUTGamePad::START,
              SUSAMUNE_INPUT_COLOR_START);
 
     if (lines == 0) return;

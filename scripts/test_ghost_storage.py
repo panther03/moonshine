@@ -342,13 +342,17 @@ class StorageEnvelopeTests(unittest.TestCase):
         source = ghost_path.read_text(encoding="utf-8")
         race_load = source_function(ghost_path, "importPlayback")
 
-        # An asynchronous target can arrive after the player has already left
-        # the menu. That prefix was recorded without its opponent and must not
-        # be retained as the challenger on the first restart. A finished run
-        # remains available for an explicit save.
+        # Anything recorded before the opponent arrived belongs to the old
+        # session, including a completed unsaved non-PB. Only a PB protected by
+        # Records may survive while the race target is installed.
         self.assertIn(
-            "if (sRecording || !sRecord.valid) clearRecord();", race_load
+            "const bool recordHasUnsavedPB", race_load
         )
+        self.assertIn("sRecord.valid && sRecord.pb && !sRecord.saved",
+                      race_load)
+        self.assertIn("sRecord.pbToken != 0", race_load)
+        self.assertIn("if (!recordHasUnsavedPB) clearRecord();", race_load)
+        self.assertNotIn("sRecording || !sRecord.valid", race_load)
         self.assertIn("sRecording = false", race_load)
         self.assertIn("sAttemptSerial = gQFTTimer.attemptSerial()", race_load)
         self.assertIn("sBoundaryPending = false", race_load)
@@ -364,14 +368,42 @@ class StorageEnvelopeTests(unittest.TestCase):
         self.assertIn('"Ghost ready - restart to race"',
                       storage_path.read_text(encoding="utf-8"))
 
-        # Once the clean attempt completes, it remains the save source while
-        # the selected opponent stays pinned. Storage acknowledgement releases
-        # it for a later race without touching the opponent.
+        # A challenger completed after import remains the save source across a
+        # restart while the selected opponent stays pinned. Storage
+        # acknowledgement releases it without touching the opponent.
         begin_attempt = source_function(ghost_path, "beginAttempt")
         self.assertIn(
-            "recordPromotable && sPlaybackPinned && !sRecord.saved",
+            "recordReady && sRecord.completed",
             begin_attempt,
         )
+        self.assertIn("sPlaybackPinned && !sRecord.saved", begin_attempt)
+        self.assertNotIn(
+            "recordPromotable && sPlaybackPinned", begin_attempt
+        )
+        self.assertIn("if (boundaryReset)", begin_attempt)
+        self.assertIn("sPinRouteCheckPending = true", begin_attempt)
+        release_saved = source_function(ghost_path, "releaseSavedRecording")
+        self.assertIn("sPlaybackPinned && !sRecording", release_saved)
+        self.assertIn("clearRecord();", release_saved)
+
+        # A child-stage restart can briefly report the departed scene or an
+        # unsettled parent-episode flag. Keep the selected target through that
+        # boundary, refresh the tuple while QFT is provisional, and only then
+        # decide whether the pin still belongs to the settled course.
+        refresh = source_function(ghost_path, "refreshProvisionalRoute")
+        self.assertIn("captureLiveRoute();", refresh)
+        self.assertIn("sClockObservations = 1", refresh)
+        self.assertIn("segment->routeVariant = sLiveParentEpisode", refresh)
+        settle = source_function(ghost_path, "settlePlaybackPin")
+        self.assertIn("if (!sPinRouteCheckPending) return", settle)
+        self.assertIn("!pinSurvivesRoute", settle)
+        update = source_function(ghost_path, "update")
+        refresh_call = update.index("refreshProvisionalRoute()")
+        self.assertLess(
+            refresh_call,
+            update.index("if (sBoundaryPending)", refresh_call),
+        )
+        self.assertGreaterEqual(update.count("settlePlaybackPin()"), 3)
 
         selection = re.search(
             r"SaveSelection latestSaveableTrack\(\) \{(?P<body>.*?)\n\}",

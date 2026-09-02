@@ -35,12 +35,12 @@ class ModBinCapacityTests(unittest.TestCase):
         self.assertEqual(gen_mod_bin.MAGIC, 0x534D4F44)
         self.assertEqual(gen_mod_bin.VERSION, 2)
         self.assertEqual(gen_mod_bin.HEADER_SIZE, 32)
-        self.assertEqual(gen_mod_bin.BLOB_MAX_SIZE, 0x50000)
+        self.assertEqual(gen_mod_bin.BLOB_MAX_SIZE, 0x58000)
         self.assertEqual(gen_mod_bin.STAGED_FILE_MAX_SIZE, 0x5F000)
 
     def test_current_write_count_fits_at_raw_cap(self) -> None:
-        packed = gen_mod_bin.build_mod_bin(manifest(0x50000, 22))
-        self.assertEqual(len(packed), 0x500D0)
+        packed = gen_mod_bin.build_mod_bin(manifest(0x58000, 22))
+        self.assertEqual(len(packed), 0x580D0)
 
     def test_v2_header_separates_file_prefix_from_runtime_image(self) -> None:
         packed = gen_mod_bin.build_mod_bin(manifest(8, 1, 0x100))
@@ -70,7 +70,7 @@ class ModBinCapacityTests(unittest.TestCase):
 
     def test_runtime_image_cap_is_strict(self) -> None:
         with self.assertRaisesRegex(ValueError, "MEM1 working cap"):
-            gen_mod_bin.build_mod_bin(manifest(4, 0, 0x50004))
+            gen_mod_bin.build_mod_bin(manifest(4, 0, 0x58004))
 
     def test_both_sizes_must_be_word_aligned(self) -> None:
         with self.assertRaisesRegex(ValueError, "code blob"):
@@ -80,16 +80,16 @@ class ModBinCapacityTests(unittest.TestCase):
 
     def test_raw_cap_is_strict(self) -> None:
         with self.assertRaisesRegex(ValueError, "MEM1 working cap"):
-            gen_mod_bin.build_mod_bin(manifest(0x50004, 0))
+            gen_mod_bin.build_mod_bin(manifest(0x58004, 0))
 
     def test_staged_file_ceiling_is_end_exclusive(self) -> None:
-        exact_writes = (0x5F000 - gen_mod_bin.HEADER_SIZE - 0x50000) // 8
+        exact_writes = (0x5F000 - gen_mod_bin.HEADER_SIZE - 0x58000) // 8
         self.assertEqual(
-            len(gen_mod_bin.build_mod_bin(manifest(0x50000, exact_writes))),
+            len(gen_mod_bin.build_mod_bin(manifest(0x58000, exact_writes))),
             0x5F000,
         )
         with self.assertRaisesRegex(ValueError, "reset-safe ceiling"):
-            gen_mod_bin.build_mod_bin(manifest(0x50000, exact_writes + 1))
+            gen_mod_bin.build_mod_bin(manifest(0x58000, exact_writes + 1))
 
 
 class ModBinConsumerContractTests(unittest.TestCase):

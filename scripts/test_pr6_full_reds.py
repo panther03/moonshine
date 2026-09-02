@@ -18,6 +18,9 @@ HEADER = (ROOT / "include" / "susamune" / "susamune_cfg.h").read_text(
     encoding="utf-8"
 )
 RECORDS = (ROOT / "src" / "records.cpp").read_text(encoding="utf-8")
+STAGE_LOADER = (ROOT / "src" / "stage_loader.cpp").read_text(
+    encoding="utf-8"
+)
 
 
 class FullRedsContracts(unittest.TestCase):
@@ -62,6 +65,72 @@ class FullRedsContracts(unittest.TestCase):
         same_episode = ILING[ILING.index("bool sameEpisodeShine") :]
         same_episode = same_episode[: same_episode.index("const char *label")]
         self.assertIn("return completedEntry == selectedEntry;", same_episode)
+
+    def test_full_reds_force_fludd_in_every_secret(self) -> None:
+        start = ILING[ILING.index("bool start(int entry,") :]
+        start = start[: start.index("void cancelWarpStart")]
+        full_reds = start.index("if (fullRedsBaseShine(entry) >= 0)")
+        no_fludd = start.index(
+            "ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY", full_reds
+        )
+        self.assertLess(full_reds, no_fludd)
+        self.assertIn(
+            "gSettings.set(SETTING_FLUDD_SECRETS, 2);",
+            start[full_reds:no_fludd],
+        )
+
+    def test_pinna_six_park_secret_keeps_full_route_identity(self) -> None:
+        self.assertIn(
+            'SHINE_FULL("Pinna 6 (Full)", 0x0D, 3, 5, 35, GROUP_PINNA)',
+            ENTRIES,
+        )
+        self.assertIn(
+            'SHINE_FULL_REDS("Pinna 6 Full Reds", 0x0D, 3, 5, 39, '
+            'GROUP_PINNA, 131, 35)',
+            ENTRIES,
+        )
+        internal = ILING[ILING.index("bool isInternalScene") :]
+        internal = internal[: internal.index("int entryForStartScene")]
+        self.assertRegex(
+            internal,
+            r"start\.area == TGameSequence::AREA_PINNAPARCO &&\s*"
+            r"start\.episode == 3 && start\.gameInt3 == 5 &&\s*"
+            r"scene\.mAreaID == 0x29 && scene\.mEpisodeID == 0",
+        )
+
+        setup = ILING[ILING.index("void beforeStageSetup()") :]
+        setup = setup[: setup.index("void onStageSetup()")]
+        carry = setup.split(
+            "if (!isPlazaEntry(sSelectedEntry) &&", 1
+        )[1].split("clearAttempt();", 1)[0]
+        self.assertIn("isInternalScene(sAttemptStart, scene)", carry)
+        self.assertIn("applyEntryOverlay(sSelectedEntry);", carry)
+        self.assertIn("return;", carry)
+
+    def test_full_reds_result_updates_direct_pb_and_stage_loader(self) -> None:
+        result = ILING[ILING.index("int entryForResult(u8 result)") :]
+        result = result[: result.index("bool readOverlayFlag")]
+        selected = result.split("if (validEntry(sSelectedEntry))", 1)[1]
+        selected = selected.split("const Entry &gbs", 1)[0]
+        self.assertIn("fullRedsBaseShine(sSelectedEntry) >= 0", selected)
+        self.assertIn("selected.result == result", selected)
+        self.assertIn("return sSelectedEntry;", selected)
+
+        record = ILING[ILING.index("void recordResult(int entry") :]
+        record = record[: record.index("}  // namespace")]
+        for call in (
+            "Records::onILResult(entry,",
+            "StageLoader::onILResult(entry, qf, sRecordsEligible);",
+            "recordPB(entry, qf);",
+            "SplitStats::onILResult(entry, qf);",
+        ):
+            self.assertIn(call, record)
+
+        loader = STAGE_LOADER[STAGE_LOADER.index("void onILResult(") :]
+        loader = loader[: loader.index("void onILWarpCancelled")]
+        self.assertIn("const int expected = expectedResultEntry();", loader)
+        self.assertIn("if (entry != expected && !episodeShine)", loader)
+        self.assertIn("queueSuccess(", loader)
 
     def test_bonus_and_hundred_routes_are_streak_choices_again(self) -> None:
         selectable = ILING[ILING.index("bool streakEntrySelectable") :]

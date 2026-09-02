@@ -89,6 +89,11 @@ bool rawAHeld() {
 }
 
 bool isWaterSlide(const TMario *mario) {
+    // Retail marks a dive slide as the water variant after the first state
+    // tick, even when Mario has already left the water and the floor is dry.
+    if (mario->mState == TMario::STATE_DIVESLIDE &&
+        (mario->mSubState == 1 || mario->mAttributes.mLeftRecentWater))
+        return true;
     if (mario->mAttributes.mIsWater ||
         mario->mAttributes.mIsShallowWater) {
         return true;
@@ -116,6 +121,7 @@ void beforeDirect(bool active) {
     if (sGroundTracking && sMario->mState == TMario::STATE_DIVESLIDE &&
         sGroundFrames < 7) {
         sGroundFrames++;
+        if (isWaterSlide(sMario)) sGroundDry = false;
     }
 
     if (sRolloutTracking) {
@@ -143,6 +149,9 @@ void afterDirect(bool active) {
         sGroundFrames = 0;
         sGroundTracking = true;
         sGroundDry = !isWaterSlide(sMario);
+    } else if (sGroundTracking && state == TMario::STATE_DIVESLIDE &&
+               isWaterSlide(sMario)) {
+        sGroundDry = false;
     }
 
     const bool rollout = sStateBefore != TMario::STATE_DIVEJUMP &&

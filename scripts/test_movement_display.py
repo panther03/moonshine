@@ -93,13 +93,19 @@ class MovementDisplayContracts(unittest.TestCase):
 
     def test_dust_ignores_water_slides(self) -> None:
         water = function(self.source, r"bool isWaterSlide\(const TMario \*mario\)")
+        before = function(self.source, r"void beforeDirect\(bool active\)")
         after = function(self.source, r"void afterDirect\(bool active\)")
+        self.assertIn("mario->mState == TMario::STATE_DIVESLIDE", water)
+        self.assertIn("mario->mSubState == 1", water)
+        self.assertIn("mAttributes.mLeftRecentWater", water)
         self.assertIn("mAttributes.mIsWater", water)
         self.assertIn("mAttributes.mIsShallowWater", water)
         self.assertIn("mFloorTriangle", water)
         self.assertIn("floor->isWaterSlip()", water)
         self.assertNotIn("floor->mType", water)
+        self.assertIn("if (isWaterSlide(sMario)) sGroundDry = false;", before)
         self.assertIn("sGroundDry = !isWaterSlide(sMario);", after)
+        self.assertIn("isWaterSlide(sMario)", after)
         self.assertIn("dustEnabled() && dryLanding", after)
 
     def test_dust_popup_survives_until_rollout_result_is_ready(self) -> None:

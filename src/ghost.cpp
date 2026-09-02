@@ -147,6 +147,7 @@ bool sPendingContinueRecording;
 bool sBoundaryPending;
 bool sLiveRouteValid;
 bool sPlaybackPinned;
+bool sPinRouteCheckPending;
 ClockPhase sClockPhase;
 u16 sClockObservations;
 u8 sLiveArea;
@@ -309,6 +310,16 @@ bool pinSurvivesRoute(u8 area, u8 episode, s32 parent, u8 parentArea) {
             playbackOwnsCourse(area, episode, parent, parentArea));
 }
 
+void settlePlaybackPin() {
+    if (!sPinRouteCheckPending) return;
+    sPinRouteCheckPending = false;
+    if (sPlaybackPinned &&
+        !pinSurvivesRoute(sLiveArea, sLiveEpisode, sLiveParentEpisode,
+                          sLiveRouteParentArea)) {
+        sPlaybackPinned = false;
+    }
+}
+
 bool recordPromotableForRoute(bool routeMatches, bool boundaryReset) {
     return sRecord.valid &&
            (sRecord.completed ||
@@ -329,6 +340,40 @@ void captureLiveRoute() {
         ? 0
         : SUSAMUNE_GHOST_ROUTE_INTERNAL_SCENE;
     sLiveRouteValid = true;
+}
+
+void refreshProvisionalRoute() {
+    const u8 priorArea = sLiveArea;
+    const u8 priorEpisode = sLiveEpisode;
+    const u8 priorParentArea = sLiveRouteParentArea;
+    const u8 priorFlags = sLiveRouteFlags;
+    const s32 priorParentEpisode = sLiveParentEpisode;
+    captureLiveRoute();
+    if (priorArea == sLiveArea && priorEpisode == sLiveEpisode &&
+        priorParentArea == sLiveRouteParentArea &&
+        priorFlags == sLiveRouteFlags &&
+        priorParentEpisode == sLiveParentEpisode) {
+        return;
+    }
+
+    // Scene and parent-episode fields can still settle after setupObjects().
+    // Require a fresh stable window before trusting them for a race or file.
+    sClockObservations = 1;
+    if (!sRecording) return;
+    Segment *segment = lastSegment(sRecord);
+    if (!segment) return;
+    segment->routeArea = sLiveArea;
+    segment->routeEpisode = sLiveEpisode;
+    segment->routeVariant = sLiveParentEpisode;
+    segment->routeParentArea = sLiveRouteParentArea;
+    segment->routeFlags = sLiveRouteFlags;
+    if (sRecord.segmentCount == 1) {
+        sRecord.area = sLiveArea;
+        sRecord.episode = sLiveEpisode;
+        sRecord.parentEpisode = sLiveParentEpisode;
+        sRecord.routeParentArea = sLiveRouteParentArea;
+        sRecord.routeFlags = sLiveRouteFlags;
+    }
 }
 
 bool liveRouteStorable() {
@@ -530,6 +575,7 @@ void stopAll() {
     clearTrack(sPlayback);
     bumpPlaybackToken();
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
     sRecording = false;
     sGhostVisible = false;
     sStageRoutePending = false;
@@ -1097,9 +1143,18 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
     // Plaza is a neutral handoff between races. Outside it, reaching another
     // logical course retires the pinned target so its challenger can take the
     // playback slot and the old target buffer can record the next attempt.
-    if (sPlaybackPinned &&
-        !pinSurvivesRoute(area, episode, parent, sLiveRouteParentArea)) {
-        sPlaybackPinned = false;
+    if (sPlaybackPinned) {
+        if (boundaryReset) {
+            // setupObjects can briefly expose the departed route. Keep the
+            // selected opponent until the new route has settled.
+            sPinRouteCheckPending = true;
+        } else if (!pinSurvivesRoute(area, episode, parent,
+                                     sLiveRouteParentArea)) {
+            sPlaybackPinned = false;
+            sPinRouteCheckPending = false;
+        }
+    } else {
+        sPinRouteCheckPending = false;
     }
     if (!sPlaybackPinned &&
         gSettings.getBool(SETTING_GHOST_LAST_SUCCESS) &&
@@ -1115,7 +1170,8 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
     const bool recordPromotable = recordReady &&
         recordPromotableForRoute(routeMatches, boundaryReset);
     const bool keepChallenger =
-        recordPromotable && sPlaybackPinned && !sRecord.saved;
+        recordReady && sRecord.completed &&
+        sPlaybackPinned && !sRecord.saved;
 
     if (recordPromotable && !sPlaybackPinned) {
         // Keep the newest completed track even when the next attempt changes
@@ -2275,6 +2331,7 @@ void init() {
     sBoundaryPending = false;
     sLiveRouteValid = false;
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
     sClockPhase = CLOCK_UNAVAILABLE;
     sClockObservations = 0;
     sClockLastQf = 0;
@@ -2604,6 +2661,8 @@ void update() {
         return;
     }
 
+    if (sClockPhase == CLOCK_PROVISIONAL) refreshProvisionalRoute();
+
     if (sBoundaryPending) {
         if (qf < sClockLastQf || qf < sBoundaryPriorQf) {
             rollbackBoundarySegment();
@@ -2641,6 +2700,7 @@ void update() {
             // short final segment merely because its director never settled.
             sBoundaryPending = false;
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             finishRecording(qf, true);
             updatePlayback(qf);
         } else if (ordered &&
@@ -2649,6 +2709,7 @@ void update() {
             qf - sClockEpochStartQf >= 8) {
             sBoundaryPending = false;
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             if (sRecording && sRecord.count >= 2) sRecord.valid = true;
             updatePlayback(qf);
         } else {
@@ -2690,6 +2751,7 @@ void update() {
             qf - sClockEpochStartQf >= 8 &&
             enoughSamples) {
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             if (sRecording) sRecord.valid = true;
         } else {
             // Playback follows the observed QFT while recording keeps its
@@ -2861,12 +2923,15 @@ bool importPlayback(const void *data, u32 size) {
     bumpPlaybackToken();
     installCanonicalTrack(sPlayback, data, header);
     sPlaybackPinned = true;
+    sPinRouteCheckPending = false;
     rewindPlayback();
 
-    // A target that arrives mid-attempt was not present for that recording.
-    // Keep an already finished save candidate, but never let the live prefix
-    // block the first complete challenger after the player restarts.
-    if (sRecording || !sRecord.valid) clearRecord();
+    // A run made before this opponent was selected is not its challenger.
+    // Only Records' protected PB may outlive the import.
+    const bool recordHasUnsavedPB =
+        sRecord.valid && sRecord.pb && !sRecord.saved &&
+        sRecord.pbToken != 0;
+    if (!recordHasUnsavedPB) clearRecord();
     sRecording = false;
     sGhostVisible = false;
     sStageRoutePending = false;
@@ -2937,6 +3002,7 @@ bool importObserverTrack(const void *data, u32 size, bool secondary) {
         bumpPlaybackToken();
         installCanonicalTrack(sPlayback, data, header);
         sPlaybackPinned = false;
+        sPinRouteCheckPending = false;
         sObserverPrimaryReady = true;
     }
     sRecording = false;
@@ -3199,6 +3265,7 @@ bool discardUnsavedPB(u32 token) {
         clearTrack(sPlayback);
         bumpPlaybackToken();
         sPlaybackPinned = false;
+        sPinRouteCheckPending = false;
         sGhostVisible = false;
         rewindPlayback();
         return true;
@@ -3221,7 +3288,10 @@ bool markCurrentRecordingPB(s32 resultQf) {
 
 bool playbackPinned() { return sPlaybackPinned; }
 
-void unpinPlayback() { sPlaybackPinned = false; }
+void unpinPlayback() {
+    sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
+}
 
 void clearPlayback() {
     if (sObserverPhase != OBSERVER_OFF) {
@@ -3237,6 +3307,7 @@ void clearPlayback() {
     clearTrack(sPlayback);
     bumpPlaybackToken();
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
     sGhostVisible = false;
     rewindPlayback();
 }
@@ -3281,6 +3352,7 @@ void onSavestateLoaded() {
     sPendingHadLiveRoute = false;
     sPendingContinueRecording = false;
     sBoundaryPending = false;
+    sPinRouteCheckPending = false;
     if (!sPlaybackPinned) {
         stopAll();
         sAttemptSerial = gQFTTimer.attemptSerial();

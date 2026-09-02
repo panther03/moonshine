@@ -289,7 +289,7 @@ class SplitEventContractTests(unittest.TestCase):
             "const TGameSequence &current = gpApplication.mCurrentScene;", setup
         )
 
-    def test_bianco_two_uses_the_spine_health_edge_once(self) -> None:
+    def test_bianco_two_petey_damage_has_exact_hook_and_poll_fallback(self) -> None:
         text = source_text()
         self.assertNotIn("susamuneSplitStreamingMovie", text)
         self.assertNotIn("sStreamingMovieTrampoline", text)
@@ -304,34 +304,43 @@ class SplitEventContractTests(unittest.TestCase):
         )[1].split(
             'extern "C" void susamuneSplitGessoTentacleDamage', 1
         )[0]
-        self.assertNotIn("ROUTE_BIANCO_2", hip_drop)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0)", hip_drop)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_2, 2, 1)", hip_drop)
         self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", hip_drop)
+        self.assertEqual(hip_drop.count("notePeteyDamage("), 1)
+        self.assertLess(hip_drop.index("sPeteyHipDropTrampoline"),
+                        hip_drop.index("notePeteyDamage("))
+        self.assertIn("sPeteyHealth = after;", hip_drop)
+
+        polling = text.split("void updatePetey()", 1)[1].split(
+            "void updateManta", 1
+        )[0]
+        self.assertIn("kPeteyManagerVtable, kPeteyVtable", polling)
+        self.assertIn("notePeteyDamage(sPeteyHealth, health);", polling)
+        self.assertIn("sPeteyHealthValid = true;", polling)
+        update = text.split("void update()", 1)[1].split(
+            "void onYoshiMounted", 1
+        )[0]
+        self.assertIn("updatePetey();", update)
 
         spine_routes = text.split("bool routeUsesSpine", 1)[1].split(
             "bool spineActorRelevant", 1
         )[0]
-        self.assertIn("SplitStats::ROUTE_BIANCO_2", spine_routes)
+        self.assertNotIn("SplitStats::ROUTE_BIANCO_2", spine_routes)
         relevant = text.split("bool spineActorRelevant", 1)[1].split(
             "void noteSpineUpdate", 1
         )[0]
-        self.assertRegex(
-            relevant,
-            r"case SplitStats::ROUTE_BIANCO_2:\s*"
-            r"case SplitStats::ROUTE_BIANCO_5:\s*"
-            r"return vtable == kPeteyVtable;",
-        )
+        self.assertNotIn("SplitStats::ROUTE_BIANCO_2", relevant)
+        self.assertRegex(relevant, r"case SplitStats::ROUTE_BIANCO_5:\s*"
+                                   r"return vtable == kPeteyVtable;")
         health = text.split("bool healthActor", 1)[1].split(
             "bool routeUsesSpine", 1
         )[0]
-        self.assertIn("vtable == kPeteyVtable", health)
+        self.assertNotIn("vtable == kPeteyVtable", health)
         spine_note = text.split("void noteSpineUpdate", 1)[1].split(
-            "bool hookScene", 1
+            "bool isChainTail", 1
         )[0]
-        self.assertRegex(
-            spine_note,
-            r"if \(sActiveRoute == SplitStats::ROUTE_BIANCO_2\)\s*"
-            r"notePeteyDamage\(healthBefore, healthAfter\);",
-        )
+        self.assertNotIn("notePeteyDamage", spine_note)
 
     def test_carry_table_is_exact_and_known_transitions_arm_it(self) -> None:
         text = source_text()

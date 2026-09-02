@@ -51,9 +51,11 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertIn("SUSAMUNE_CONFIG_INPUT_OFFSET          0x000000C0u",
                       self.mem2)
 
-    def test_visual_rows_are_grouped_in_other_hud(self) -> None:
-        other_hud = self.menu.split("const u8 kDisplayOtherSettings[]", 1)[1]
-        other_hud = other_hud.split("};", 1)[0]
+    def test_visual_rows_have_a_dedicated_practice_page(self) -> None:
+        practice = self.menu.split(
+            "const u8 kDisplayPracticeSettings[]", 1
+        )[1]
+        practice = practice.split("};", 1)[0]
         for setting in (
             "SETTING_PINNA_HIDDEN_ITEMS",
             "SETTING_HIDDEN_ITEM_LABELS",
@@ -61,7 +63,7 @@ class PracticeVisualContracts(unittest.TestCase):
             "SETTING_HURTBOX_TARGET",
             "SETTING_RICCO_RACE_CHECKPOINTS",
         ):
-            self.assertIn(setting, other_hud)
+            self.assertIn(setting, practice)
 
     def test_hidden_display_is_global_and_filters_fruit_and_coins(self) -> None:
         self.assertNotIn("TGameSequence::AREA_PINNABEACH", self.source)
@@ -94,6 +96,11 @@ class PracticeVisualContracts(unittest.TestCase):
                       self.addresses)
         self.assertIn("0x803dd80cu, 0x803b9134u, 0x803b0f54u",
                       self.addresses)
+        self.assertIn("Clip before feeding GX", self.source)
+        self.assertIn("menu->fillPoly(quad, 4, color)", self.source)
+        self.assertIn("fillSafe = fillSafe && maxX - minX <= 400", self.source)
+        self.assertIn("if (fillSafe && mode == HURTBOX_SOLID)", self.source)
+        self.assertNotIn("menu->strokePoly(lower, 8, line)", self.source)
 
     def test_ricco_2_draws_the_live_retail_checkpoint_cubes(self) -> None:
         self.assertIn("TGameSequence::AREA_RICOEX0", self.source)
@@ -103,6 +110,9 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertIn("manager->getCubeInfo<TCubeGeneralInfo>()", self.source)
         self.assertIn("info->mChildren.begin()", self.source)
         self.assertIn('char label[] = "CP A"', self.source)
+        self.assertIn("menu->fillBox(x - 5, y - 1, 11, 3, color)",
+                      self.source)
+        self.assertIn("y - 8, 14, 14, color", self.source)
 
     def test_visual_assists_invalidate_before_retail_finishes(self) -> None:
         self.assertIn("ILing::invalidateForAssist()", self.source)
@@ -110,23 +120,13 @@ class PracticeVisualContracts(unittest.TestCase):
         self.assertLess(self.main.index("PracticeVisuals::update();"), direct)
         self.assertIn("SETTING_RICCO_RACE_CHECKPOINTS", self.source)
 
-    def test_pinna_balloon_shift_brackets_the_retail_hud_draw(self) -> None:
-        draw = self.source.split("void drawHudScreen", 1)[1]
-        draw = draw.split("}\n", 1)[0]
-        self.assertLess(draw.index("shiftPinnaBalloonPanel(screen)"),
-                        draw.index("screen->draw(x, y, context)"))
-        self.assertGreater(draw.index("shifted->add(0, -kBalloonPanelShift)"),
-                           draw.index("screen->draw(x, y, context)"))
-        self.assertIn("balloon->add(0, kBalloonPanelShift)", self.source)
-        self.assertIn("TGameSequence::AREA_PINNABOSS", self.source)
-        self.assertIn("screen->search('\\0b_0')", self.source)
-        self.assertIn("screen->search('\\0t_0')", self.source)
-        self.assertIn("'jp': 0x80206770", self.patches)
-        self.assertIn("'us': 0x80143f50", self.patches)
-        self.assertIn("'pal': 0x80138b8c", self.patches)
-        self.assertIn("'sym': 'susamuneDrawHudScreen'", self.patches)
+    def test_pinna_balloon_counter_is_left_in_its_retail_position(self) -> None:
+        self.assertNotIn("->add(", self.source)
+        self.assertNotIn("susamuneDrawHudScreen", self.source)
+        self.assertNotIn("susamuneDrawHudScreen", self.patches)
         qft = (ROOT / "src/qft_timer.cpp").read_text()
-        self.assertNotIn("kBalloonPanelShift", qft)
+        self.assertIn("paneOnScreen(hudPane(console, '\\0b_0'))", qft)
+        self.assertIn("pane->add(0, -60)", qft)
 
     def test_visuals_are_drawn_only_over_live_gameplay(self) -> None:
         self.assertIn("TApplication::CONTEXT_DIRECT_STAGE", self.source)

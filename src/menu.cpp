@@ -200,6 +200,7 @@ const int TAB_SZ    = 18;
 const int ROW_SZ    = 16;
 const int ROW_H = ROW_SZ + 8;
 const int FOOT_SZ   = 12;
+const int HELP_H    = 32;
 
 const int TAB_GAP   = 12;  // space between tabs
 const int TAB_INNER = 10;  // highlight padding around a tab's text
@@ -219,6 +220,7 @@ const int FOOTER_Y    = PANEL_Y + PANEL_H - 26;
 class MenuTab {
 public:
     virtual const char *title() const              = 0;
+    virtual const char *summary() const { return nullptr; }
     virtual void update(Menu *menu, TMarioGamePad *pad) = 0;
     // Render into the content rect [x, x+w) x [y, y+h).
     virtual void draw(Menu *menu, int x, int y, int w, int h) = 0;
@@ -333,6 +335,8 @@ void bgmStatsDraw(Menu *menu) {
 static void drawValueRow(Menu *menu, int x, int y, int w, const char *name,
                          const char *value, bool selected, bool starred,
                          bool arrow);
+static void drawHelpLine(Menu *menu, int x, int y, int w, int h,
+                         const char *text);
 
 // ---------------------------------------------------------------------
 // IL and travel practice
@@ -1202,7 +1206,7 @@ public:
             return;
         }
 
-        const int listH = h - ROW_H;
+        const int listH = h - ROW_H - HELP_H;
         const int maxRows = listH / ROW_H;
         const int selectedRow = selectionRow(mSel);
         const int start = listScrollStart(selectedRow, DISPLAY_ROW_COUNT,
@@ -1280,6 +1284,7 @@ public:
 
         drawScrollHints(menu, x, y, w, listH, start, end,
                         DISPLAY_ROW_COUNT);
+        drawHelpLine(menu, x, y, w, h - ROW_H, selectionHelp());
         const bool settingRow = mSel == DISPLAY_ROW || mSel == OPACITY_ROW ||
                                 mSel == APPEARANCE_ROW ||
                                 mSel == AUTO_TARGET_ROW ||
@@ -1300,6 +1305,30 @@ public:
     }
 
 private:
+    const char *selectionHelp() const {
+        if (mSel == DISPLAY_ROW)
+            return "Shows or hides the selected ghost while racing or watching.";
+        if (mSel == OPACITY_ROW)
+            return "Changes how transparent the ghost looks in the stage.";
+        if (mSel == APPEARANCE_ROW)
+            return "Chooses Shadow Mario or Piantissimo as the ghost model.";
+        if (mSel == AUTO_TARGET_ROW)
+            return "Chooses whether a restart races the last attempt or success.";
+        if (mSel == PB_SAVE_ROW)
+            return "Chooses when a newly accepted PB ghost is saved to the SD.";
+        if (mSel == PROFILE_ROW)
+            return "Selects which IL profile supplies PBs and ghost names.";
+        if (mSel == TARGET_ROW)
+            return "Shows the pinned race ghost; press A or X to clear it.";
+        if (mSel == IMPORT_SCAN_SELECTION)
+            return "Finds .smsghost files copied into the import folder.";
+        if (isPersonalSlot())
+            return "A personal SD slot. Select to Race or Watch; X deletes it.";
+        if (isImportedSlot())
+            return "An imported ghost. Select to Race, Watch or export it.";
+        return "Saved and imported ghosts available for racing or watching.";
+    }
+
     enum Choice : u8 {
         CHOICE_NONE,
         CHOICE_ACTION,
@@ -2669,7 +2698,17 @@ private:
         drawValueRow(menu, x, ry, w, "Unlock popup and chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.2.0 PR6",
+        const char *help = mSel == 0
+            ? "Browse every achievement and its unlock requirements."
+            : mSel == 1
+                ? "View overall play, attempt, PB and ghost statistics."
+                : mSel == 2
+                    ? "View time and completion statistics for each world."
+                    : mSel == 3
+                        ? "Switch Records between this region and all regions."
+                        : "Shows a popup and chime when an achievement unlocks.";
+        drawHelpLine(menu, x, y, w, h - 52, help);
+        menu->drawText("Moonshine V2.2.0 PR7",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3088,6 +3127,7 @@ const u8 kRngCategory = SETTING_CAT_COUNT + 1;
 
 struct SettingPage {
     const char *name;
+    const char *help;
     const u8 *ids;
     u8 count;
 };
@@ -3116,9 +3156,12 @@ const u8 kGameplayWorldSettings[] = {
     SETTING_DISABLE_RETAIL_PAUSE,
 };
 const SettingPage kGameplayPages[] = {
-    {"General gameplay", kGameplayCoreSettings, sizeof(kGameplayCoreSettings)},
-    {"Skips and unlocks", kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
-    {"World rules", kGameplayWorldSettings, sizeof(kGameplayWorldSettings)},
+    {"General gameplay", "Everyday speed and convenience options.",
+     kGameplayCoreSettings, sizeof(kGameplayCoreSettings)},
+    {"Skips and unlocks", "Skip downtime or unlock route requirements.",
+     kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
+    {"World rules", "Change how stages and their objects behave.",
+     kGameplayWorldSettings, sizeof(kGameplayWorldSettings)},
 };
 
 const u8 kTimerDisplaySettings[] = {
@@ -3159,8 +3202,10 @@ const u8 kTimerFreezeSettings[] = {
     SETTING_TIMER_FREEZE_YOSHI,
 };
 const SettingPage kTimerPages[] = {
-    {"Timer and splits", kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
-    {"QFT freezes", kTimerFreezeSettings, sizeof(kTimerFreezeSettings)},
+    {"Timer and splits", "Choose the timers, history and split overlays shown.",
+     kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
+    {"QFT freezes", "Choose which actions briefly freeze the QFT display.",
+     kTimerFreezeSettings, sizeof(kTimerFreezeSettings)},
 };
 
 const u8 kRngGeneralSettings[] = {
@@ -3181,10 +3226,14 @@ const u8 kRngCourseSettings[] = {
     SETTING_GELATO_BLUE_BIRD_PATTERN,
 };
 const SettingPage kRngPages[] = {
-    {"General patterns", kRngGeneralSettings, sizeof(kRngGeneralSettings)},
-    {"Boss fights", kRngBossSettings, sizeof(kRngBossSettings)},
-    {"Ricco Harbor", kRngRiccoSettings, sizeof(kRngRiccoSettings)},
-    {"Birds and fish (testing)", kRngCourseSettings, sizeof(kRngCourseSettings)},
+    {"General patterns", "General-purpose deterministic practice helpers.",
+     kRngGeneralSettings, sizeof(kRngGeneralSettings)},
+    {"Boss fights", "Force the supported Petey and King Boo outcomes.",
+     kRngBossSettings, sizeof(kRngBossSettings)},
+    {"Ricco Harbor", "Control Ricco's crane and casino fruit machine.",
+     kRngRiccoSettings, sizeof(kRngRiccoSettings)},
+    {"Birds and fish (testing)", "Experimental repeatable course patterns.",
+     kRngCourseSettings, sizeof(kRngCourseSettings)},
 };
 
 const u8 kDisplayMovementSettings[] = {
@@ -3192,19 +3241,25 @@ const u8 kDisplayMovementSettings[] = {
     SETTING_ROLLOUT_DISPLAY,
     SETTING_DUST_DISPLAY,
 };
-const u8 kDisplayOtherSettings[] = {
-    SETTING_SHOW_BGM_SLOTS,
-    SETTING_RESTART_QUEUED_FEEDBACK,
+const u8 kDisplayPracticeSettings[] = {
     SETTING_PINNA_HIDDEN_ITEMS,
     SETTING_HIDDEN_ITEM_LABELS,
     SETTING_ENEMY_HURTBOXES,
     SETTING_HURTBOX_TARGET,
     SETTING_RICCO_RACE_CHECKPOINTS,
 };
+const u8 kDisplayOtherSettings[] = {
+    SETTING_SHOW_BGM_SLOTS,
+    SETTING_RESTART_QUEUED_FEEDBACK,
+};
 const SettingPage kDisplayPages[] = {
-    {"Movement displays", kDisplayMovementSettings,
+    {"Movement displays", "Frame feedback for movement practice.",
+     kDisplayMovementSettings,
      sizeof(kDisplayMovementSettings)},
-    {"Other HUD", kDisplayOtherSettings, sizeof(kDisplayOtherSettings)},
+    {"Practice visuals", "Reveal practice-only objects, volumes and routes.",
+     kDisplayPracticeSettings, sizeof(kDisplayPracticeSettings)},
+    {"Other HUD", "Small status messages and diagnostic counters.",
+     kDisplayOtherSettings, sizeof(kDisplayOtherSettings)},
 };
 
 const u8 kAppearanceMarioSettings[] = {
@@ -3221,9 +3276,11 @@ const u8 kAppearanceWorldSettings[] = {
     SETTING_VISIBLE_GOOP,
 };
 const SettingPage kAppearancePages[] = {
-    {"Mario appearance", kAppearanceMarioSettings,
+    {"Mario appearance", "Choose Mario's optional costume pieces.",
+     kAppearanceMarioSettings,
      sizeof(kAppearanceMarioSettings)},
-    {"World and audio", kAppearanceWorldSettings,
+    {"World and audio", "Cosmetic stage, Shine and music changes.",
+     kAppearanceWorldSettings,
      sizeof(kAppearanceWorldSettings)},
 };
 
@@ -3238,6 +3295,93 @@ const u8 kSettingSectionStarts[] = {
 const char kSettingSectionNames[] =
     "LEVEL RULES\0MENU CONTROLS\0COUNTERS\0BOX GAME\0STATE\0FEEDBACK";
 
+const char *settingHelp(SettingId id) {
+    if ((id >= SETTING_TIMER_FREEZE_YELLOW_COIN &&
+         id <= SETTING_TIMER_FREEZE_BOUNCE) ||
+        (id >= SETTING_TIMER_FREEZE_JUMP &&
+         id <= SETTING_TIMER_FREEZE_EEL_TOOTH) ||
+        id == SETTING_TIMER_FREEZE_DIVE_ROLLOUT ||
+        id == SETTING_TIMER_FREEZE_DIVE_GETUP ||
+        id == SETTING_TIMER_FREEZE_MOVING_PLATFORM ||
+        id == SETTING_TIMER_FREEZE_AIRGRAB) {
+        return "Freezes the QFT display when this event occurs.";
+    }
+
+    switch (id) {
+    case SETTING_FAST_TEXT: return "Speeds up dialogue and message boxes.";
+    case SETTING_INFINITE_LIVES: return "Prevents Mario's life count from dropping.";
+    case SETTING_INFINITE_JUICE: return "Prevents Yoshi's juice meter from draining.";
+    case SETTING_FREE_PAUSE: return "Allows pausing during normally locked moments.";
+    case SETTING_EXIT_AREA_EVERYWHERE: return "Allows Exit Area wherever pausing is available.";
+    case SETTING_FMV_SKIPS: return "Skips supported pre-rendered movies.";
+    case SETTING_INTRO_SKIP: return "Skips the boot logos on the next launch.";
+    case SETTING_UNLOCK_YOSHI: return "Makes Yoshi available without story progression.";
+    case SETTING_UNLOCK_NOZZLES: return "Makes Rocket and Turbo boxes available.";
+    case SETTING_RESPAWN_SHINES: return "Respawns one-time Shines for repeat practice.";
+    case SETTING_FLUDD_SECRETS: return "Controls when FLUDD is removed in secret stages.";
+    case SETTING_AREA_LOCK: return "Turns any stage exit into a restart of that area.";
+    case SETTING_DISABLE_BLUE_COIN: return "Stops blue coins setting their collected flag.";
+    case SETTING_FAST_PIANTISSIMO: return "Forces a Piantissimo race speed preset.";
+    case SETTING_DISABLE_THIRD_CHOMPLET_AGGRO: return "Stops the third Chomplet targeting Mario early.";
+    case SETTING_YOSHI_NOZZLE_SAVE_PROMPT: return "Shows a warning before Yoshi or nozzle progress saves.";
+    case SETTING_DISABLE_RETAIL_PAUSE: return "Uses only Moonshine's pause handling.";
+    case SETTING_SAVE_RNG_STATE: return "Includes the game RNG seed in practice savestates.";
+    case SETTING_SAVESTATE_FEEDBACK: return "Shows a status popup after saving or loading a state.";
+    case SETTING_NOZZLE_LOCK: return "Forces Mario to keep the selected FLUDD nozzle.";
+    case SETTING_FORCE_PLAZA_EVENTS: return "Keeps Delfino Plaza story events available.";
+    case SETTING_NEVER_PAUSE_IGT: return "Keeps in-game time running while paused.";
+    case SETTING_SHADOW_MARIO_HP: return "Shows Shadow Mario's remaining health.";
+    case SETTING_STAGE_INTRO_SKIP: return "Skips the stage-opening camera sequence.";
+    case SETTING_DEATHLESS_BLOOPER: return "Prevents Blooper surfing crashes from killing Mario.";
+    case SETTING_NO_SHINE_ANIM: return "Skips the Shine-get animation.";
+    case SETTING_FRUIT_NEVER_TIMEOUT: return "Stops loose fruit disappearing over time.";
+    case SETTING_DISABLE_Z_MENU: return "Stops Z opening the retail debug-style menu.";
+    case SETTING_DISABLE_WARPS: return "Disables Moonshine's quick stage warps.";
+    case SETTING_ATTEMPT_COUNTER: return "Tracks and displays attempts for the current practice.";
+    case SETTING_ATTEMPT_IN_STAGE_CONTROLS: return "Allows attempt-count binds while inside a stage.";
+    case SETTING_FORCE_BOX_GAME: return "Forces a selected Delfino crate-game layout.";
+    case SETTING_MUTE_BGM: return "Mutes background music without muting sound effects.";
+    case SETTING_REPLACE_EPISODE_NAMES: return "Shows internal IDs instead of episode names.";
+    case SETTING_SHINE_OUTFIT: return "Uses Mario's Shine celebration outfit.";
+    case SETTING_SHINY_SHINES: return "Adds a stronger gleam to Shine Sprites.";
+    case SETTING_VISIBLE_GOOP: return "Makes normally hidden goop easier to see.";
+    case SETTING_HELMET_APPEARANCE: return "Controls when Mario's helmet is visible.";
+    case SETTING_CAP_APPEARANCE: return "Controls when Mario's cap is visible.";
+    case SETTING_SHADES_APPEARANCE: return "Controls when Mario's sunglasses are visible.";
+    case SETTING_SHINE_SHIRT_APPEARANCE: return "Controls when Mario's Shine shirt is visible.";
+    case SETTING_TIMER_SUNSHINE_VISIBILITY: return "Chooses when the main Sunshine timer is shown.";
+    case SETTING_TIMER_QFT_VISIBILITY: return "Chooses when the bottom-left QFT is shown.";
+    case SETTING_TIMER_FREEZE_DURATION: return "Sets how long event-triggered QFT freezes remain.";
+    case SETTING_TIMER_SECTIONS: return "Shows the recent QFT section history.";
+    case SETTING_LEVEL_SPLITS: return "Shows route splits during supported ILs.";
+    case SETTING_PATTERN_SELECTOR: return "Enables repeatable patterns for supported practice.";
+    case SETTING_ILING_FANFARE: return "Plays a fanfare when an IL personal best is accepted.";
+    case SETTING_ILING_RECENT: return "Shows a short history of recently completed ILs.";
+    case SETTING_ILING_RECORDING: return "Allows completed ILs to update their saved PB.";
+    case SETTING_ILING_POPUP: return "Shows a popup when an IL PB is accepted.";
+    case SETTING_ILING_SHORT_NAMES: return "Uses compact route names in the recent-IL display.";
+    case SETTING_ANY_FRUIT_YOSHI: return "Lets any fruit colour open a Yoshi egg.";
+    case SETTING_KING_BOO_ALWAYS_FRUIT: return "Forces King Boo's valid fruit and no-fruit cycle.";
+    case SETTING_PETEY_NO_TORNADO: return "Prevents Petey using his tornado attack.";
+    case SETTING_PETEY_ROUTE: return "Forces Petey's N1, S1, S2, S3 flight route.";
+    case SETTING_RICCO_CRANE_SPEED: return "Randomises the crane within the selected speed band.";
+    case SETTING_RICCO_FRUIT_MACHINE: return "Forces the Ricco fruit machine to give durians.";
+    case SETTING_GELATO_RED_COIN_FISH_PATTERN: return "Selects a repeatable Gelato 6 fish pattern.";
+    case SETTING_GELATO_BLUE_BIRD_PATTERN: return "Selects a repeatable blue-bird pattern.";
+    case SETTING_WALLKICK_DISPLAY: return "Shows the timing of Mario's last wall kick.";
+    case SETTING_ROLLOUT_DISPLAY: return "Shows the effective A-hold frames of a rollout.";
+    case SETTING_DUST_DISPLAY: return "Shows frames from landing until the rollout input.";
+    case SETTING_SHOW_BGM_SLOTS: return "Shows free music slots for audio diagnostics.";
+    case SETTING_RESTART_QUEUED_FEEDBACK: return "Shows when a restart has been queued.";
+    case SETTING_PINNA_HIDDEN_ITEMS: return "Reveals spray-hidden fruit and coin locations globally.";
+    case SETTING_HIDDEN_ITEM_LABELS: return "Adds Fruit and Coin names to hidden-item markers.";
+    case SETTING_ENEMY_HURTBOXES: return "Chooses how enemy damage volumes are drawn.";
+    case SETTING_HURTBOX_TARGET: return "Shows all enemies or only Eely's teeth.";
+    case SETTING_RICCO_RACE_CHECKPOINTS: return "Reveals the ordered checkpoints used by the Ricco race.";
+    default: return "Changes this option for practice or presentation.";
+    }
+}
+
 }  // namespace
 
 class CategorySettingsTab : public MenuTab {
@@ -3246,6 +3390,17 @@ public:
         : mSel(0), mCat(cat), mTitleOffset(titleOffset), mMode(0) {}
 
     const char *title() const override { return kCategoryTitles + mTitleOffset; }
+    const char *summary() const override {
+        if (isStarred()) return "Your favourite settings in one quick list.";
+        if (isGameplay()) return "Core gameplay rules, skips and unlocks.";
+        if (isTimer()) return "Timer visibility, splits and QFT freezes.";
+        if (isRng()) return "Repeatable boss, object and course outcomes.";
+        if (isDisplay()) return "Movement feedback and practice overlays.";
+        if (isAppearance()) return "Mario, world and audio cosmetics.";
+        if (mCat == SETTING_CAT_SAVESTATE)
+            return "Savestate behaviour and feedback.";
+        return "Practice helpers, counters and menu rules.";
+    }
     bool favoriteHint() const override {
         if (pageRoot()) return false;
         u8 ids[SETTING_COUNT];
@@ -3387,9 +3542,11 @@ public:
                                y + ROW_H, FOOT_SZ, FOOT_SZ, cFooter());
             return;
         }
+        const char *help = selectionHelp(ids, settings);
+        const int listH = help ? h - HELP_H : h;
         const u32 metrics = displayMetrics(ids, settings, n);
         const int rows = metrics >> 16;
-        const int maxRows = h / ROW_H;
+        const int maxRows = listH / ROW_H;
         const int start = listScrollStart(
             (u16)metrics, rows, maxRows);
         int end = start + maxRows;
@@ -3432,7 +3589,8 @@ public:
             row++;
         }
     
-        drawScrollHints(menu, x, y, w, h, start, end, rows);
+        drawScrollHints(menu, x, y, w, listH, start, end, rows);
+        drawHelpLine(menu, x, y, w, h, help);
     }
 
 private:
@@ -3497,7 +3655,10 @@ private:
             if (page == 0) return "CORE";
             return page == 1 ? "ROUTE SETUP" : "WORLD";
         }
-        if (isDisplay()) return page == 0 ? "PRACTICE HUD" : "OTHER HUD";
+        if (isDisplay()) {
+            if (page == 0) return "MOVEMENT";
+            return page == 1 ? "PRACTICE VISUALS" : "GENERAL HUD";
+        }
         return page == 0 ? "MARIO" : "WORLD AND AUDIO";
     }
 
@@ -3514,7 +3675,7 @@ private:
         }
     }
 
-    void drawPageRoot(Menu *menu, int x, int y, int w, int) const {
+    void drawPageRoot(Menu *menu, int x, int y, int w, int h) const {
         int ry = y;
         for (int page = 0; page < pageCount(); page++) {
             const char *section = pageRootSection(page);
@@ -3526,6 +3687,16 @@ private:
                          page == mSel, false, true);
             ry += ROW_H;
         }
+        drawHelpLine(menu, x, y, w, h, pages()[mSel].help);
+    }
+
+    const char *selectionHelp(const u8 *ids, int settings) const {
+        if (mSel < settings) return settingHelp((SettingId)ids[mSel]);
+        if (hasFeedbackEditor()) return "Changes the savestate status popup layout.";
+        if (hasMovementEditors()) return "Changes this display's position, size and colours.";
+        return mSel == settings
+                   ? "Restores settings, binds and layouts to defaults."
+                   : "Clears Records progress without deleting IL PBs.";
     }
 
     int buildList(u8 *out) const {
@@ -3619,6 +3790,9 @@ public:
     CreationTab() : mSel(ROW_QFT_EDITOR) {}
 
     const char *title() const override { return "Layout editor"; }
+    const char *summary() const override {
+        return "Move, resize and recolour Moonshine HUD elements.";
+    }
     bool available() const override { return !rngControlInvalidatesIl(); }
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
@@ -3677,9 +3851,9 @@ public:
         }
 
         const int hintY = y + h - FOOT_SZ;
-        h -= ROW_H;
+        const int listH = h - ROW_H - HELP_H;
         const int count = ROW_COUNT;
-        const int maxRows = h / ROW_H;
+        const int maxRows = listH / ROW_H;
         const int start = listScrollStart(mSel, count, maxRows);
         int end = start + maxRows;
         if (end > count) end = count;
@@ -3699,7 +3873,8 @@ public:
             }
             ry += ROW_H;
         }
-        drawScrollHints(menu, x, y, w, h, start, end, count);
+        drawScrollHints(menu, x, y, w, listH, start, end, count);
+        drawHelpLine(menu, x, y, w, h - ROW_H, rowHelp(mSel));
         menu->drawText(SUSAMUNE_GLYPH_A " Open" SUSAMUNE_GLYPH_SLASH
                        "Change   " SUSAMUNE_GLYPH_C " L"
                        SUSAMUNE_GLYPH_SLASH "R Section   Saved on close",
@@ -3836,6 +4011,58 @@ private:
         return gCreationExtras.menuRowValue(extraRow(row));
     }
 
+    const char *rowHelp(int row) const {
+        if (row == ROW_QFT_EDITOR)
+            return "Moves, resizes and recolours the compact QFT display.";
+        if (row == ROW_QFT_LEADING_ZERO)
+            return "Shows a leading zero before single-digit QFT values.";
+        if (row == ROW_SUNSHINE_TIMER_CHARACTERS)
+            return "Sets colours for the timer digits and separators.";
+        if (row == ROW_SUNSHINE_TIMER_STREAK)
+            return "Changes the colour streak behind the Sunshine timer.";
+        if (row == ROW_SUNSHINE_TIMER_LABEL)
+            return "Changes the TIME or TEMPO label colour.";
+        if (row == ROW_SUNSHINE_TIMER_LABEL_VISIBLE)
+            return "Shows or hides the TIME or TEMPO label.";
+        if (row >= ROW_INPUT_FIRST && row < ROW_INPUT_END) {
+            switch (inputRow(row)) {
+            case 0: return "Shows the controller overlay when Moonshine starts.";
+            case 1: return "Adds stick-only or full numeric input values.";
+            case 2: return "Chooses raw controller data or Mario-processed input.";
+            case 3: return "Places numeric values above, below or inside the pad.";
+            case 4: return "Moves, resizes and recolours the controller overlay.";
+            default: return "Restores the controller overlay's default layout.";
+            }
+        }
+        if (row >= ROW_METADATA_FIRST && row < ROW_METADATA_END) {
+            const int local = metadataRow(row);
+            if (local == 0) return "Shows the metadata overlay when Moonshine starts.";
+            if (local == 1) return "Chooses short, long or custom field labels.";
+            if (local >= 2 && local < 2 + MetadataDisplay::FIELD_COUNT)
+                return "Shows or hides this value in the metadata overlay.";
+            if (local == 2 + MetadataDisplay::FIELD_COUNT)
+                return "Stacks metadata vertically or lays it out in one row.";
+            if (local == 3 + MetadataDisplay::FIELD_COUNT)
+                return "Moves, resizes and recolours the metadata overlay.";
+            return "Restores the metadata overlay's default layout.";
+        }
+        const int local = extraRow(row);
+        if (local >= 1 && local <= 7)
+            return "Changes this part of the retail HUD's colour theme.";
+        if (local == 9 || local == 12 || local == 15)
+            return "Edits the custom word shown on the game HUD.";
+        if (local == 10 || local == 13 || local == 16)
+            return "Moves, resizes and recolours this custom HUD word.";
+        if (local == 11 || local == 14 || local == 17)
+            return "Shows or hides this custom HUD word.";
+        if (local == 19) return "Changes the mod menu's panel colour.";
+        if (local == 20) return "Moves and styles the achievement popup.";
+        if (local == 21) return "Moves and styles Moonshine status messages.";
+        if (local == 22) return "Moves and styles the IL PB popup.";
+        if (local == 23) return "Moves and styles the Stage Loader counter.";
+        return "Changes this HUD element's layout or appearance.";
+    }
+
     static int inputRow(int row) {
         const int local = row - ROW_INPUT_FIRST;
         if (local == 0) return 4;
@@ -3902,6 +4129,9 @@ public:
     BindsTab() : mSel(0) {}
 
     const char *title() const override { return "Button binds"; }
+    const char *summary() const override {
+        return "Choose the controller combo for each Moonshine action.";
+    }
 
     bool grabsInput() const override { return gBinds.recording(); }
 
@@ -4836,19 +5066,44 @@ public:
     void draw(Menu *menu, int x, int y, int w, int h) override {
         MenuTab *child = current();
         if (!child) {
-            int ry = y;
+            const char *help = mChildren[mSel]->summary();
+            const int listH = help ? h - HELP_H : h;
+            int rows = mCount;
+            int selectedRow = mSel;
             for (int i = 0; i < mCount; i++) {
+                if (!sectionName(i)) continue;
+                rows++;
+                if (i <= mSel) selectedRow++;
+            }
+            const int maxRows = listH / ROW_H;
+            const int start = listScrollStart(selectedRow, rows, maxRows);
+            int end = start + maxRows;
+            if (end > rows) end = rows;
+            int ry = y;
+            int row = 0;
+            for (int i = 0; i < mCount && row < end; i++) {
                 const char *section = sectionName(i);
                 if (section) {
-                    drawSectionHeader(menu, x, ry, w, section);
-                    ry += ROW_H;
+                    if (row >= start) {
+                        drawSectionHeader(menu, x, ry, w, section);
+                        ry += ROW_H;
+                    }
+                    row++;
+                    if (row >= end) break;
+                }
+                if (row < start) {
+                    row++;
+                    continue;
                 }
                 const bool available = mChildren[i]->available();
                 drawValueRow(menu, x, ry, w, mChildren[i]->title(),
                              available ? nullptr : "Disabled",
                              i == mSel, false, available);
                 ry += ROW_H;
+                row++;
             }
+            drawScrollHints(menu, x, y, w, listH, start, end, rows);
+            drawHelpLine(menu, x, y, w, h, help);
             return;
         }
 
@@ -5406,6 +5661,14 @@ __attribute__((noinline)) static void drawValueRow(
     if (value)
         menu->drawText(value, x + w - Menu::textWidth(value, ROW_SZ) - 8,
                        y, ROW_SZ, ROW_SZ, cValue());
+}
+
+__attribute__((noinline)) static void drawHelpLine(
+    Menu *menu, int x, int y, int w, int h, const char *text) {
+    if (!text || !text[0]) return;
+    const int top = y + h - HELP_H;
+    menu->fillBox(x + 4, top, w - 8, 1, cRowDim());
+    menu->drawText(text, x + 6, top + 10, FOOT_SZ, FOOT_SZ, cFooter());
 }
 
 void Menu::factoryReset() {

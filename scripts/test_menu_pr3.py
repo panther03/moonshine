@@ -68,6 +68,7 @@ class NestedMenuContracts(unittest.TestCase):
             ),
             "SETTING_CAT_UI": (
                 "kDisplayMovementSettings",
+                "kDisplayPracticeSettings",
                 "kDisplayOtherSettings",
             ),
             "SETTING_CAT_COSMETIC": (
@@ -94,7 +95,7 @@ class NestedMenuContracts(unittest.TestCase):
         )
         self.assertIsNotNone(page)
         self.assertEqual(freeze_ids, set(re.findall(r"SETTING_TIMER_FREEZE_[A-Z_]+", page.group(1))))
-        self.assertIn('{"QFT freezes", kTimerFreezeSettings', menu)
+        self.assertIn('{"QFT freezes", "Choose which actions briefly freeze', menu)
         for setting in (
             "SETTING_TIMER_SUNSHINE_VISIBILITY",
             "SETTING_TIMER_QFT_VISIBILITY",
@@ -130,6 +131,40 @@ class NestedMenuContracts(unittest.TestCase):
         self.assertIn('return "Layout editor"', menu)
         self.assertIn('return "Button binds"', menu)
         self.assertIn("gInputDisplay.editing()", menu)
+
+    def test_settings_pages_and_rows_have_context_help(self) -> None:
+        menu = text("src/menu.cpp")
+        self.assertIn("virtual const char *summary() const", menu)
+        self.assertIn("const char *help;", menu)
+        self.assertIn("const char *settingHelp(SettingId id)", menu)
+        self.assertIn("drawHelpLine(menu, x, y, w, h, pages()[mSel].help)", menu)
+        self.assertIn("drawHelpLine(menu, x, y, w, h, help)", menu)
+        self.assertIn("const int listH = help ? h - HELP_H : h;", menu)
+        self.assertIn('return "Movement feedback and practice overlays."', menu)
+        self.assertIn('return "Move, resize and recolour Moonshine HUD elements."', menu)
+        self.assertIn('return "Choose the controller combo for each Moonshine action."', menu)
+
+    def test_settings_root_scrolls_with_its_section_headers(self) -> None:
+        menu = text("src/menu.cpp")
+        nested = function(menu, r"void draw\(Menu \*menu, int x, int y, int w, int h\) override")
+        # The first draw override belongs to ILing, so assert the router's
+        # distinctive root calculations directly against the full source.
+        self.assertIn("int selectedRow = mSel;", menu)
+        self.assertIn("if (i <= mSel) selectedRow++;", menu)
+        self.assertIn("listScrollStart(selectedRow, rows, maxRows)", menu)
+        self.assertIn("mChildren[mSel]->summary()", menu)
+
+    def test_custom_setting_pages_describe_the_selected_row(self) -> None:
+        menu = text("src/menu.cpp")
+        self.assertIn("drawHelpLine(menu, x, y, w, h - ROW_H, selectionHelp())", menu)
+        self.assertIn("drawHelpLine(menu, x, y, w, h - ROW_H, rowHelp(mSel))", menu)
+        self.assertIn('return "Shows or hides the selected ghost while racing or watching."', menu)
+        self.assertIn('return "Moves, resizes and recolours the compact QFT display."', menu)
+        self.assertIn('"Shows a popup and chime when an achievement unlocks."', menu)
+        self.assertIn(
+            'case SETTING_SAVESTATE_FEEDBACK: return "Shows a status popup',
+            menu,
+        )
 
 
 class ModalInputContracts(unittest.TestCase):
