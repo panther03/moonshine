@@ -262,3 +262,13 @@ Build options (toggle in `ccmake`/`cmake-gui`, or with `-D<name>=<value>`):
 ## Decomp cross-reference
 
 For any game-side type whose layout you need precisely, the canonical source is `../../src/sms` (the SMS decomp). The headers under `include/` are reverse-engineered approximations that are good enough to compile against, but if a field offset matters (e.g. the offset of `mGamePads` in `TApplication`, or the exact size of `TFlagManager`), confirm against the decomp.
+
+## SD release deployment
+
+Every completed pre-release or release must also be installed to the user's Wii
+SD card when it is mounted at `D:`. Validate that `D:\Apps\moonshine_launcher`
+is the existing Moonshine app before writing, copy only the files carried by the
+verified final launcher ZIP, and preserve unrelated files such as `theme/`.
+After copying, compare every installed file against the package and confirm the
+version in `meta.xml`. If the expected SD layout is not mounted, report that
+instead of guessing another destination.
