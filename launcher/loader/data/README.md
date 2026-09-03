@@ -22,7 +22,7 @@ itself. The script preserves font identity and licence records, checks printable
 ASCII and both launcher arrow glyphs, verifies every selected codepoint and
 advance width, and writes a deterministic archive.
 
-The pre-V2.2 `background.png` was a single-colour 640x480 white image. ZETA draws
+The pre-V2.2 `background.png` was a single-colour 640x480 white image. Moonshine draws
 that stock white field and its widescreen side bars as rectangles, avoiding a
 1,228,800-byte RGBA texture. A user's `theme/background.png` is still decoded
 at 1024x480 and rendered through the custom-theme path.

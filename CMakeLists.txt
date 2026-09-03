@@ -77,6 +77,7 @@ set(LAUNCHER_DEFAULT_SOURCE "di" CACHE STRING "Where to load the iso from by def
 set_property(CACHE LAUNCHER_DEFAULT_SOURCE PROPERTY STRINGS di sd usb)
 if(LAUNCHER_VERSION STREQUAL "V1.2.0" OR
    LAUNCHER_VERSION STREQUAL "V2.1.1" OR
+   LAUNCHER_VERSION STREQUAL "V2.2.0 \"The House Always Wins\"" OR
    LAUNCHER_VERSION STREQUAL "V2.0.0 \"Ghosts of Delfino\"" OR
    LAUNCHER_VERSION STREQUAL "V2.0.1 \"Ghosts of Delfino\"" OR
    LAUNCHER_VERSION STREQUAL "V2.0.2 \"Ghosts of Delfino\"" OR
@@ -90,7 +91,7 @@ if(LAUNCHER_VERSION STREQUAL "V1.2.0" OR
    LAUNCHER_VERSION MATCHES "^V2\\.2\\.0 Release Candidate [0-9]+")
     unset(LAUNCHER_VERSION CACHE)
 endif()
-set(LAUNCHER_VERSION "V2.2.0 Release Candidate 3 \"The House Always Wins\"" CACHE STRING
+set(LAUNCHER_VERSION "V2.2.0 \"The House Always Wins\"" CACHE STRING
     "Version shown in the packaged launcher meta.xml")
 
 option(IS_EMULATOR "Target Dolphin (ON) instead of Wii/Nintendont (OFF)" OFF)
@@ -390,9 +391,9 @@ ExternalProject_Add(nintendont_launcher
         "-DLAUNCHER_OUTPUT_ZIP=${LAUNCHER_ZIP}"
         "-DLAUNCHER_DEFAULT_SOURCE=${LAUNCHER_DEFAULT_SOURCE}"
         "-DLAUNCHER_VERSION=${LAUNCHER_VERSION}"
-        "-DLAUNCHER_TEST_LOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-rc3-testing.md"
-        "-DLAUNCHER_PATTERN_TEST_LOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-rc3-pattern-testing.md"
-        "-DLAUNCHER_CHANGELOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-rc3-changelog.md"
+        "-DLAUNCHER_TEST_LOG="
+        "-DLAUNCHER_PATTERN_TEST_LOG="
+        "-DLAUNCHER_CHANGELOG=${CMAKE_SOURCE_DIR}/doc/v2.2.0-changelog.md"
         "-DLAUNCHER_DISABLE_SUSAMUNE_PATCH=${LAUNCHER_DISABLE_SUSAMUNE_PATCH}"
         "-DSUSAMUNE_LOADER_OPTIMIZATION:STRING=${SUSAMUNE_LOADER_OPTIMIZATION}"
     DEPENDS mod_bins launcher_build_id

@@ -2553,6 +2553,10 @@ public:
                 mAchievement = wrap(mAchievement - 1, count);
             else if (rapid & TMarioGamePad::CSTICK_DOWN)
                 mAchievement = wrap(mAchievement + 1, count);
+            else if (rapid & TMarioGamePad::CSTICK_LEFT)
+                jumpAchievementTier(-1);
+            else if (rapid & TMarioGamePad::CSTICK_RIGHT)
+                jumpAchievementTier(+1);
             if (rapid & TMarioGamePad::A)
                 mPage = PAGE_ACHIEVEMENT_DETAIL;
             break;
@@ -2639,6 +2643,36 @@ private:
             row += count;
         }
         return 0;
+    }
+
+    void jumpAchievementTier(int direction) {
+        const Records::Category category = (Records::Category)mCategory;
+        int selectedTier = 0;
+        int tierFirst = 0;
+        for (int tier = 0; tier < Records::TIER_COUNT; tier++) {
+            const int count = Records::categoryTierAchievementCount(
+                category, (Records::Tier)tier);
+            if (count > 0 && mAchievement < tierFirst + count) {
+                selectedTier = tier;
+                break;
+            }
+            tierFirst += count;
+        }
+
+        for (int step = 1; step < Records::TIER_COUNT; step++) {
+            const int tier = wrap(selectedTier + direction * step,
+                                  Records::TIER_COUNT);
+            if (Records::categoryTierAchievementCount(
+                    category, (Records::Tier)tier) <= 0) {
+                continue;
+            }
+            mAchievement = 0;
+            for (int previous = 0; previous < tier; previous++) {
+                mAchievement += Records::categoryTierAchievementCount(
+                    category, (Records::Tier)previous);
+            }
+            return;
+        }
     }
 
     void moveSelection(u32 rapid, int count) {
@@ -2733,7 +2767,7 @@ private:
                         ? "Switch Records between this region and all regions."
                         : "Shows a popup and chime when an achievement unlocks.";
         drawHelpLine(menu, x, y, w, h - 52, help);
-        menu->drawText("Moonshine V2.2.0 RC3",
+        menu->drawText("Moonshine V2.2.0",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -2825,7 +2859,8 @@ private:
             }
         }
         drawScrollHints(menu, x, listY, w, listH, start, end, rows);
-        menu->drawText(SUSAMUNE_GLYPH_A " Details    "
+        menu->drawText(SUSAMUNE_GLYPH_C " L/R Tier   "
+                       SUSAMUNE_GLYPH_A " Details   "
                        SUSAMUNE_GLYPH_B " Back",
                        x + 4, y + h - FOOT_SZ, FOOT_SZ, FOOT_SZ, cFooter());
     }

@@ -239,6 +239,24 @@ class ModalInputContracts(unittest.TestCase):
         self.assertIn("JUTGamePad::L | JUTGamePad::R", top_level)
         self.assertIn("wasPressedRaw(BIND_MENU_TOGGLE)", top_level)
 
+    def test_achievement_browser_jumps_between_nonempty_tiers(self) -> None:
+        menu = text("src/menu.cpp")
+        records = menu[
+            menu.index("class RecordsTab") :
+            menu.index("class WarpPresetsTab")
+        ]
+        update = function(records, r"void update\(Menu \*menu, TMarioGamePad \*pad\) override")
+        self.assertIn("jumpAchievementTier(-1)", update)
+        self.assertIn("jumpAchievementTier(+1)", update)
+
+        jump = function(records, r"void jumpAchievementTier\(int direction\)")
+        self.assertIn("direction * step", jump)
+        self.assertIn("Records::TIER_COUNT", jump)
+        self.assertIn("> 0", jump)
+        self.assertIn("<= 0", jump)
+        self.assertIn("mAchievement = 0", jump)
+        self.assertIn("previous < tier", jump)
+
     def test_consumed_button_can_still_close_menu_when_it_is_the_toggle(self) -> None:
         menu = text("src/menu.cpp")
         update = function(menu, r"void Menu::update\(TMarioGamePad \*pad\)")
