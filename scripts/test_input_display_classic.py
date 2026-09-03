@@ -26,7 +26,7 @@ class ClassicInputDisplayContracts(unittest.TestCase):
             "p.button(164, 50, 8",
             "p.button(119, 41, 8",
             "p.button(144, 34, 6",
-            "p.button(91, 64, 9",
+            "p.button(91, 64, 7",
             "p.fillCircle(32 + mx, 52 - my, 12",
             "p.fillCircle(64 + cx, 92 - cy, 12",
         ):
@@ -52,6 +52,8 @@ class ClassicInputDisplayContracts(unittest.TestCase):
 
     def test_small_start_press_has_a_visible_center(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("p.button(91, 64, 7", source)
+        self.assertNotIn("p.button(91, 64, 9", source)
         self.assertIn("if (scale(radius) <= 3)", source)
         self.assertIn("menu->fillBox(cx - 2, cy - 2, 5, 5, c);", source)
         self.assertIn("menu->fillBox(cx - 2, cy - 1, 1, 3, c);", source)

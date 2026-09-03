@@ -429,7 +429,7 @@ void InputDisplay::draw(Menu *menu, bool force) const {
     p.button(164, 50, 8, buttons & JUTGamePad::X, SUSAMUNE_INPUT_COLOR_X);
     p.button(119, 41, 8, buttons & JUTGamePad::Y, SUSAMUNE_INPUT_COLOR_Y);
     p.button(144, 34, 6, buttons & JUTGamePad::Z, SUSAMUNE_INPUT_COLOR_Z);
-    p.button(91, 64, 9, buttons & JUTGamePad::START,
+    p.button(91, 64, 7, buttons & JUTGamePad::START,
              SUSAMUNE_INPUT_COLOR_START);
 
     if (lines == 0) return;
