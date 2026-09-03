@@ -12,6 +12,7 @@ namespace {
 
 enum {
     kSaveTimeoutFrames = 30 * 15,
+    kRetryFrames = 30 * 10,
 };
 
 #define sTargets (*reinterpret_cast<s32 (*)[SUSAMUNE_STAGE_TARGET_SLOT_COUNT]>( \
@@ -19,6 +20,7 @@ enum {
 
 u32 sSaveSeq;
 u32 sWaitFrames;
+u32 sRetryFrames;
 bool sBackend;
 bool sDirty;
 bool sPending;
@@ -33,7 +35,7 @@ bool publish() {
 #if IS_EMULATOR
     return false;
 #else
-    if (!sBackend || !sDirty || sPending) return false;
+    if (!sBackend || !sDirty || sPending || sRetryFrames != 0) return false;
 
     volatile SusamuneStageTargetsCfg *mailbox = SUSAMUNE_STAGE_TARGETS_PPC_PTR;
     memcpy((void *)mailbox->targets, sTargets, sizeof(sTargets));
@@ -48,6 +50,7 @@ bool publish() {
     sDirty = false;
     sPending = true;
     sWaitFrames = 0;
+    sRetryFrames = 0;
     sTimeoutNotified = false;
     return true;
 #endif
@@ -61,6 +64,7 @@ void init() {
     memset(sTargets, 0xff, sizeof(sTargets));
     sSaveSeq = 0;
     sWaitFrames = 0;
+    sRetryFrames = 0;
     sBackend = false;
     sDirty = false;
     sPending = false;
@@ -100,8 +104,8 @@ void service(Menu *menu) {
             sWaitFrames = 0;
             sTimeoutNotified = false;
             if (mailbox->status != 0) {
-                sBackend = false;
-                sDirty = false;
+                sDirty = true;
+                sRetryFrames = kRetryFrames;
                 if (menu) {
                     char error[40];
                     snprintf(error, sizeof(error), "Target save failed: %u",
@@ -115,6 +119,10 @@ void service(Menu *menu) {
             sTimeoutNotified = true;
             if (menu) menu->toast("Target save timed out");
         }
+    }
+    if (sRetryFrames != 0) {
+        --sRetryFrames;
+        return;
     }
     publish();
 #else

@@ -635,7 +635,9 @@ void completeRequest(const SusamuneGhostStorageResponse &response) {
         DCInvalidateRange((void *)mailbox->payload, response.payloadSize);
         const bool imported = loadDestination == LOAD_DESTINATION_RACE
             ? Ghost::importPlayback((const void *)mailbox->payload,
-                                    response.payloadSize)
+                                    response.payloadSize,
+                                    requestProfile ==
+                                        SUSAMUNE_GHOST_IMPORTED_PROFILE)
             : Ghost::importObserverTrack(
                   (const void *)mailbox->payload, response.payloadSize,
                   loadDestination == LOAD_DESTINATION_OBSERVER_SECONDARY);

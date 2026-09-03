@@ -184,13 +184,72 @@ class ModalInputContracts(unittest.TestCase):
             self.assertIn(field, suppress)
             self.assertIn(field, restore)
         self.assertIn("menuOpenBeforeDirect ||", main)
-        self.assertIn("gBinds.wasPressed(BIND_MENU_TOGGLE)", main)
+        self.assertIn("gBinds.wasPressedRaw(BIND_MENU_TOGGLE)", main)
         mute = main.index("suppressRetailPad(retailPad, retailInput);")
         direct = main.index("int state = director->direct();", mute)
         unmute = main.index("restoreRetailPad(retailPad, retailInput);", direct)
         self.assertLess(mute, direct)
         self.assertLess(direct, unmute)
         self.assertNotIn("JUTGamePad::mPadStatus", suppress)
+
+    def test_settings_actions_cannot_also_fire_configured_binds(self) -> None:
+        menu = text("src/menu.cpp")
+        category = menu[
+            menu.index("class CategorySettingsTab") :
+            menu.index("static_assert(sizeof(CategorySettingsTab)")
+        ]
+        guard = function(category, r"bool suppressesBinds\(\) const override")
+        self.assertIn("if (grabsInput()) return true;", guard)
+        self.assertIn("JUTGamePad::A | JUTGamePad::X", guard)
+
+    def test_every_page_silences_the_buttons_it_consumes(self) -> None:
+        menu = text("src/menu.cpp")
+
+        def class_body(name: str, next_marker: str) -> str:
+            start = menu.index(f"class {name}")
+            return menu[start : menu.index(next_marker, start)]
+
+        iling = class_body("ILingTab", "class GhostsTab")
+        iling_guard = function(iling, r"bool suppressesBinds\(\) const override")
+        for button in ("A", "X", "Y"):
+            self.assertIn(f"JUTGamePad::{button}", iling_guard)
+        self.assertIn("if (grabsInput()) return true;", iling_guard)
+
+        ghosts = class_body("GhostsTab", "class RecordsTab")
+        ghosts_guard = function(ghosts, r"bool suppressesBinds\(\) const override")
+        for button in ("A", "X", "Y", "Z"):
+            self.assertIn(f"JUTGamePad::{button}", ghosts_guard)
+
+        records = class_body("RecordsTab", "class WarpPresetsTab")
+        records_guard = function(records, r"bool suppressesBinds\(\) const override")
+        self.assertIn("JUTGamePad::A", records_guard)
+        self.assertIn("JUTGamePad::B", records_guard)
+
+        creation = class_body("CreationTab", "class BindsTab")
+        creation_guard = function(creation, r"bool suppressesBinds\(\) const override")
+        self.assertIn("if (grabsInput()) return true;", creation_guard)
+        self.assertIn("JUTGamePad::A", creation_guard)
+
+        binds = class_body("BindsTab", "class StageLoaderTab")
+        binds_guard = function(binds, r"bool suppressesBinds\(\) const override")
+        self.assertIn("if (grabsInput()) return true;", binds_guard)
+        self.assertIn("JUTGamePad::A | JUTGamePad::X", binds_guard)
+
+        top_level = function(menu, r"bool Menu::suppressesBinds\(\) const")
+        self.assertIn("JUTGamePad::L | JUTGamePad::R", top_level)
+        self.assertIn("wasPressedRaw(BIND_MENU_TOGGLE)", top_level)
+
+    def test_consumed_button_can_still_close_menu_when_it_is_the_toggle(self) -> None:
+        menu = text("src/menu.cpp")
+        update = function(menu, r"void Menu::update\(TMarioGamePad \*pad\)")
+        self.assertIn("gBinds.wasPressedRaw(BIND_MENU_TOGGLE)", update)
+        self.assertLess(update.index("grabsInput()"),
+                        update.index("wasPressedRaw(BIND_MENU_TOGGLE)"))
+
+        binds = text("include/susamune/binds.hxx")
+        raw = function(binds, r"bool wasPressedRaw\(BindId id\) const")
+        self.assertIn("mHeld == m && mPrevHeld != m", raw)
+        self.assertNotIn("live()", raw)
 
 
 class MovementStylePersistenceContracts(unittest.TestCase):

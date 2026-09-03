@@ -26,10 +26,15 @@ class RngIlWarningTests(unittest.TestCase):
         self.assertNotIn("SETTING_RICCO_CRANE_SPEED", body)
         self.assertNotIn("SETTING_RICCO_FRUIT_MACHINE", body)
         self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", body)
-        self.assertIn(
-            "if (rngControlInvalidatesIl()) ILing::invalidateForAssist();",
-            source,
-        )
+        apply = source.split("void rngControlApply()", 1)[1].split(
+            "bool rngControlInvalidatesIl()", 1
+        )[0]
+        self.assertIn("reasons |= Assist::KING_BOO_FRUIT", apply)
+        self.assertIn("reasons |= Assist::PETEY_NO_TORNADO", apply)
+        self.assertIn("reasons |= Assist::PETEY_ROUTE", apply)
+        self.assertIn("if (reasons) ILing::invalidateForAssist(reasons);", apply)
+        self.assertNotIn("SETTING_RICCO_CRANE_SPEED", apply)
+        self.assertNotIn("SETTING_RICCO_FRUIT_MACHINE", apply)
 
     def test_native_hud_red_is_snapshotted_and_reversible(self) -> None:
         source = (ROOT / "src/creation_extras.cpp").read_text(encoding="utf-8")

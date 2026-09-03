@@ -118,6 +118,7 @@ static const char *const CreationColorKeys[SUSAMUNE_CREATION_COLOR_COUNT] =
 
 // Longest section name we build: "settings" + '_' + "pal" + NUL.
 #define SUSAMUNE_SECTION_NAME_MAX 24
+#define SUSAMUNE_INI_TRANSACTION_PATH_MAX 64
 
 static bool CfgReady = false;
 static u32  CfgAckSeq = 0;
@@ -197,6 +198,172 @@ static void BuildSectionName(char *out, const char *base, const char *region)
 	while (*region)
 		out[n++] = *region++;
 	out[n] = '\0';
+}
+
+static bool BuildIniSiblingPath(char *out, u32 capacity, const char *path,
+	const char *suffix)
+{
+	u32 pathLength = (u32)strlen(path);
+	u32 suffixLength = (u32)strlen(suffix);
+
+	if (pathLength + suffixLength + 1 > capacity)
+		return false;
+	memcpy(out, path, pathLength);
+	memcpy(out + pathLength, suffix, suffixLength + 1);
+	return true;
+}
+
+static int IniPathExists(const char *path, bool *exists)
+{
+	FILINFO info;
+	int ret = f_stat_char(path, &info);
+
+	if (ret == FR_OK)
+	{
+		*exists = true;
+		return FR_OK;
+	}
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		return FR_OK;
+	}
+	return ret;
+}
+
+static int IniPathCluster(const char *path, bool *exists, DWORD *cluster,
+	FSIZE_t *size)
+{
+	FIL f;
+	int ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		*cluster = 0;
+		*size = 0;
+		return FR_OK;
+	}
+	if (ret != FR_OK)
+		return ret;
+	*exists = true;
+	*cluster = f.obj.sclust;
+	*size = f_size(&f);
+	return f_close(&f);
+}
+
+static int CheckIniAliases(const char *path, const char *tempPath,
+	const char *backupPath)
+{
+	bool mainExists;
+	bool tempExists;
+	bool backupExists;
+	DWORD mainCluster;
+	DWORD tempCluster;
+	DWORD backupCluster;
+	FSIZE_t mainSize;
+	FSIZE_t tempSize;
+	FSIZE_t backupSize;
+	int ret;
+
+	ret = IniPathCluster(path, &mainExists, &mainCluster, &mainSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(tempPath, &tempExists, &tempCluster, &tempSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(backupPath, &backupExists, &backupCluster,
+	                     &backupSize);
+	if (ret != FR_OK)
+		return ret;
+	if ((mainExists && mainSize != 0 && mainCluster == 0) ||
+	    (tempExists && tempSize != 0 && tempCluster == 0) ||
+	    (backupExists && backupSize != 0 && backupCluster == 0))
+		return FR_INT_ERR;
+
+	// FatFs rename registers the destination before removing the source. If
+	// power failed between them, mutating either alias could free live data.
+	if ((mainExists && tempExists && mainCluster != 0 &&
+	     mainCluster == tempCluster) ||
+	    (mainExists && backupExists && mainCluster != 0 &&
+	     mainCluster == backupCluster) ||
+	    (tempExists && backupExists && tempCluster != 0 &&
+	     tempCluster == backupCluster))
+		return FR_INT_ERR;
+	// An empty main beside a nonempty backup is an ambiguous interrupted
+	// install. Leave both intact instead of deleting the only useful copy.
+	if (mainExists && mainSize == 0 && backupExists && backupSize != 0)
+		return FR_INT_ERR;
+	return FR_OK;
+}
+
+static int RecoverIniFile(const char *path)
+{
+	char tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	char backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	bool exists;
+	int ret;
+
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
+		return FR_INVALID_NAME;
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathExists(path, &exists);
+	if (ret != FR_OK || exists)
+		return ret;
+
+	// A backup exists only after the old file was safely moved aside.
+	ret = IniPathExists(backupPath, &exists);
+	if (ret != FR_OK)
+		return ret;
+	if (exists)
+		return f_rename_char(backupPath, path);
+
+	// A temp without a backup may be an interrupted first write. It has no
+	// commit marker, so never promote it over clean compiled-in defaults.
+	ret = IniPathExists(tempPath, &exists);
+	return ret;
+}
+
+static int CommitIniFile(const char *path, const char *tempPath,
+	const char *backupPath, bool hadOriginal)
+{
+	int ret;
+	int restoreRet;
+
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+
+	if (hadOriginal)
+	{
+		// FatFs rename does not replace an existing destination. The live
+		// file remains untouched unless stale-backup cleanup succeeds.
+		ret = f_unlink_char(backupPath);
+		if (ret != FR_OK && ret != FR_NO_FILE && ret != FR_NO_PATH)
+			return ret;
+		ret = f_rename_char(path, backupPath);
+		if (ret != FR_OK)
+			return ret;
+	}
+
+	ret = f_rename_char(tempPath, path);
+	if (ret != FR_OK)
+	{
+		if (hadOriginal)
+		{
+			restoreRet = f_rename_char(backupPath, path);
+			if (restoreRet != FR_OK)
+				return restoreRet;
+		}
+		return ret;
+	}
+
+	if (hadOriginal)
+		(void)f_unlink_char(backupPath);
+	return FR_OK;
 }
 
 static struct SusamuneCfg *CfgBlock(void)
@@ -5558,10 +5725,15 @@ static const char kIniBanner[] =
 static int WriteIniFile(const struct SusamuneCfg *cfg)
 {
 	FIL   f;
+	const char *path = SusamuneCfgIniPath();
+	char  tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	char  backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
 	char *buf;
 	char *line;
 	UINT  read = 0;
+	FSIZE_t fileSize = 0;
 	int   ret;
+	int   closeRet;
 	int   err = FR_OK;
 	bool  skipping = false;
 	bool  wroteSettings = false;
@@ -5570,30 +5742,63 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	bool  wroteMetadataDisplay = false;
 	bool  wroteQftDisplay = false;
 	bool  wroteCreation = false;
+	bool  hadOriginal = false;
 
 	buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
 	if (buf == NULL)
 		return FR_NOT_ENOUGH_CORE;
 	buf[0] = '\0';
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_READ | FA_OPEN_EXISTING);
-	if (ret == FR_OK)
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
 	{
-		// Refuse rather than truncate: a partial copy-through would silently
-		// delete another version's settings.
-		if (f_size(&f) >= SUSAMUNE_INI_BUF_SIZE)
-		{
-			f_close(&f);
-			free(buf);
-			return FR_NOT_ENOUGH_CORE;
-		}
-		if (f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read) != FR_OK)
-			read = 0;
-		buf[read] = '\0';
-		f_close(&f);
+		free(buf);
+		return FR_INVALID_NAME;
+	}
+	ret = RecoverIniFile(path);
+	if (ret != FR_OK)
+	{
+		free(buf);
+		return ret;
 	}
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_WRITE | FA_CREATE_ALWAYS);
+	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (ret == FR_OK)
+	{
+		hadOriginal = true;
+		if (f.obj.attr & AM_RDO)
+		{
+			closeRet = f_close(&f);
+			free(buf);
+			return closeRet == FR_OK ? FR_DENIED : closeRet;
+		}
+		fileSize = f_size(&f);
+		// Refuse rather than truncate: a partial copy-through would silently
+		// delete another version's settings.
+		if (fileSize >= SUSAMUNE_INI_BUF_SIZE)
+		{
+			closeRet = f_close(&f);
+			free(buf);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read);
+		closeRet = f_close(&f);
+		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
+		{
+			free(buf);
+			if (ret != FR_OK)
+				return ret;
+			return closeRet != FR_OK ? closeRet : FR_DISK_ERR;
+		}
+		buf[read] = '\0';
+	}
+	else if (ret != FR_NO_FILE && ret != FR_NO_PATH)
+	{
+		free(buf);
+		return ret;
+	}
+
+	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);
 	if (ret != FR_OK)
 	{
 		free(buf);
@@ -5710,9 +5915,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 		EmitCreationSection(&f, &err, cfg);
 	}
 
+	if (err == FR_OK && f_size(&f) >= SUSAMUNE_INI_BUF_SIZE)
+		err = FR_NOT_ENOUGH_CORE;
 	ret = f_close(&f);
 	if (err == FR_OK && ret != FR_OK)
 		err = ret;
+	if (err == FR_OK)
+		err = CommitIniFile(path, tempPath, backupPath, hadOriginal);
 	free(buf);
 	return err;
 }
@@ -5860,8 +6069,12 @@ void SusamuneCfgInit(void)
 	FIL   f;
 	char *buf;
 	UINT  read;
+	FSIZE_t fileSize;
 	u32   i;
 	int   ret;
+	int   closeRet;
+	bool  settingsReadSafe;
+	bool  noConfig;
 
 	// Zero the block unconditionally: it survives across app launches, and a
 	// stale one left by an earlier boot would be adopted wholesale by a mod
@@ -5981,33 +6194,77 @@ void SusamuneCfgInit(void)
 	// future/unreadable journal from a launcher with no backend.
 	cfg->flags |= SUSAMUNE_CFG_FLAG_SPLIT_STATS;
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_READ | FA_OPEN_EXISTING);
+	settingsReadSafe = false;
+	noConfig = false;
+	ret = RecoverIniFile(SusamuneCfgIniPath());
+	if (ret == FR_OK)
+		ret = f_open_char(&f, SusamuneCfgIniPath(),
+		                  FA_READ | FA_OPEN_EXISTING);
 	if (ret == FR_OK)
 	{
-		buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
-		if (buf != NULL)
+		fileSize = f_size(&f);
+		if (fileSize >= SUSAMUNE_INI_BUF_SIZE)
 		{
-			read = 0;
-			if (f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read) != FR_OK)
+			closeRet = f_close(&f);
+			ret = closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		else
+		{
+			buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
+			if (buf == NULL)
+			{
+				closeRet = f_close(&f);
+				ret = closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+			}
+			else
+			{
 				read = 0;
-			buf[read] = '\0';
-			ParseIni(buf, cfg);
-			free(buf);
+				ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1,
+				             &read);
+				closeRet = f_close(&f);
+				if (ret == FR_OK && read == fileSize && closeRet == FR_OK)
+				{
+					buf[read] = '\0';
+					ParseIni(buf, cfg);
+					settingsReadSafe = true;
+					noConfig = !SawSettingsSection;
+				}
+				else if (ret == FR_OK)
+				{
+					ret = closeRet != FR_OK ? closeRet : FR_DISK_ERR;
+				}
+				free(buf);
+			}
 		}
-		f_close(&f);
-		if (!SawSettingsSection)
+	}
+	else if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		settingsReadSafe = true;
+		noConfig = true;
+	}
+
+	if (settingsReadSafe)
+	{
+		if (noConfig)
 		{
-			// The file exists but has never been written by this game version.
+			// Only a confirmed missing section may author defaults.
 			cfg->flags |= SUSAMUNE_CFG_FLAG_NO_CONFIG;
+			dbgprintf("Susamune: no " SUSAMUNE_INI_PATH
+			          " section [%s], using defaults\r\n", SettingsSection);
 		}
-		dbgprintf("Susamune: loaded " SUSAMUNE_INI_PATH " [%s]\r\n", SettingsSection);
+		else
+		{
+			dbgprintf("Susamune: loaded " SUSAMUNE_INI_PATH " [%s]\r\n",
+			          SettingsSection);
+		}
 	}
 	else
 	{
-		// Every value stays UNSET, so the mod keeps its compiled-in defaults
-		// and -- seeing this flag -- writes the file out for us.
-		cfg->flags |= SUSAMUNE_CFG_FLAG_NO_CONFIG;
-		dbgprintf("Susamune: no " SUSAMUNE_INI_PATH " (%d), using defaults\r\n", ret);
+		// Keep independent journals available, but make settings read-only for
+		// this boot so defaults cannot replace a file we failed to read.
+		cfg->flags |= SUSAMUNE_CFG_FLAG_SETTINGS_READ_ERROR;
+		dbgprintf("Susamune: unsafe " SUSAMUNE_INI_PATH
+		          " read (%d), settings disabled\r\n", ret);
 	}
 
 	sync_after_write(cfg, sizeof(struct SusamuneCfg));
@@ -6017,7 +6274,7 @@ void SusamuneCfgInit(void)
 	sync_after_write(splitStats, sizeof(struct SusamuneSplitStatsCfg));
 
 	CfgAckSeq = 0;
-	CfgReady  = true;
+	CfgReady  = settingsReadSafe;
 }
 
 bool SusamuneCfgPending(void)

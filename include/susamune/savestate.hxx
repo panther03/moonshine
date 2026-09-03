@@ -1,6 +1,8 @@
 #ifndef _SUSAMUNE_SAVESTATE_HXX
 #define _SUSAMUNE_SAVESTATE_HXX
 
+#include <Dolphin/types.h>
+
 class Menu;
 
 class SavestateManager {
@@ -34,6 +36,7 @@ private:
     char mFeedback[48];
     int  mFeedbackFrames;
     bool mLoadPending;
+    u16  mLoadWaitFrames;
 };
 static_assert(sizeof(SavestateManager) == 56,
               "savestate controller layout changed");

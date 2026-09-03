@@ -745,6 +745,86 @@ void applyPatches(bool early) {
     }
 }
 
+enum SavestateFeatureState {
+    SAVESTATE_FRUIT_TIMEOUT = 1 << 0,
+    SAVESTATE_FAST_TEXT     = 1 << 1,
+};
+
+u8 savestateFeatureBit(SettingId id) {
+    if (id == SETTING_FRUIT_NEVER_TIMEOUT) return SAVESTATE_FRUIT_TIMEOUT;
+    if (id == SETTING_FAST_TEXT) return SAVESTATE_FAST_TEXT;
+    return 0;
+}
+
+// Only these rows live in ranges the savestate restores. Fast Text's first
+// three rows are instructions; its remaining high-MEM1 rows are message data.
+bool savestateRewindsPatch(SettingId id, u32 addr) {
+    return id == SETTING_FRUIT_NEVER_TIMEOUT ||
+           (id == SETTING_FAST_TEXT && addr >= 0x80500000u);
+}
+
+u8 captureSavestateFeatureState() {
+    u8 state = 0;
+    SettingId id = SETTING_COUNT;
+    for (int pidx = 0; pidx < kNumFeaturePatches; pidx++) {
+        const Patch &p = gFeaturePatches[pidx];
+        const u32 tag = (p.addrState & kPatchFeatureMask) >> 24;
+        if (tag != 0) id = (SettingId)(tag - 1);
+        const u32 addr = patchAddr(p);
+        if (addr != 0 && savestateRewindsPatch(id, addr) &&
+            (p.addrState & kPatchOn)) {
+            state |= savestateFeatureBit(id);
+        }
+    }
+    return state;
+}
+
+void restoreSavestateFeatureState(u8 savedState) {
+#if defined(SUSAMUNE_VERSION_PAL)
+    if (featureEnabled(SETTING_FAST_TEXT)) resolveFastTextPalMsg();
+#endif
+    int idx = 0;
+    SettingId id = SETTING_COUNT;
+    bool early = false;
+    for (int pidx = 0; pidx < kNumFeaturePatches; pidx++) {
+        Patch &p = gFeaturePatches[pidx];
+        const u32 tag = (p.addrState & kPatchFeatureMask) >> 24;
+        if (tag != 0) {
+            id = (SettingId)(tag - 1);
+            early = (p.addrState & kPatchEarly) != 0;
+        }
+        if (early) continue;
+
+        const int originalIndex = idx++;
+        const u32 addr = patchAddr(p);
+        if (addr == 0 || !savestateRewindsPatch(id, addr)) continue;
+
+        const u8 bit = savestateFeatureBit(id);
+        const bool savedOn = (savedState & bit) != 0;
+        const bool wantOn = featureEnabled(id);
+        u32 state = p.addrState;
+        if (savedOn == wantOn) {
+            p.addrState = wantOn ? state | kPatchOn : state & ~kPatchOn;
+            continue;
+        }
+
+        if (wantOn) {
+            // The restored bytes are the exact off-state from the snapshot.
+            // Keep them as the new undo value instead of an older heap word.
+            const u32 word = *reinterpret_cast<volatile u32 *>(addr);
+            gPatchOrig[originalIndex] = word;
+            p.addrState = state | kPatchCaptured | kPatchOn;
+            writeGameCode(addr, (word & ~patchMask(p)) | p.value);
+        } else {
+            // A row cannot have been on at save time without first capturing
+            // its undo word. Refuse to guess if the runtime state is damaged.
+            if (!(state & kPatchCaptured)) continue;
+            writeGameCode(addr, gPatchOrig[originalIndex]);
+            p.addrState = state & ~kPatchOn;
+        }
+    }
+}
+
 void applyHooks() {
     bool init = !gHooksInited;
     for (int k = 0; k < kNumHooks; k++) {
@@ -994,4 +1074,10 @@ void featuresOnStageLoad() {
     // ours lives here. Without it a stale frame number carries into the next
     // stage and can swallow the first shine touch.
     *reinterpret_cast<volatile u32 *>(SUSAMUNE_ADDR_SHINE_TOUCH_FRAME) = 0;
+}
+
+u8 featuresSavestateState() { return captureSavestateFeatureState(); }
+
+void featuresOnSavestateLoaded(u8 savedState) {
+    restoreSavestateFeatureState(savedState);
 }

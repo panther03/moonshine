@@ -270,8 +270,8 @@ class SavestateDebugTextTests(unittest.TestCase):
             r"void Menu::drawTextBaseline[\s\S]*?\n#endif",
         )
 
-    def test_snapshot_format_and_sequence_gate_are_unchanged(self) -> None:
-        self.assertIn("const u32 kSnapshotVersion = 11u;", self.savestate)
+    def test_snapshot_format_and_sequence_gate_are_current(self) -> None:
+        self.assertIn("const u32 kSnapshotVersion = 13u;", self.savestate)
         process = _function(
             self.savestate,
             r"void SavestateManager::processPendingLoad\(\)",

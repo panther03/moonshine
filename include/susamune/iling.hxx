@@ -3,6 +3,8 @@
 
 #include <Dolphin/types.h>
 
+#include "susamune/assist.hxx"
+
 class Menu;
 namespace LevelWarp {
 struct Dest;
@@ -74,7 +76,7 @@ void onStageSetup();
 void onSavestateSaved();
 void onSavestateLoaded();
 // Revoke PB, Records and challenge credit without changing the QFT clock.
-void invalidateForAssist();
+void invalidateForAssist(u8 reasons = Assist::OTHER);
 bool achievementChimeBlocked();
 
 // PB result banner, drawn through Menu's shared no-allocation renderer.

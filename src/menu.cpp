@@ -234,6 +234,8 @@ public:
     virtual bool fullScreen() const { return false; }
     virtual bool favoriteHint() const { return false; }
     virtual bool available() const { return true; }
+    // Nested hubs use a non-negative count as a compact Ready/blocked value.
+    virtual int rootAlertCount() const { return -1; }
     virtual void focus() {}
     // Nested pages consume one Back press before their parent closes.
     virtual bool back() { return false; }
@@ -335,6 +337,10 @@ void bgmStatsDraw(Menu *menu) {
 static void drawValueRow(Menu *menu, int x, int y, int w, const char *name,
                          const char *value, bool selected, bool starred,
                          bool arrow);
+static void drawValueRowColored(Menu *menu, int x, int y, int w,
+                                const char *name, const char *value,
+                                bool selected, bool starred, bool arrow,
+                                Color valueColor);
 static void drawHelpLine(Menu *menu, int x, int y, int w, int h,
                          const char *text);
 
@@ -357,10 +363,16 @@ public:
                gCreationExtras.editing();
     }
     bool suppressesBinds() const override {
-        if (mConfirmDelete || mEditingName || mShowingStats) return true;
+        if (grabsInput()) return true;
+        u16 consumed = JUTGamePad::A;
+        if (isOption()) {
+            if (mSel >= 2 && mSel <= 6) consumed |= JUTGamePad::X;
+        } else {
+            consumed |= JUTGamePad::Y;
+            if (ILing::pbQf(selectedEntry()) >= 0) consumed |= JUTGamePad::X;
+        }
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
-        return !isOption() &&
-               (held & (JUTGamePad::A | JUTGamePad::X | JUTGamePad::Y)) != 0;
+        return (held & consumed) != 0;
     }
     bool fullScreen() const override {
         return mEditingName || mShowingStats || gCreationExtras.editing();
@@ -1005,7 +1017,8 @@ public:
     bool suppressesBinds() const override {
         if (grabsInput()) return true;
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
-        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+        return (held & (JUTGamePad::A | JUTGamePad::X |
+                        JUTGamePad::Y | JUTGamePad::Z)) != 0;
     }
 
     bool beginProtectedPBSave(Menu *menu, u32 token) override {
@@ -2469,6 +2482,18 @@ public:
           mScope(RecordsPersistence::SCOPE_GLOBAL) {}
 
     const char *title() const override { return "Records"; }
+    bool suppressesBinds() const override {
+        u16 consumed = mPage == PAGE_ROOT ? 0 : JUTGamePad::B;
+        if (mPage == PAGE_ROOT || mPage == PAGE_ACHIEVEMENT_CATEGORIES ||
+            mPage == PAGE_WORLDS ||
+            (mPage == PAGE_ACHIEVEMENTS &&
+             Records::categoryAchievementCount(
+                 (Records::Category)mCategory) > 0)) {
+            consumed |= JUTGamePad::A;
+        }
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & consumed) != 0;
+    }
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
         if ((rapid & TMarioGamePad::B) && mPage != PAGE_ROOT) {
@@ -2708,7 +2733,7 @@ private:
                         ? "Switch Records between this region and all regions."
                         : "Shows a popup and chime when an achievement unlocks.";
         drawHelpLine(menu, x, y, w, h - 52, help);
-        menu->drawText("Moonshine V2.2.0 RC2",
+        menu->drawText("Moonshine V2.2.0 RC3",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -3006,6 +3031,9 @@ class WarpPresetsTab : public MenuTab {
 public:
     WarpPresetsTab() : mSel(0) {}
     const char *title() const override { return "Warps"; }
+    bool suppressesBinds() const override {
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
@@ -3047,6 +3075,9 @@ class WarpStagesTab : public MenuTab {
 public:
     WarpStagesTab() : mArea(0), mEpisode(0) {}
     const char *title() const override { return "Stages"; }
+    bool suppressesBinds() const override {
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
@@ -3092,6 +3123,98 @@ private:
     int mEpisode;
 };
 #endif
+
+// ---------------------------------------------------------------------
+// PB Safety
+// ---------------------------------------------------------------------
+class PBSafetyTab final : public MenuTab {
+public:
+    PBSafetyTab() : mSel(0) {}
+
+    const char *title() const override { return "PB Safety"; }
+    const char *summary() const override {
+        return "Find and fix every setting that can stop an IL PB.";
+    }
+    int rootAlertCount() const override {
+        return gSettings.ilPbBlockerCount();
+    }
+    bool suppressesBinds() const override {
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
+
+    void update(Menu *menu, TMarioGamePad *pad) override {
+        const int count = Settings::ilPbSettingCount();
+        const u32 rapid = menu->navigationInput(pad);
+        if (rapid & TMarioGamePad::CSTICK_UP)
+            mSel = (u8)wrap(mSel - 1, count);
+        else if (rapid & TMarioGamePad::CSTICK_DOWN)
+            mSel = (u8)wrap(mSel + 1, count);
+
+        if (rapid & TMarioGamePad::X) {
+            int fixed = 0;
+            bool restart = false;
+            for (int i = 0; i < count; i++) {
+                const SettingId id = Settings::ilPbSettingAt(i);
+                if (!gSettings.blocksIlPb(id)) continue;
+                restart |= Settings::invalidatesIlAttempt(id);
+                gSettings.set(id, Settings::ilPbSafeValue(id));
+                fixed++;
+            }
+            menu->toast(!fixed ? "PB settings already safe"
+                        : restart ? "PB settings fixed - restart the IL"
+                                  : "PB settings fixed");
+        } else if (rapid & TMarioGamePad::A) {
+            const SettingId id = Settings::ilPbSettingAt(mSel);
+            if (gSettings.blocksIlPb(id)) {
+                gSettings.set(id, Settings::ilPbSafeValue(id));
+                menu->toast(Settings::invalidatesIlAttempt(id)
+                                ? "PB setting fixed - restart the IL"
+                                : "PB setting fixed");
+            } else {
+                menu->toast("Setting is already PB-safe");
+            }
+        }
+    }
+
+    void draw(Menu *menu, int x, int y, int w, int h) override {
+        const int count = Settings::ilPbSettingCount();
+        const int footerH = ROW_H;
+        const int listH = h - HELP_H - footerH;
+        const int maxRows = listH / ROW_H;
+        const int start = listScrollStart(mSel, count, maxRows);
+        int end = start + maxRows;
+        if (end > count) end = count;
+        int ry = y;
+        for (int i = start; i < end; i++, ry += ROW_H) {
+            const SettingId id = Settings::ilPbSettingAt(i);
+            const bool blocked = gSettings.blocksIlPb(id);
+            char value[32];
+            snprintf(value, sizeof(value), "%s - %s",
+                     gSettings.valueLabel(id), blocked ? "PB OFF" : "Safe");
+            drawValueRowColored(menu, x, ry, w, Settings::name(id), value,
+                                i == mSel, false, false,
+                                blocked ? col(255, 72, 72, 255) : cValue());
+        }
+        drawScrollHints(menu, x, y, w, listH, start, end, count);
+        const SettingId selected = Settings::ilPbSettingAt(mSel);
+        const char *help = !gSettings.blocksIlPb(selected)
+            ? "This setting is PB-safe."
+            : selected == SETTING_ILING_RECORDING
+                  ? "PB recording is off; other Records remain eligible."
+                  : "This setting invalidates an active IL attempt.";
+        drawHelpLine(menu, x, y, w, h - footerH, help);
+        menu->drawText(SUSAMUNE_GLYPH_A " Fix   " SUSAMUNE_GLYPH_X
+                       " Fix all",
+                       x + 4, y + h - FOOT_SZ,
+                       FOOT_SZ, FOOT_SZ, cFooter());
+    }
+
+private:
+    u8 mSel;
+};
+
+static_assert(sizeof(PBSafetyTab) <= 8, "PB Safety tab grew unexpectedly");
 
 // ---------------------------------------------------------------------
 // Category settings tab (generic settings renderer)
@@ -3408,6 +3531,11 @@ public:
         return mSel < settings &&
                Settings::favoriteable((SettingId)ids[mSel]);
     }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
     bool back() override {
         if (!hasPages() || !mMode) return false;
         mSel = mMode - 1;
@@ -3584,7 +3712,22 @@ public:
             }
             const bool starred = i < settings &&
                 gSettings.favorite((SettingId)ids[i]);
-            drawValueRow(menu, x, ry, w, name, val, selected, starred, false);
+            const bool pbSetting = i < settings &&
+                Settings::affectsIlPb((SettingId)ids[i]);
+            const bool pbBlocked = pbSetting &&
+                gSettings.blocksIlPb((SettingId)ids[i]);
+            drawValueRowColored(
+                menu, x, ry, w, name, val, selected, starred, false,
+                pbBlocked ? col(255, 72, 72, 255) : cValue());
+            if (pbSetting) {
+                const char *tag = pbBlocked ? "PB OFF" : "PB";
+                const int valueX = x + w - Menu::textWidth(val, ROW_SZ) - 8;
+                const int tagSize = 10;
+                menu->drawText(tag,
+                    valueX - Menu::textWidth(tag, tagSize) - 10,
+                    ry + 2, tagSize, tagSize,
+                    pbBlocked ? col(255, 72, 72, 255) : cRowDim());
+            }
             ry += ROW_H;
             row++;
         }
@@ -3797,6 +3940,10 @@ public:
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
                gMetadataDisplay.editing() || gCreationExtras.editing();
+    }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
     }
     bool fullScreen() const override { return grabsInput(); }
 
@@ -4134,6 +4281,11 @@ public:
     }
 
     bool grabsInput() const override { return gBinds.recording(); }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         if (gBinds.recording()) {
@@ -5096,9 +5248,23 @@ public:
                     continue;
                 }
                 const bool available = mChildren[i]->available();
-                drawValueRow(menu, x, ry, w, mChildren[i]->title(),
-                             available ? nullptr : "Disabled",
-                             i == mSel, false, available);
+                const int alertCount = available
+                    ? mChildren[i]->rootAlertCount() : -1;
+                char alert[20];
+                const char *value = available ? nullptr : "Disabled";
+                Color valueColor = cValue();
+                if (alertCount >= 0) {
+                    if (alertCount == 0) {
+                        value = "Ready";
+                    } else {
+                        snprintf(alert, sizeof(alert), "%d blocked", alertCount);
+                        value = alert;
+                        valueColor = col(255, 72, 72, 255);
+                    }
+                }
+                drawValueRowColored(menu, x, ry, w,
+                                    mChildren[i]->title(), value,
+                                    i == mSel, false, available, valueColor);
                 ry += ROW_H;
                 row++;
             }
@@ -5119,7 +5285,7 @@ public:
     }
 
 private:
-    enum { MAX_CHILDREN = 9 };
+    enum { MAX_CHILDREN = 10 };
 
     MenuTab *current() const {
         MenuTab *child = mPage >= 0 && mPage < mCount
@@ -5129,9 +5295,10 @@ private:
 
     const char *sectionName(int child) const {
         if (mSectionStyle == SECTIONS_SETTINGS) {
-            if (child == 0) return "GAMEPLAY AND PRACTICE";
-            if (child == 4) return "TIMING AND HUD";
-            if (child == 7) return "LAYOUT AND CONTROLS";
+            if (child == 0) return "PB STATUS";
+            if (child == 1) return "GAMEPLAY AND PRACTICE";
+            if (child == 5) return "TIMING AND HUD";
+            if (child == 8) return "LAYOUT AND CONTROLS";
         } else if (mSectionStyle == SECTIONS_ILS) {
             if (child == 0) return "PRACTICE";
             if (child == 2) return "SESSIONS";
@@ -5254,12 +5421,14 @@ void drawAchievementBanner(Menu *menu) {
          sAchievementBannerFrames == 0))) return;
 
     Records::Tier tier = Records::TIER_GOLD;
+    Records::Category category = Records::CATEGORY_TIMES;
     const char *name = "Achievement preview";
     if (!preview) {
         const Records::AchievementDesc *desc =
             Records::achievement(sAchievementBannerId);
         if (!desc) return;
         tier = desc->tier;
+        category = desc->category;
         name = recordText(desc->name, "Unnamed achievement");
     }
 
@@ -5273,6 +5442,7 @@ void drawAchievementBanner(Menu *menu) {
     const int pad = 14 * scale / 100;
     const int labelSize = 12 * scale / 100;
     const char *tierName = recordTierName(tier);
+    const char *categoryName = recordText(Records::categoryName(category));
     const Color outline = recordTierColor(tier);
 
     menu->fillBox(x, y, w, h, outline);
@@ -5280,10 +5450,16 @@ void drawAchievementBanner(Menu *menu) {
                   col(4, 6, 12, 225));
     menu->drawText("ACHIEVEMENT UNLOCKED", x + pad, y + 10 * scale / 100,
                    labelSize, labelSize, cRowDim());
-    menu->drawText(tierName,
-                   x + w - Menu::textWidth(tierName, labelSize) - pad,
-                   y + 10 * scale / 100,
+    const int tierX = x + w - Menu::textWidth(tierName, labelSize) - pad;
+    menu->drawText(tierName, tierX, y + 10 * scale / 100,
                    labelSize, labelSize, outline);
+    const int slashX = tierX - Menu::textWidth(" / ", labelSize);
+    menu->drawText(" / ", slashX, y + 10 * scale / 100,
+                   labelSize, labelSize, cRowDim());
+    menu->drawText(categoryName,
+                   slashX - Menu::textWidth(categoryName, labelSize),
+                   y + 10 * scale / 100,
+                   labelSize, labelSize, cRowSel());
     const int nameSize = fittedRecordTextSize(
         name, w - pad * 2, 18 * scale / 100, labelSize);
     menu->drawText(name, x + pad, y + 31 * scale / 100,
@@ -5301,6 +5477,7 @@ struct __attribute__((aligned(8))) MenuRuntime {
     u8 presets[sizeof(WarpPresetsTab)] __attribute__((aligned(8)));
     u8 stages[sizeof(WarpStagesTab)] __attribute__((aligned(8)));
 #endif
+    u8 pbSafety[sizeof(PBSafetyTab)] __attribute__((aligned(8)));
     u8 starred[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 qol[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 cosmetic[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
@@ -5329,6 +5506,7 @@ static_assert(sizeof(MenuRuntime) <= SUSAMUNE_MENU_RUNTIME_SIZE,
 #define sPresetsBuf sMenuRuntime.presets
 #define sStagesBuf sMenuRuntime.stages
 #endif
+#define sPbSafetyBuf sMenuRuntime.pbSafety
 #define sStarredBuf sMenuRuntime.starred
 #define sQolBuf sMenuRuntime.qol
 #define sCosmeticBuf sMenuRuntime.cosmetic
@@ -5396,6 +5574,7 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *starred =
         new (sStarredBuf) CategorySettingsTab(TITLE_STARRED,
                                               kStarredCategory);
+    MenuTab *pbSafety = new (sPbSafetyBuf) PBSafetyTab();
     MenuTab *practice =
         new (sMiscBuf) CategorySettingsTab(TITLE_MISC, SETTING_CAT_MISC);
     MenuTab *savestate =
@@ -5420,13 +5599,13 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *records = new (sRecordsBuf) RecordsTab();
 
     MenuTab *settingsChildren[] = {
-        gameplay, practice, rng, savestate,
+        pbSafety, gameplay, practice, rng, savestate,
         timer, display, cosmetics, creation, binds,
     };
     MenuTab *ilChildren[] = {
         iling, ghosts, stageLoader,
     };
-    static_assert(sizeof(settingsChildren) / sizeof(settingsChildren[0]) <= 9,
+    static_assert(sizeof(settingsChildren) / sizeof(settingsChildren[0]) <= 10,
                   "Settings hub exceeds nested menu capacity");
     static_assert(sizeof(ilChildren) / sizeof(ilChildren[0]) <= 8,
                   "IL hub exceeds nested menu capacity");
@@ -5649,6 +5828,13 @@ void Menu::requestSettingsSave() {
 __attribute__((noinline)) static void drawValueRow(
     Menu *menu, int x, int y, int w, const char *name, const char *value,
     bool selected, bool starred, bool arrow) {
+    drawValueRowColored(menu, x, y, w, name, value, selected, starred, arrow,
+                        cValue());
+}
+
+__attribute__((noinline)) static void drawValueRowColored(
+    Menu *menu, int x, int y, int w, const char *name, const char *value,
+    bool selected, bool starred, bool arrow, Color valueColor) {
     if (selected) drawRowHighlight(menu, x, y, w, ROW_H);
     if (selected && arrow)
         menu->drawText(">", x - 2, y, ROW_SZ, ROW_SZ, cAccent());
@@ -5660,7 +5846,7 @@ __attribute__((noinline)) static void drawValueRow(
                    ROW_SZ, ROW_SZ, selected ? cRowSel() : cRow());
     if (value)
         menu->drawText(value, x + w - Menu::textWidth(value, ROW_SZ) - 8,
-                       y, ROW_SZ, ROW_SZ, cValue());
+                       y, ROW_SZ, ROW_SZ, valueColor);
 }
 
 __attribute__((noinline)) static void drawHelpLine(
@@ -5694,11 +5880,11 @@ void Menu::hide() {
 }
 
 void Menu::pollSettingsSave() {
+    SettingsSaveState st = gSettings.pollSave();
     if (!mSaveWatch) {
         return;
     }
 
-    SettingsSaveState st = gSettings.pollSave();
     if (st == SETTINGS_SAVE_PENDING) {
         // Hold the "saving" message up rather than letting it time out.
         mToastFrames = kToastFrames;
@@ -5793,8 +5979,12 @@ int Menu::tabWidth(int i) const {
 }
 
 bool Menu::suppressesBinds() const {
-    return WarpWheel::promptPending() ||
-           (mShown && mTabs[mCurTab]->suppressesBinds());
+    if (WarpWheel::promptPending()) return true;
+    if (gBinds.wasPressedRaw(BIND_MENU_TOGGLE)) return true;
+    if (!mShown) return false;
+    const u16 held = JUTGamePad::mPadStatus[0].mButton;
+    return (held & (JUTGamePad::L | JUTGamePad::R)) != 0 ||
+           mTabs[mCurTab]->suppressesBinds();
 }
 
 void Menu::update(TMarioGamePad *pad) {
@@ -5823,7 +6013,7 @@ void Menu::update(TMarioGamePad *pad) {
         return;
     }
 
-    if (gBinds.wasPressed(BIND_MENU_TOGGLE)) {
+    if (gBinds.wasPressedRaw(BIND_MENU_TOGGLE)) {
         mShown = !mShown;
         if (mShown) mTabs[mCurTab]->focus();
         // Closing with edits pending writes them back to the SD card. Gated on

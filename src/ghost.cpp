@@ -148,6 +148,11 @@ bool sBoundaryPending;
 bool sLiveRouteValid;
 bool sPlaybackPinned;
 bool sPinRouteCheckPending;
+RaceSource sPlaybackRaceSource;
+u32 sPlaybackRaceToken;
+RaceContext sRaceContext;
+u32 sRaceContextPlaybackToken;
+bool sRaceContextValid;
 ClockPhase sClockPhase;
 u16 sClockObservations;
 u8 sLiveArea;
@@ -308,6 +313,33 @@ bool pinSurvivesRoute(u8 area, u8 episode, s32 parent, u8 parentArea) {
     return sPlaybackPinned &&
            (neutralHub(area) ||
             playbackOwnsCourse(area, episode, parent, parentArea));
+}
+
+void clearRaceContext() {
+    sRaceContextValid = false;
+    sRaceContext.source = RACE_SOURCE_NONE;
+}
+
+void captureRaceContext() {
+    if (!sPlaybackPinned || !sPlayback.valid || !sPlayback.completed ||
+        sPlaybackRaceSource == RACE_SOURCE_NONE ||
+        sPlaybackRaceToken != sPlaybackToken ||
+        !playbackOwnsCourse(sLiveArea, sLiveEpisode, sLiveParentEpisode,
+                            sLiveRouteParentArea)) {
+        return;
+    }
+    sRaceContext.attemptSerial = sAttemptSerial;
+    sRaceContext.targetQf = sPlayback.resultQf;
+    sRaceContext.startingPbQf = -1;
+    sRaceContext.routeVariant = sPlayback.parentEpisode;
+    sRaceContext.ilEntry = -1;
+    sRaceContext.area = sPlayback.area;
+    sRaceContext.episode = sPlayback.episode;
+    sRaceContext.routeParentArea = sPlayback.routeParentArea;
+    sRaceContext.routeFlags = sPlayback.routeFlags;
+    sRaceContext.source = sPlaybackRaceSource;
+    sRaceContextPlaybackToken = sPlaybackToken;
+    sRaceContextValid = true;
 }
 
 void settlePlaybackPin() {
@@ -584,6 +616,7 @@ void stopAll() {
     sBoundaryPending = false;
     sLiveRouteValid = false;
     sClockPhase = CLOCK_UNAVAILABLE;
+    clearRaceContext();
     resetObserverRuntime();
 }
 
@@ -1133,6 +1166,7 @@ void prepareClock(s32 qf) {
 void beginAttempt(s32 qf, bool boundaryReset = false) {
     if (!gpMarDirector) return;
 
+    clearRaceContext();
     captureLiveRoute();
     const u8 area = sLiveArea;
     const u8 episode = sLiveEpisode;
@@ -1184,6 +1218,7 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
         bumpPlaybackToken();
         sPlaybackOriginRecordToken = sRecordToken;
     }
+    captureRaceContext();
     rewindPlayback();
 
     if (!keepChallenger) {
@@ -2332,6 +2367,9 @@ void init() {
     sLiveRouteValid = false;
     sPlaybackPinned = false;
     sPinRouteCheckPending = false;
+    sPlaybackRaceSource = RACE_SOURCE_NONE;
+    sPlaybackRaceToken = 0;
+    clearRaceContext();
     sClockPhase = CLOCK_UNAVAILABLE;
     sClockObservations = 0;
     sClockLastQf = 0;
@@ -2910,7 +2948,7 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     return true;
 }
 
-bool importPlayback(const void *data, u32 size) {
+bool importPlayback(const void *data, u32 size, bool imported) {
     SusamuneGhostFileHeader header;
     if (!validCanonicalFile(data, size, &header)) return false;
     if (sPlayback.valid && sPlayback.pb && !sPlayback.saved &&
@@ -2924,6 +2962,9 @@ bool importPlayback(const void *data, u32 size) {
     installCanonicalTrack(sPlayback, data, header);
     sPlaybackPinned = true;
     sPinRouteCheckPending = false;
+    sPlaybackRaceSource = imported ? RACE_SOURCE_IMPORTED
+                                   : RACE_SOURCE_PERSONAL;
+    sPlaybackRaceToken = sPlaybackToken;
     rewindPlayback();
 
     // A run made before this opponent was selected is not its challenger.
@@ -3088,6 +3129,26 @@ bool playbackInfo(PlaybackInfo *out) {
     out->episode = sPlayback.episode;
     out->completed = sPlayback.completed;
     out->pinned = sPlaybackPinned;
+    return true;
+}
+
+bool raceContext(RaceContext *out) {
+    if (!out || !sRaceContextValid || !sPlaybackPinned ||
+        sRaceContextPlaybackToken != sPlaybackToken ||
+        sRaceContext.source != sPlaybackRaceSource)
+        return false;
+    *out = sRaceContext;
+    return true;
+}
+
+bool bindRaceContext(s16 ilEntry, s32 startingPbQf) {
+    if (!sRaceContextValid || !sPlaybackPinned ||
+        sRaceContextPlaybackToken != sPlaybackToken ||
+        sRaceContext.source != sPlaybackRaceSource ||
+        sRaceContext.attemptSerial != gQFTTimer.attemptSerial())
+        return false;
+    sRaceContext.ilEntry = ilEntry;
+    sRaceContext.startingPbQf = startingPbQf;
     return true;
 }
 
@@ -3338,6 +3399,7 @@ void releaseSavedRecording(u32 recordToken) {
 }
 
 void onSavestateLoaded() {
+    clearRaceContext();
     if (sObserverPhase != OBSERVER_OFF) {
         releaseObserverMario(false);
         endObserver(false, nullptr);

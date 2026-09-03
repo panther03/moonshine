@@ -208,6 +208,28 @@ class StageTargetSourceContractTests(unittest.TestCase):
         self.assertGreater(global_service, menu_update)
         self.assertNotIn("StageTargets::service(menu);", self.menu)
 
+    def test_transient_write_failure_keeps_the_edit_and_retries(self) -> None:
+        publish_start = self.targets.index("bool publish()")
+        publish_end = self.targets.index("}  // namespace", publish_start)
+        publish = self.targets[publish_start:publish_end]
+        self.assertIn("sRetryFrames != 0", publish)
+
+        service_start = self.targets.index("void service(Menu *menu)")
+        service_end = self.targets.index("s32 get(int entry)", service_start)
+        service = self.targets[service_start:service_end]
+        failure_start = service.index("if (mailbox->status != 0)")
+        failure_end = service.index("return;", failure_start)
+        failure = service[failure_start:failure_end]
+        self.assertIn("sDirty = true;", failure)
+        self.assertIn("sRetryFrames = kRetryFrames;", failure)
+        self.assertNotIn("sBackend = false;", failure)
+        self.assertNotIn("sDirty = false;", failure)
+
+        retry = service.index("if (sRetryFrames != 0)", failure_end)
+        republish = service.index("publish();", retry)
+        self.assertIn("--sRetryFrames;", service[retry:republish])
+        self.assertLess(retry, republish)
+
     def test_dolphin_backend_never_publishes(self) -> None:
         start = self.targets.index("bool publish()")
         end = self.targets.index("}  // namespace", start)

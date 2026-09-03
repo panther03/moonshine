@@ -15,6 +15,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/creation_extras.hxx"
 #include "susamune/ghost.hxx"
+#include "susamune/ghost_format.h"
 #include "susamune/menu.hxx"
 #include "susamune/mem2_map.h"
 #include "susamune/packed_text.hxx"
@@ -543,6 +544,7 @@ struct AttemptState {
     bool havePlazaStoryFlags;
     u8 plazaStoryFlags;
     u8 overlayCount;
+    u8 assistReasons;
     OverlayFlag overlayFlags[kOverlayFlagCount];
     LevelWarp::Dest start;
     u8 finish;
@@ -636,6 +638,7 @@ static_assert(sizeof(ILingRuntime) <= SUSAMUNE_ILING_RUNTIME_SIZE,
 #define sHavePlazaStoryFlags sAttemptState.havePlazaStoryFlags
 #define sPlazaStoryFlags sAttemptState.plazaStoryFlags
 #define sOverlayCount sAttemptState.overlayCount
+#define sAssistReasons sAttemptState.assistReasons
 #define sOverlayFlags sAttemptState.overlayFlags
 #define sAttemptStart sAttemptState.start
 #define sFinishKind sAttemptState.finish
@@ -1298,6 +1301,7 @@ void clearAttempt() {
     sAttemptReady = false;
     sTransitionPending = false;
     sRecordsEligible = false;
+    sAssistReasons = 0;
     sChildRetryContinuation = false;
     sNativeIgt = false;
     sSecretOnly = false;
@@ -1308,6 +1312,33 @@ void clearAttempt() {
         StageLoader::onILAttemptEnded();
         SplitStats::onILAttemptEnded();
     }
+}
+
+void captureGhostRace(int entry) {
+    if (!validEntry(entry)) return;
+
+    Ghost::RaceContext race;
+    if (!Ghost::raceContext(&race) ||
+        race.attemptSerial != gQFTTimer.attemptSerial() ||
+        race.targetQf > 0x7fffffffu)
+        return;
+    const LevelWarp::Dest &start = kEntries[entry].start;
+    const u8 parentArea = LevelWarp::parentArea(start.area);
+    const u8 routeFlags = parentArea == 0xff
+        ? 0 : SUSAMUNE_GHOST_ROUTE_INTERNAL_SCENE;
+    if (race.area != start.area || race.episode != start.episode ||
+        race.routeVariant != start.gameInt3 ||
+        race.routeParentArea != parentArea || race.routeFlags != routeFlags)
+        return;
+    Ghost::bindRaceContext(static_cast<s16>(entry),
+                           activePBs()[pbSlot(entry)]);
+}
+
+u8 liveGlobalAssistReasons() {
+    return (gSettings.getBool(SETTING_STAGE_INTRO_SKIP) ||
+            actionsFastForwardActive())
+               ? Assist::OTHER
+               : 0;
 }
 
 void armAttempt(const Entry &entry, int selected) {
@@ -1328,12 +1359,12 @@ void armAttempt(const Entry &entry, int selected) {
     if (identity < 0 || identity >= kEntryCount) identity = entryIndex;
     sSecretOnly = isSecretOnlyPbSlot(pbSlot(identity));
     sAttemptSerial = gQFTTimer.attemptSerial();
-    sRecordsEligible = !gSettings.getBool(SETTING_STAGE_INTRO_SKIP) &&
-                       !actionsFastForwardActive();
+    sAssistReasons = liveGlobalAssistReasons();
+    sRecordsEligible = sAssistReasons == 0;
     sNativeIgt = false;
     Records::onILAttemptStarted(entryIndex);
     if (!sRecordsEligible) {
-        Records::invalidateAttempt();
+        Records::invalidateAttempt(sAssistReasons);
         StageLoader::invalidatePlaylistBest();
     }
 }
@@ -1367,7 +1398,7 @@ bool attemptPBRecordingEnabled() {
 
 bool secretAttemptUsedFludd() {
     // isEmitting() reports nozzle pressure, not an accepted water emit.
-    return sRunning && sRecordsEligible && sSecretOnly &&
+    return sRunning && sSecretOnly &&
            stageObjectsLive() && gpMarioOriginal && gpMarioOriginal->mFludd &&
            gpMarioOriginal->mFludd->mIsEmitWater;
 }
@@ -1386,7 +1417,7 @@ bool recordPB(int entry, s32 qf) {
     const s32 previous = pbs[slot];
     pbs[slot] = qf;
     Ghost::markCurrentRecordingPB(qf);
-    Records::onPBAccepted(entry, sActivePbProfile);
+    Records::onPBAccepted(entry, sActivePbProfile, previous, qf);
     reconcileRecordsPBs();
     markPBsDirty();
     if (gSettings.getBool(SETTING_ILING_POPUP)) {
@@ -1435,8 +1466,24 @@ void recordResult(int entry, s32 qf) {
                                   gpMarDirector->mGCConsole
                               ? gpMarDirector->mGCConsole->getFinishedTime()
                               : -1;
-    Records::onILResult(entry, (u8)pbSlot(entry), qf, igtCentis,
-                        sRecordsEligible);
+    const int resultSlot = pbSlot(entry);
+    Ghost::RaceContext race;
+    Records::GhostRaceSource raceSource = Records::GHOST_RACE_NONE;
+    s32 ghostQf = -1;
+    s32 startingPbQf = -1;
+    if (Ghost::raceContext(&race) && race.ilEntry == entry &&
+        race.attemptSerial == sAttemptSerial) {
+        if (race.source == Ghost::RACE_SOURCE_PERSONAL)
+            raceSource = Records::GHOST_RACE_PERSONAL;
+        else if (race.source == Ghost::RACE_SOURCE_IMPORTED)
+            raceSource = Records::GHOST_RACE_IMPORTED;
+        if (raceSource != Records::GHOST_RACE_NONE) {
+            ghostQf = static_cast<s32>(race.targetQf);
+            startingPbQf = race.startingPbQf;
+        }
+    }
+    Records::onILResult(entry, (u8)resultSlot, qf, igtCentis,
+                        sRecordsEligible, raceSource, ghostQf, startingPbQf);
     StageLoader::onILResult(entry, qf, sRecordsEligible);
     recordPB(entry, qf);
     SplitStats::onILResult(entry, qf);
@@ -1999,20 +2046,10 @@ void onStageSetup() {
 void update() {
     servicePBSave();
 
-    if (sRunning && sRecordsEligible &&
-        (gSettings.getBool(SETTING_STAGE_INTRO_SKIP) ||
-         actionsFastForwardActive())) {
-        sRecordsEligible = false;
-        Records::invalidateAttempt();
-        StageLoader::invalidatePlaylistBest();
-        SplitStats::invalidateAttempt();
-    }
-    if (secretAttemptUsedFludd()) {
-        sRecordsEligible = false;
-        Records::invalidateAttempt();
-        StageLoader::invalidatePlaylistBest();
-        SplitStats::invalidateAttempt();
-    }
+    const u8 globalAssistReasons = liveGlobalAssistReasons();
+    if (sRunning && globalAssistReasons)
+        invalidateForAssist(globalAssistReasons);
+    if (secretAttemptUsedFludd()) invalidateForAssist(Assist::OTHER);
     if (sRunning && stageObjectsLive() && gpMarDirector->mGCConsole &&
         gpMarDirector->mGCConsole->mIsTimerMoving) {
         sNativeIgt = true;
@@ -2128,13 +2165,13 @@ void update() {
             // retail already respawned it at the correct internal checkpoint.
             sAttemptSerial = serial;
             sChildRetryContinuation = sessionChildReset;
-            sRecordsEligible = !sessionChildReset &&
-                !gSettings.getBool(SETTING_STAGE_INTRO_SKIP) &&
-                !actionsFastForwardActive();
+            sAssistReasons = liveGlobalAssistReasons();
+            sRecordsEligible = !sessionChildReset && sAssistReasons == 0;
             sNativeIgt = false;
             const int entry = validEntry(sSelectedEntry)
                                   ? sSelectedEntry
                                   : entryForStartScene(scene);
+            captureGhostRace(entry);
             Records::onILAttemptStarted(entry);
             if (entry >= 0) {
                 StageLoader::onILAttemptStarted(entry);
@@ -2146,7 +2183,8 @@ void update() {
                     SplitStats::onILAttemptStarted(entry, sRecordsEligible);
             }
             if (!sRecordsEligible) {
-                Records::invalidateAttempt();
+                Records::invalidateAttempt(sAssistReasons ? sAssistReasons
+                                                          : Assist::OTHER);
                 StageLoader::invalidatePlaylistBest();
                 SplitStats::invalidateAttempt();
             }
@@ -2161,6 +2199,7 @@ void update() {
                 armAttempt(kEntries[entry], entry);
                 sAttemptSerial = serial;
                 sAttemptReady = true;
+                captureGhostRace(entry);
                 StageLoader::onILAttemptStarted(entry);
                 SplitStats::onILAttemptStarted(entry, sRecordsEligible);
             }
@@ -2184,6 +2223,7 @@ void update() {
                               ? sSelectedEntry
                               : entryForStartScene(gpApplication.mCurrentScene);
         if (entry >= 0) {
+            captureGhostRace(entry);
             StageLoader::onILAttemptStarted(entry);
             SplitStats::onILAttemptStarted(entry, sRecordsEligible);
         }
@@ -2263,10 +2303,14 @@ void onSavestateLoaded() {
     clearAttempt();
 }
 
-void invalidateForAssist() {
-    if (!sRunning || !sRecordsEligible) return;
+void invalidateForAssist(u8 reasons) {
+    if (!sRunning) return;
+    const u8 added = reasons & ~sAssistReasons;
+    if (!added) return;
+    sAssistReasons |= reasons;
+    Records::invalidateAttempt(added);
+    if (!sRecordsEligible) return;
     sRecordsEligible = false;
-    Records::invalidateAttempt();
     StageLoader::invalidatePlaylistBest();
     SplitStats::invalidateAttempt();
 }

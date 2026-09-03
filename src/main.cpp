@@ -173,7 +173,7 @@ extern "C" u8 onUpdateGameMode(TMarDirector* director) {
     // swallow the transition into the pause state on the frame it fires.
     if (director->mCurState != state &&
         state == TMarDirector::STATE_PAUSE_MENU &&
-        (gBinds.wasPressed(BIND_MENU_TOGGLE) ||
+        (gBinds.wasPressedRaw(BIND_MENU_TOGGLE) ||
          gSettings.getBool(SETTING_DISABLE_RETAIL_PAUSE) ||
          Ghost::observerActive())) {
         state = director->mCurState;
@@ -327,7 +327,7 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     const bool sessionResultBeforeDirect = StageLoader::resultOwnsInput();
     const bool menuOpenBeforeDirect = gMenu && gMenu->shown();
     const bool menuOwnsRetailPad = menuOpenBeforeDirect ||
-        (gMenu && gBinds.wasPressed(BIND_MENU_TOGGLE));
+        (gMenu && gBinds.wasPressedRaw(BIND_MENU_TOGGLE));
     const bool wheelOpenBeforeDirect = WarpWheel::shown();
     const bool wheelOwnsInputBeforeDirect =
         wheelOpenBeforeDirect || WarpWheel::promptPending();

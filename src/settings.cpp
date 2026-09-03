@@ -146,6 +146,30 @@ int rngFavoriteBit(SettingId id) {
     return -1;
 }
 
+struct IlPbSetting {
+    u8 id;
+    u8 safeValue;
+    u8 invalidatesAttempt;
+};
+
+const IlPbSetting kIlPbSettings[] = {
+    {SETTING_ILING_RECORDING, 1, 0},
+    {SETTING_STAGE_INTRO_SKIP, 0, 1},
+    {SETTING_KING_BOO_ALWAYS_FRUIT, 0, 1},
+    {SETTING_PETEY_NO_TORNADO, 0, 1},
+    {SETTING_PETEY_ROUTE, 0, 1},
+    {SETTING_PINNA_HIDDEN_ITEMS, 0, 1},
+    {SETTING_ENEMY_HURTBOXES, 0, 1},
+    {SETTING_RICCO_RACE_CHECKPOINTS, 0, 1},
+};
+
+int ilPbSettingIndex(SettingId id) {
+    for (u32 i = 0; i < sizeof(kIlPbSettings) / sizeof(kIlPbSettings[0]); i++) {
+        if (kIlPbSettings[i].id == id) return (int)i;
+    }
+    return -1;
+}
+
 static_assert(SETTING_RICCO_FRUIT_MACHINE -
                       SETTING_KING_BOO_ALWAYS_FRUIT ==
                   4 &&
@@ -170,6 +194,8 @@ const SettingDesc kSettingDescs[] = {
 // Generous: the kernel only services the doorbell between disc reads, and a
 // FatFS write of a few hundred bytes can wait behind one.
 const u32 kSaveTimeoutFrames = 300;  // ~5s at 60Hz
+const u16 kSaveRetryFrames = 600;    // ~10s between confirmed failures
+const u32 kFatFsInternalError = 2;
 
 }  // namespace
 
@@ -221,6 +247,15 @@ void Settings::init() {
         // No launcher, a stock Nintendont, or a build mismatch. Defaults stand
         // and save() will still work if a compatible kernel is listening --
         // but not against a block we could not identify, so leave it alone.
+        mSaveState = SETTINGS_SAVE_UNSUPPORTED;
+        return;
+    }
+
+    if (cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_READ_ERROR) {
+        // A transient read failure must never turn this boot's defaults into
+        // a replacement for a valid ini. Other persistence mailboxes remain
+        // independent and can still be used.
+        mLastError = kFatFsInternalError;
         mSaveState = SETTINGS_SAVE_UNSUPPORTED;
         return;
     }
@@ -278,6 +313,16 @@ void Settings::save() {
 }
 
 SettingsSaveState Settings::pollSave() {
+    if (mSaveState == SETTINGS_SAVE_ERROR && mDirty &&
+        mLastError != kFatFsInternalError) {
+        if (mSaveWaitFrames > 0) {
+            mSaveWaitFrames--;
+        }
+        if (mSaveWaitFrames == 0) {
+            save();
+        }
+        return (SettingsSaveState)mSaveState;
+    }
     if (mSaveState != SETTINGS_SAVE_PENDING) {
         return (SettingsSaveState)mSaveState;
     }
@@ -290,9 +335,34 @@ SettingsSaveState Settings::pollSave() {
 
     if (cfg->ackSeq == mSaveSeq) {
         mLastError = cfg->status;
-        mSaveState = mLastError ? SETTINGS_SAVE_ERROR : SETTINGS_SAVE_OK;
-    } else if (++mSaveWaitFrames > kSaveTimeoutFrames) {
-        mSaveState = SETTINGS_SAVE_TIMEOUT;
+        if (mLastError) {
+            // An internal error can mean rename aliases were quarantined.
+            // Do not hammer that structural failure in the background.
+            if (mLastError != kFatFsInternalError) {
+                // stageInto() cleared every component's dirty flag. Keep one
+                // aggregate retry marker until a later transaction succeeds.
+                mDirty = true;
+                mSaveWaitFrames = kSaveRetryFrames;
+            }
+            mSaveState = SETTINGS_SAVE_ERROR;
+        } else {
+            mSaveState = SETTINGS_SAVE_OK;
+            // The menu may have been reopened while this request was in
+            // flight. Commit those newer edits now that the payload is no
+            // longer owned by the old transaction.
+            if (mDirty || gBinds.dirty() || gInputDisplay.dirty() ||
+                gMetadataDisplay.dirty() || gQftDisplay.dirty() ||
+                gCreationExtras.dirty()) {
+                save();
+            }
+        }
+    } else if (mSaveWaitFrames <= kSaveTimeoutFrames) {
+        ++mSaveWaitFrames;
+        if (mSaveWaitFrames > kSaveTimeoutFrames) {
+            // The backend still owns this request and may acknowledge it
+            // later. Report once without restaging over its live payload.
+            return SETTINGS_SAVE_TIMEOUT;
+        }
     }
     return (SettingsSaveState)mSaveState;
 }
@@ -457,6 +527,43 @@ const char *Settings::name(SettingId id) {
 
 SettingCategory Settings::category(SettingId id) {
     return settingCategory(kSettingDescs[id]);
+}
+
+int Settings::ilPbSettingCount() {
+    return sizeof(kIlPbSettings) / sizeof(kIlPbSettings[0]);
+}
+
+SettingId Settings::ilPbSettingAt(int index) {
+    return index >= 0 && index < ilPbSettingCount()
+               ? (SettingId)kIlPbSettings[index].id
+               : SETTING_COUNT;
+}
+
+u8 Settings::ilPbSafeValue(SettingId id) {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 ? kIlPbSettings[index].safeValue : 0;
+}
+
+bool Settings::affectsIlPb(SettingId id) {
+    return ilPbSettingIndex(id) >= 0;
+}
+
+bool Settings::invalidatesIlAttempt(SettingId id) {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 && kIlPbSettings[index].invalidatesAttempt;
+}
+
+bool Settings::blocksIlPb(SettingId id) const {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 && mValues[id] != kIlPbSettings[index].safeValue;
+}
+
+int Settings::ilPbBlockerCount() const {
+    int count = 0;
+    for (int i = 0; i < ilPbSettingCount(); i++) {
+        if (blocksIlPb((SettingId)kIlPbSettings[i].id)) count++;
+    }
+    return count;
 }
 
 // kSettingDescs is indexed by SettingId and must stay row-for-row aligned with

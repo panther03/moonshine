@@ -2,6 +2,7 @@
 #include "ff_utf8.h"
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "ff_utf8_core.h"
 
@@ -132,6 +133,18 @@ FRESULT f_unlink_char(const char* path)
 	if (!char_to_wchar(path))
 		return FR_INVALID_NAME;
 	return f_unlink(scratch.path);
+}
+
+FRESULT f_rename_char(const char* path_old, const char* path_new)
+{
+	WCHAR old_path[sizeof(scratch.path) / sizeof(scratch.path[0])];
+
+	if (!char_to_wchar(path_old))
+		return FR_INVALID_NAME;
+	memcpy(old_path, scratch.path, sizeof(old_path));
+	if (!char_to_wchar(path_new))
+		return FR_INVALID_NAME;
+	return f_rename(old_path, scratch.path);
 }
 #endif /* !_FS_READONLY */
 

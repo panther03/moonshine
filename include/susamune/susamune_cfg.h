@@ -454,6 +454,10 @@ struct SusamuneMetadataStyleCfg {
 #define SUSAMUNE_CFG_FLAG_STAGE_TARGETS 0x2000u
 // Kernel/backend understands Rollout and Dust Creation styles.
 #define SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE 0x4000u
+// The ini existed (or storage recovery was attempted), but it could not be
+// read completely and safely. The mod must keep this boot's defaults
+// read-only rather than regenerating a possibly valid file from them.
+#define SUSAMUNE_CFG_FLAG_SETTINGS_READ_ERROR 0x8000u
 
 // IL PBs use stable result slots. The original single-profile payload stays
 // fixed at 128 values; the active profile format grows append-only beyond it.

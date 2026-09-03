@@ -27,6 +27,7 @@ FRESULT f_stat_char(const char* path, FILINFO* fno);
 #if !_FS_READONLY
 FRESULT f_mkdir_char(const char* path);
 FRESULT f_unlink_char(const char* path);
+FRESULT f_rename_char(const char* path_old, const char* path_new);
 #endif /* !_FS_READONLY */
 
 #if _FS_RPATH >= 1

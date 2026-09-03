@@ -58,6 +58,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/binds.hxx"
 #include "susamune/creation_extras.hxx"
+#include "susamune/features.hxx"
 #include "susamune/ghost.hxx"
 #include "susamune/ghost_storage.hxx"
 #include "susamune/mem2_map.h"
@@ -138,29 +139,42 @@ struct StaticRange {
 const StaticRange kStaticRanges[] = {
     { SUSAMUNE_ADDR_APPLICATION, SUSAMUNE_ADDR_APPLICATION + sizeof(TApplication), kNoGate },
 #if defined(SUSAMUNE_VERSION_JP)
-    // JP only: the game half of .bss [GAME_BSS_START, GAME_BSS_END) with the SMS
-    // audio modules carved OUT. Those modules (System.a/MSoundMainSide and the
-    // whole MSound.a cluster) sit inside the game-bss window yet hold live
-    // JAudio handles/track pointers. We stopAllSound() on both save and load,
-    // which resets JAudio, so restoring an OLD copy of those handles points them
-    // at track state that has since been freed/reused -> dangling deref, an
-    // intermittent crash when loading during e.g. a Pianta-talk shine-get
-    // (talkModeIn + shine BGM leave those handles live). Leaving the audio BSS
-    // untouched keeps it consistent with the post-stopAllSound JAudio state,
-    // matching the "we deliberately don't snapshot audio" design. Boundaries
-    // from maps/jp.map:
-    //   MSoundMainSide.cpp .bss = [0x803f2c38, 0x803f2cf0)
-    //   MSound.a cluster   .bss = [0x803f44d0, 0x803f57a0)  (MAnmSound..MSModBgm)
-    // US/PAL keep the window contiguous below until their audio modules are
-    // mapped in maps/us.map / maps/pal.map.
+    // The audio and THP blocks hold live thread/JAudio state, so every region
+    // snapshots only the game-owned runs around them. Boundaries come directly
+    // from each retail link map.
     { SUSAMUNE_ADDR_GAME_BSS_START, 0x803f2c38u, kNoGate }, // .. before MSoundMainSide
     { 0x803f2cf0u,                  0x803f44d0u, kNoGate }, // after MSoundMainSide .. before MSound.a
     { 0x803f57a0u,                  SUSAMUNE_ADDR_GAME_BSS_END, kNoGate }, // after MSound.a ..
-#else
-    { SUSAMUNE_ADDR_GAME_BSS_START, SUSAMUNE_ADDR_GAME_BSS_END, kNoGate },
+#elif defined(SUSAMUNE_VERSION_US)
+    { SUSAMUNE_ADDR_GAME_BSS_START, 0x803e9b10u, kNoGate }, // Animal .. before MSound.a
+    { 0x803efcb0u, 0x803fd490u, kNoGate }, // after THP .. before MSoundMainSide
+#elif defined(SUSAMUNE_VERSION_PAL)
+    { SUSAMUNE_ADDR_GAME_BSS_START, 0x803e14d0u, kNoGate }, // Animal .. before MSound.a
+    { 0x803e7670u, 0x803f4c30u, kNoGate }, // after THP .. before MSoundMainSide
 #endif
+#if defined(SUSAMUNE_VERSION_JP)
+    { SUSAMUNE_ADDR_GAME_SDATA_START, 0x80408fc0u, kNoGate }, // before MSound.a
+    { 0x80408fe8u, SUSAMUNE_ADDR_GAME_SDATA_END, kNoGate },  // after MSound.a
+
+    { SUSAMUNE_ADDR_GAME_SBSS_START, 0x8040a268u, kNoGate }, // before JAL audio lists
+    { 0x8040a290u, 0x8040a318u, kNoGate }, // after lists .. before MSoundMainSide
+    { 0x8040a348u, 0x8040a4b0u, kNoGate }, // after MSoundMainSide .. before MSound.a
+    { 0x8040a4d0u, SUSAMUNE_ADDR_GAME_SBSS_END, kNoGate }, // after MSound.a
+#elif defined(SUSAMUNE_VERSION_US)
     { SUSAMUNE_ADDR_GAME_SDATA_START, SUSAMUNE_ADDR_GAME_SDATA_END, kNoGate },
-    { SUSAMUNE_ADDR_GAME_SBSS_START, SUSAMUNE_ADDR_GAME_SBSS_END, kNoGate },
+
+    { SUSAMUNE_ADDR_GAME_SBSS_START, 0x8040cf08u, kNoGate }, // fishoid
+    { 0x8040cfd0u, 0x8040d058u, kNoGate }, // Animal after JAL audio lists
+    { 0x8040d0a8u, 0x8040e1e8u, kNoGate }, // after THP .. before MSoundMainSide
+    { 0x8040e220u, SUSAMUNE_ADDR_GAME_SBSS_END, kNoGate }, // TargetArrow
+#elif defined(SUSAMUNE_VERSION_PAL)
+    { SUSAMUNE_ADDR_GAME_SDATA_START, SUSAMUNE_ADDR_GAME_SDATA_END, kNoGate },
+
+    { SUSAMUNE_ADDR_GAME_SBSS_START, 0x80404668u, kNoGate }, // fishoid
+    { 0x80404730u, 0x804047b8u, kNoGate }, // Animal after JAL audio lists
+    { 0x80404808u, 0x804058c0u, kNoGate }, // after THP .. before MSoundMainSide
+    { 0x804058f8u, SUSAMUNE_ADDR_GAME_SBSS_END, kNoGate }, // TargetArrow
+#endif
     // MSL rand.c `next` -- the seed for libc rand()/srand(), which every
     // gameplay RNG funnels through (MarioUtil MsRandF/MsRandI, so King Boo's
     // fruit pulls, Gooper Blooper / manta patterns, enemy timers). It sits
@@ -214,8 +228,8 @@ const int kNumPointedAllocs = sizeof(kPointedAllocs) / sizeof(kPointedAllocs[0])
 // One header lives at the very start of the snapshot buffer; the saved
 // bytes follow at kHeaderSize.
 const u32 kSnapshotMagic   = 0x53555341u; // 'SUSA'
-const u32 kSnapshotVersion = 11u;         // 512 KiB mod region: the stage heap moved
-const u32 kHeaderSize      = 0x100u;
+const u32 kSnapshotVersion = 13u;         // feature-patch state follows settings
+const u32 kHeaderSize      = 0x120u;
 // One slot per static range, one per pointed alloc, plus one for the heap.
 const int kMaxRegions      = kNumStaticRanges + kNumPointedAllocs + 1;
 
@@ -233,7 +247,8 @@ struct SavestateHeader {
     u32 heap_size;        // bytes between heap and heap->mEnd
     u8  area_id;
     u8  episode_id;
-    u16 _pad0;
+    u8  feature_state;
+    u8  _pad0;
     u32 region_count;
     // OSGetTime() at save. TMarDirector::mStopwatch (the Piantissimo-chase /
     // blooper-race mission countdown) stores an absolute console-uptime
@@ -260,6 +275,66 @@ __attribute__((noinline)) u32 captureRegion(SavestateHeader *h, u32 offset,
     region.size         = size;
     region.buf_offset   = offset;
     return offset + size;
+}
+
+bool consumeExpectedRegion(const SavestateHeader *h, u32 *index, u32 *offset,
+                           u32 addr, u32 size) {
+    if (*index >= h->region_count || size == 0) return false;
+    const RegionEntry &region = h->regions[*index];
+    const u32 capacity = kSnapshotReservedSize - kHeaderSize;
+    if (region.addr != addr || region.size != size ||
+        region.buf_offset != *offset || *offset > capacity ||
+        size > capacity - *offset || addr > 0xffffffffu - size) {
+        return false;
+    }
+    *offset += size;
+    ++*index;
+    return true;
+}
+
+bool validSnapshotRegions(const SavestateHeader *h, u32 heapStart,
+                          u32 heapEnd) {
+    if (h->region_count == 0 || h->region_count > (u32)kMaxRegions ||
+        heapStart < 0x80000000u || heapEnd > 0x81800000u ||
+        heapEnd <= heapStart) {
+        return false;
+    }
+
+    u32 index = 0;
+    u32 offset = 0;
+    for (int i = 0; i < kNumStaticRanges; i++) {
+        const StaticRange &range = kStaticRanges[i];
+        const u32 size = range.end - range.start;
+        // A gated range may legitimately be absent if its setting was off at
+        // save time. Every present entry still has to match the compiled map.
+        if (range.gate != kNoGate &&
+            (index >= h->region_count ||
+             h->regions[index].addr != range.start)) {
+            continue;
+        }
+        if (!consumeExpectedRegion(h, &index, &offset, range.start, size))
+            return false;
+    }
+
+    for (int i = 0; i < kNumPointedAllocs; i++) {
+        const PointedAlloc &alloc = kPointedAllocs[i];
+        const u32 target = *reinterpret_cast<const u32 *>(alloc.ptr_addr);
+        if (target == 0) continue;
+        const bool inHeap = target >= heapStart && target < heapEnd &&
+                            alloc.size <= heapEnd - target;
+        if (inHeap) continue;
+        // All tracked root-heap allocations must remain inside physical MEM1.
+        if (target < 0x80000000u || target >= 0x81800000u ||
+            alloc.size > 0x81800000u - target) {
+            return false;
+        }
+        if (!consumeExpectedRegion(h, &index, &offset, target, alloc.size))
+            return false;
+    }
+
+    const u32 heapSize = heapEnd - heapStart;
+    return consumeExpectedRegion(h, &index, &offset, heapStart, heapSize) &&
+           index == h->region_count;
 }
 
 // ---------------------------------------------------------------------
@@ -339,6 +414,7 @@ SavestateManager::SavestateManager() {
     mFeedback[0] = '\0';
     mFeedbackFrames = 0;
     mLoadPending = false;
+    mLoadWaitFrames = 0;
 
 #if ENABLE_SAVESTATE_DBG
     setStatus("ready");
@@ -385,8 +461,14 @@ bool SavestateManager::saveState() {
     }
 
     const u32 heapStart = reinterpret_cast<u32>(heap);
-    const u32 heapEnd   = reinterpret_cast<u32>(heap->mEnd);
-    if (heapEnd <= heapStart) {
+    if (heapStart < 0x80000000u ||
+        heapStart > 0x81800000u - sizeof(JKRHeap)) {
+        feedback("E:badheap", "Savestate unavailable");
+        return false;
+    }
+    const u32 heapEnd = reinterpret_cast<u32>(heap->mEnd);
+    if (heapEnd > 0x81800000u ||
+        heapEnd <= heapStart) {
         feedback("E:badheap", "Savestate unavailable");
         return false;
     }
@@ -404,6 +486,23 @@ bool SavestateManager::saveState() {
     if (total + kHeaderSize > kSnapshotReservedSize) {
         feedback("E:size", "Savestate is too large");
         return false;
+    }
+
+    // These globals are trusted in a healthy stage, but validate every target
+    // before the first copy so a damaged live pointer cannot turn Save into an
+    // arbitrary MEM1 read or wrap the in-heap containment check.
+    for (int i = 0; i < kNumPointedAllocs; i++) {
+        const PointedAlloc &alloc = kPointedAllocs[i];
+        const u32 target = *reinterpret_cast<const u32 *>(alloc.ptr_addr);
+        if (target == 0) continue;
+        const bool inHeap = target >= heapStart && target < heapEnd &&
+                            alloc.size <= heapEnd - target;
+        if (!inHeap &&
+            (target < 0x80000000u || target >= 0x81800000u ||
+             alloc.size > 0x81800000u - target)) {
+            feedback("E:rootptr", "Stage layout changed - save again");
+            return false;
+        }
     }
 
     // Audio engine has DSP-side state we can't snapshot; quiet it before
@@ -439,6 +538,7 @@ bool SavestateManager::saveState() {
     h->heap_size    = heapSize;
     h->area_id      = gpApplication.mCurrentScene.mAreaID;
     h->episode_id   = gpApplication.mCurrentScene.mEpisodeID;
+    h->feature_state = featuresSavestateState();
     h->_pad0        = 0;
     h->region_count = 0;
     h->save_time    = OSGetTime();
@@ -469,7 +569,8 @@ bool SavestateManager::saveState() {
         }
         // If the target happens to live inside the JKRSolidHeap range,
         // skip it -- it'll already be covered by the heap snapshot.
-        if (target >= heapStart && target + pa.size <= heapEnd) {
+        if (target >= heapStart && target < heapEnd &&
+            pa.size <= heapEnd - target) {
             continue;
         }
         offset = captureRegion(h, offset, target, pa.size);
@@ -525,15 +626,26 @@ bool SavestateManager::loadState() {
         return false;
     }
 
+    const u32 heapStart = reinterpret_cast<u32>(heap);
+    if (heapStart < 0x80000000u ||
+        heapStart > 0x81800000u - sizeof(JKRHeap)) {
+        feedback("E:badheap", "Savestate unavailable");
+        return false;
+    }
+
     // Pointers in the snapshotted heap are absolute. If the heap moved
     // (different scenario, different boot path), restoring would scribble
     // stale pointers all over the place. Refuse the load.
-    if (reinterpret_cast<u32>(heap) != h->heap_addr) {
+    if (heapStart != h->heap_addr) {
         feedback("E:hpaddr", "Stage layout changed - save again");
         return false;
     }
-    const u32 heapSize = reinterpret_cast<u32>(heap->mEnd)
-                       - reinterpret_cast<u32>(heap);
+    const u32 heapEnd = reinterpret_cast<u32>(heap->mEnd);
+    if (heapEnd > 0x81800000u || heapEnd <= heapStart) {
+        feedback("E:badheap", "Savestate unavailable");
+        return false;
+    }
+    const u32 heapSize = heapEnd - heapStart;
     if (heapSize != h->heap_size) {
         feedback("E:hpsize", "Stage layout changed - save again");
         return false;
@@ -548,23 +660,20 @@ bool SavestateManager::loadState() {
         return false;
     }
 
+    if (!validSnapshotRegions(h, heapStart, heapEnd)) {
+        feedback("E:badsnap", "Savestate is damaged - save again");
+        return false;
+    }
+
     // gpCardManager has its own worker thread, mutex, and cond var on the
     // root heap. Snapshotting/restoring it would trash kernel-side thread
     // bookkeeping, so we don't -- but we also can't safely tear down the
-    // rest of the world while the card thread is mid-transaction (this is
-    // why loading from the blue save screen used to crash). Spin here with
-    // interrupts enabled until the card thread reports idle. CARD_ERROR_BUSY
-    // is -1; any other value (including ready / error codes) means the
-    // worker is parked waiting for its next command.
-    if (gpCardManager) {
-        int spins = 0;
-        while (gpCardManager->getLastStatus() == CARD_ERROR_BUSY) {
-            if (++spins > 600) { // ~10 s @ 60 Hz of yielding
-                feedback("E:cardbsy", "Memory card busy - try again");
-                return false;
-            }
-            OSYieldThread();
-        }
+    // rest of the world while the card thread is mid-transaction. Queued
+    // loads wait frame-by-frame in processPendingLoad(); keep this guard for
+    // direct callers and the tiny race between that check and this one.
+    if (gpCardManager && gpCardManager->getLastStatus() == CARD_ERROR_BUSY) {
+        feedback("E:cardbsy", "Memory card busy - try again");
+        return false;
     }
 
     // Same reasoning as save().
@@ -619,6 +728,7 @@ bool SavestateManager::loadState() {
     unmuteAudioDma(dma);
     OSRestoreInterrupts(ints);
 
+    featuresOnSavestateLoaded(h->feature_state);
     gQFTTimer.onSavestateLoaded();
     SplitEvents::onSavestateLoaded();
     SplitStats::onSavestateLoaded();
@@ -652,8 +762,12 @@ void SavestateManager::updateHook() {
         gBinds.get(BIND_ATTEMPT_ADD) == gBinds.get(BIND_SAVESTATE_LOAD);
 
     const bool approvedLoad = WarpWheel::takeSavestateLoadApproval();
+    // A card-busy load may remain queued for several frames. Do not let a
+    // later save replace the one snapshot that request is waiting to restore.
+    if (mLoadPending) return;
     if (approvedLoad) {
         mLoadPending = true;
+        mLoadWaitFrames = 0;
         SET_STATUS("loading");
     } else if (!counterOwnsSave &&
                gBinds.wasPressed(BIND_SAVESTATE_SAVE)) {
@@ -666,6 +780,7 @@ void SavestateManager::updateHook() {
         // made those systems consume half-live/half-restored state. Defer the
         // operation until after the post-render GXDrawDone barrier instead.
         mLoadPending = true;
+        mLoadWaitFrames = 0;
         SET_STATUS("loading");
     }
 }
@@ -675,8 +790,20 @@ void SavestateManager::processPendingLoad() {
         return;
     }
 
-    // Clear first so a rejected load is not retried every frame.
+    // The card worker can remain busy across many scheduler yields. Wait in
+    // actual rendered frames so an ordinary save finishes without dropping
+    // the user's one-shot load request.
+    if (gpCardManager && gpCardManager->getLastStatus() == CARD_ERROR_BUSY) {
+        if (++mLoadWaitFrames < 600) return;
+        mLoadPending = false;
+        mLoadWaitFrames = 0;
+        feedback("E:cardbsy", "Memory card busy - try again");
+        return;
+    }
+
+    // Clear first so a rejected snapshot is not retried every frame.
     mLoadPending = false;
+    mLoadWaitFrames = 0;
     loadState();
 }
 

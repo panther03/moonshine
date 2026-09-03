@@ -25,6 +25,12 @@ void featuresApplyEarly();
 // Reset per-stage feature state. Call on every stage load (from onSetup).
 void featuresOnStageLoad();
 
+// The snapshot rewinds two mutable patch sites (the fruit timeout datum and
+// Fast Text's message buffer), but feature bookkeeping and settings stay live.
+// Preserve the sites' save-time state and reconcile them after a restore.
+u8 featuresSavestateState();
+void featuresOnSavestateLoaded(u8 savedState);
+
 // --- shared patch primitives (also used by actions.cpp) ---
 
 // Write one instruction word into the running game and make it visible to the

@@ -28,6 +28,7 @@ output unchanged.
 #define SUSA_INI_BUF_SIZE 32768
 
 #define SUSA_SECTION_NAME_MAX 24
+#define SUSA_INI_TRANSACTION_PATH_MAX 64
 
 SusamuneIni gIni;
 
@@ -35,6 +36,9 @@ SusamuneIni gIni;
 // caller can author one -- the defaults live here, and the user should be able
 // to find and hand-edit the keys without having visited every menu first.
 static bool SawSection = false;
+// False when an existing ini could not be read completely. In that state a
+// save would regenerate [nintendont] from defaults and destroy valid choices.
+static bool LoadSafe = false;
 
 // Defaults for a first run: JP selected, nothing configured, read speed and
 // progressive enabled, everything else off/auto.
@@ -50,6 +54,166 @@ static const SusamuneIni kIniDefaults =
 	.disableRumble    = 0,
 	.language         = NIN_LAN_AUTO,
 };
+
+static bool BuildIniSiblingPath(char *out, u32 capacity, const char *path,
+	const char *suffix)
+{
+	u32 pathLength = (u32)strlen(path);
+	u32 suffixLength = (u32)strlen(suffix);
+
+	if (pathLength + suffixLength + 1 > capacity)
+		return false;
+	memcpy(out, path, pathLength);
+	memcpy(out + pathLength, suffix, suffixLength + 1);
+	return true;
+}
+
+static int IniPathExists(const char *path, bool *exists)
+{
+	FILINFO info;
+	int ret = f_stat_char(path, &info);
+
+	if (ret == FR_OK)
+	{
+		*exists = true;
+		return FR_OK;
+	}
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		return FR_OK;
+	}
+	return ret;
+}
+
+static int IniPathCluster(const char *path, bool *exists, DWORD *cluster,
+	FSIZE_t *size)
+{
+	FIL f;
+	int ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		*cluster = 0;
+		*size = 0;
+		return FR_OK;
+	}
+	if (ret != FR_OK)
+		return ret;
+	*exists = true;
+	*cluster = f.obj.sclust;
+	*size = f_size(&f);
+	return f_close(&f);
+}
+
+static int CheckIniAliases(const char *path, const char *tempPath,
+	const char *backupPath)
+{
+	bool mainExists;
+	bool tempExists;
+	bool backupExists;
+	DWORD mainCluster;
+	DWORD tempCluster;
+	DWORD backupCluster;
+	FSIZE_t mainSize;
+	FSIZE_t tempSize;
+	FSIZE_t backupSize;
+	int ret;
+
+	ret = IniPathCluster(path, &mainExists, &mainCluster, &mainSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(tempPath, &tempExists, &tempCluster, &tempSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(backupPath, &backupExists, &backupCluster,
+	                     &backupSize);
+	if (ret != FR_OK)
+		return ret;
+	if ((mainExists && mainSize != 0 && mainCluster == 0) ||
+	    (tempExists && tempSize != 0 && tempCluster == 0) ||
+	    (backupExists && backupSize != 0 && backupCluster == 0))
+		return FR_INT_ERR;
+
+	if ((mainExists && tempExists && mainCluster != 0 &&
+	     mainCluster == tempCluster) ||
+	    (mainExists && backupExists && mainCluster != 0 &&
+	     mainCluster == backupCluster) ||
+	    (tempExists && backupExists && tempCluster != 0 &&
+	     tempCluster == backupCluster))
+		return FR_INT_ERR;
+	if (mainExists && mainSize == 0 && backupExists && backupSize != 0)
+		return FR_INT_ERR;
+	return FR_OK;
+}
+
+static int RecoverIniFile(const char *path)
+{
+	char tempPath[SUSA_INI_TRANSACTION_PATH_MAX];
+	char backupPath[SUSA_INI_TRANSACTION_PATH_MAX];
+	bool exists;
+	int ret;
+
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
+		return FR_INVALID_NAME;
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathExists(path, &exists);
+	if (ret != FR_OK || exists)
+		return ret;
+
+	// A backup exists only after the old file was safely moved aside.
+	ret = IniPathExists(backupPath, &exists);
+	if (ret != FR_OK)
+		return ret;
+	if (exists)
+		return f_rename_char(backupPath, path);
+
+	// A temp without a backup may be an interrupted first write. It has no
+	// commit marker, so never promote it over clean compiled-in defaults.
+	ret = IniPathExists(tempPath, &exists);
+	return ret;
+}
+
+static int CommitIniFile(const char *path, const char *tempPath,
+	const char *backupPath, bool hadOriginal)
+{
+	int ret;
+	int restoreRet;
+
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+
+	if (hadOriginal)
+	{
+		ret = f_unlink_char(backupPath);
+		if (ret != FR_OK && ret != FR_NO_FILE && ret != FR_NO_PATH)
+			return ret;
+		ret = f_rename_char(path, backupPath);
+		if (ret != FR_OK)
+			return ret;
+	}
+
+	ret = f_rename_char(tempPath, path);
+	if (ret != FR_OK)
+	{
+		if (hadOriginal)
+		{
+			restoreRet = f_rename_char(backupPath, path);
+			if (restoreRet != FR_OK)
+				return restoreRet;
+		}
+		return ret;
+	}
+
+	if (hadOriginal)
+		(void)f_unlink_char(backupPath);
+	return FR_OK;
+}
 
 static const char *const kVersionTags[SUSA_VER_COUNT]  = { "jp", "us", "pal" };
 static const char *const kVersionNames[SUSA_VER_COUNT] = { "JP", "US", "PAL" };
@@ -338,7 +502,7 @@ static BYTE DeviceForName(const char *device)
 
 bool SusamuneIniNeedsWrite(void)
 {
-	return !SawSection;
+	return LoadSafe && !SawSection;
 }
 
 bool SusamuneIniWritable(const char *device)
@@ -351,6 +515,9 @@ bool SusamuneIniWritable(const char *device)
 	UINT wrote;
 	u32 i;
 	BYTE dev = DeviceForName(device);
+
+	if (!LoadSafe)
+		return false;
 
 	BuildPath(path, sizeof(path), device);
 	ret = f_stat_char(path, &info);
@@ -400,40 +567,83 @@ void SusamuneIniLoad(const char *device)
 	FIL   f;
 	char *buf;
 	UINT  read = 0;
+	FSIZE_t fileSize;
+	int   ret;
+	int   closeRet;
 
 	gIni = kIniDefaults;
 	SawSection = false;
+	LoadSafe = false;
 
 	BuildPath(path, sizeof(path), device);
-	if (f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING) != FR_OK)
+	ret = RecoverIniFile(path);
+	if (ret != FR_OK)
+	{
+		gprintf("Susamune: could not recover %s (%d), using defaults\n",
+			path, ret);
+		return;
+	}
+	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
 	{
 		gprintf("Susamune: no %s, using defaults\n", path);
+		LoadSafe = true;
+		return;
+	}
+	if (ret != FR_OK)
+	{
+		gprintf("Susamune: could not read %s (%d), settings disabled\n",
+			path, ret);
 		return;
 	}
 
-	buf = (char*)malloc(SUSA_INI_BUF_SIZE);
-	if (buf != NULL)
+	fileSize = f_size(&f);
+	if (fileSize >= SUSA_INI_BUF_SIZE)
 	{
-		if (f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read) != FR_OK)
-			read = 0;
-		buf[read] = '\0';
-		ParseIni(buf);
-		free(buf);
+		(void)f_close(&f);
+		gprintf("Susamune: %s is too large, settings disabled\n", path);
+		return;
 	}
-	f_close(&f);
+	buf = (char*)malloc(SUSA_INI_BUF_SIZE);
+	if (buf == NULL)
+	{
+		(void)f_close(&f);
+		gprintf("Susamune: no memory to read %s, settings disabled\n", path);
+		return;
+	}
+	ret = f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read);
+	closeRet = f_close(&f);
+	if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
+	{
+		gprintf("Susamune: incomplete read of %s, settings disabled\n", path);
+		free(buf);
+		return;
+	}
+	buf[read] = '\0';
+	ParseIni(buf);
+	free(buf);
+	LoadSafe = true;
 }
 
 int SusamuneIniSave(const char *device)
 {
 	char  path[32];
+	char  tempPath[SUSA_INI_TRANSACTION_PATH_MAX];
+	char  backupPath[SUSA_INI_TRANSACTION_PATH_MAX];
 	FIL   f;
 	char *buf;
 	char *line;
 	UINT  read = 0;
+	FSIZE_t fileSize = 0;
 	int   ret;
+	int   closeRet;
 	int   err = FR_OK;
 	bool  skipping = false;
 	bool  wroteSection = false;
+	bool  hadOriginal = false;
+
+	if (!LoadSafe)
+		return FR_NOT_READY;
 
 	buf = (char*)malloc(SUSA_INI_BUF_SIZE);
 	if (buf == NULL)
@@ -441,24 +651,55 @@ int SusamuneIniSave(const char *device)
 	buf[0] = '\0';
 
 	BuildPath(path, sizeof(path), device);
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
+	{
+		free(buf);
+		return FR_INVALID_NAME;
+	}
+	ret = RecoverIniFile(path);
+	if (ret != FR_OK)
+	{
+		free(buf);
+		return ret;
+	}
 
 	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
 	if (ret == FR_OK)
 	{
-		// Refuse rather than truncate -- see the buffer note above.
-		if (f_size(&f) >= SUSA_INI_BUF_SIZE)
+		hadOriginal = true;
+		if (f.obj.attr & AM_RDO)
 		{
-			f_close(&f);
+			closeRet = f_close(&f);
 			free(buf);
-			return FR_NOT_ENOUGH_CORE;
+			return closeRet == FR_OK ? FR_DENIED : closeRet;
 		}
-		if (f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read) != FR_OK)
-			read = 0;
+		fileSize = f_size(&f);
+		// Refuse rather than truncate -- see the buffer note above.
+		if (fileSize >= SUSA_INI_BUF_SIZE)
+		{
+			closeRet = f_close(&f);
+			free(buf);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read);
+		closeRet = f_close(&f);
+		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
+		{
+			free(buf);
+			if (ret != FR_OK)
+				return ret;
+			return closeRet != FR_OK ? closeRet : FR_DISK_ERR;
+		}
 		buf[read] = '\0';
-		f_close(&f);
+	}
+	else if (ret != FR_NO_FILE && ret != FR_NO_PATH)
+	{
+		free(buf);
+		return ret;
 	}
 
-	ret = f_open_char(&f, path, FA_WRITE | FA_CREATE_ALWAYS);
+	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);
 	if (ret != FR_OK)
 	{
 		free(buf);
@@ -524,9 +765,13 @@ int SusamuneIniSave(const char *device)
 		EmitNintendontSection(&f, &err);
 	}
 
+	if (err == FR_OK && f_size(&f) >= SUSA_INI_BUF_SIZE)
+		err = FR_NOT_ENOUGH_CORE;
 	ret = f_close(&f);
 	if (err == FR_OK && ret != FR_OK)
 		err = ret;
+	if (err == FR_OK)
+		err = CommitIniFile(path, tempPath, backupPath, hadOriginal);
 	free(buf);
 
 	if (err != FR_OK)
