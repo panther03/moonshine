@@ -15,6 +15,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/actions.hxx"
 #include "susamune/binds.hxx"
+#include "susamune/checksum.hxx"
 #include "susamune/ghost_format.h"
 #include "susamune/ghost_model.hxx"
 #include "susamune/iling.hxx"
@@ -146,6 +147,12 @@ bool sPendingContinueRecording;
 bool sBoundaryPending;
 bool sLiveRouteValid;
 bool sPlaybackPinned;
+bool sPinRouteCheckPending;
+RaceSource sPlaybackRaceSource;
+u32 sPlaybackRaceToken;
+RaceContext sRaceContext;
+u32 sRaceContextPlaybackToken;
+bool sRaceContextValid;
 ClockPhase sClockPhase;
 u16 sClockObservations;
 u8 sLiveArea;
@@ -308,6 +315,43 @@ bool pinSurvivesRoute(u8 area, u8 episode, s32 parent, u8 parentArea) {
             playbackOwnsCourse(area, episode, parent, parentArea));
 }
 
+void clearRaceContext() {
+    sRaceContextValid = false;
+    sRaceContext.source = RACE_SOURCE_NONE;
+}
+
+void captureRaceContext() {
+    if (!sPlaybackPinned || !sPlayback.valid || !sPlayback.completed ||
+        sPlaybackRaceSource == RACE_SOURCE_NONE ||
+        sPlaybackRaceToken != sPlaybackToken ||
+        !playbackOwnsCourse(sLiveArea, sLiveEpisode, sLiveParentEpisode,
+                            sLiveRouteParentArea)) {
+        return;
+    }
+    sRaceContext.attemptSerial = sAttemptSerial;
+    sRaceContext.targetQf = sPlayback.resultQf;
+    sRaceContext.startingPbQf = -1;
+    sRaceContext.routeVariant = sPlayback.parentEpisode;
+    sRaceContext.ilEntry = -1;
+    sRaceContext.area = sPlayback.area;
+    sRaceContext.episode = sPlayback.episode;
+    sRaceContext.routeParentArea = sPlayback.routeParentArea;
+    sRaceContext.routeFlags = sPlayback.routeFlags;
+    sRaceContext.source = sPlaybackRaceSource;
+    sRaceContextPlaybackToken = sPlaybackToken;
+    sRaceContextValid = true;
+}
+
+void settlePlaybackPin() {
+    if (!sPinRouteCheckPending) return;
+    sPinRouteCheckPending = false;
+    if (sPlaybackPinned &&
+        !pinSurvivesRoute(sLiveArea, sLiveEpisode, sLiveParentEpisode,
+                          sLiveRouteParentArea)) {
+        sPlaybackPinned = false;
+    }
+}
+
 bool recordPromotableForRoute(bool routeMatches, bool boundaryReset) {
     return sRecord.valid &&
            (sRecord.completed ||
@@ -328,6 +372,40 @@ void captureLiveRoute() {
         ? 0
         : SUSAMUNE_GHOST_ROUTE_INTERNAL_SCENE;
     sLiveRouteValid = true;
+}
+
+void refreshProvisionalRoute() {
+    const u8 priorArea = sLiveArea;
+    const u8 priorEpisode = sLiveEpisode;
+    const u8 priorParentArea = sLiveRouteParentArea;
+    const u8 priorFlags = sLiveRouteFlags;
+    const s32 priorParentEpisode = sLiveParentEpisode;
+    captureLiveRoute();
+    if (priorArea == sLiveArea && priorEpisode == sLiveEpisode &&
+        priorParentArea == sLiveRouteParentArea &&
+        priorFlags == sLiveRouteFlags &&
+        priorParentEpisode == sLiveParentEpisode) {
+        return;
+    }
+
+    // Scene and parent-episode fields can still settle after setupObjects().
+    // Require a fresh stable window before trusting them for a race or file.
+    sClockObservations = 1;
+    if (!sRecording) return;
+    Segment *segment = lastSegment(sRecord);
+    if (!segment) return;
+    segment->routeArea = sLiveArea;
+    segment->routeEpisode = sLiveEpisode;
+    segment->routeVariant = sLiveParentEpisode;
+    segment->routeParentArea = sLiveRouteParentArea;
+    segment->routeFlags = sLiveRouteFlags;
+    if (sRecord.segmentCount == 1) {
+        sRecord.area = sLiveArea;
+        sRecord.episode = sLiveEpisode;
+        sRecord.parentEpisode = sLiveParentEpisode;
+        sRecord.routeParentArea = sLiveRouteParentArea;
+        sRecord.routeFlags = sLiveRouteFlags;
+    }
 }
 
 bool liveRouteStorable() {
@@ -529,6 +607,7 @@ void stopAll() {
     clearTrack(sPlayback);
     bumpPlaybackToken();
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
     sRecording = false;
     sGhostVisible = false;
     sStageRoutePending = false;
@@ -537,6 +616,7 @@ void stopAll() {
     sBoundaryPending = false;
     sLiveRouteValid = false;
     sClockPhase = CLOCK_UNAVAILABLE;
+    clearRaceContext();
     resetObserverRuntime();
 }
 
@@ -1086,6 +1166,7 @@ void prepareClock(s32 qf) {
 void beginAttempt(s32 qf, bool boundaryReset = false) {
     if (!gpMarDirector) return;
 
+    clearRaceContext();
     captureLiveRoute();
     const u8 area = sLiveArea;
     const u8 episode = sLiveEpisode;
@@ -1096,9 +1177,18 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
     // Plaza is a neutral handoff between races. Outside it, reaching another
     // logical course retires the pinned target so its challenger can take the
     // playback slot and the old target buffer can record the next attempt.
-    if (sPlaybackPinned &&
-        !pinSurvivesRoute(area, episode, parent, sLiveRouteParentArea)) {
-        sPlaybackPinned = false;
+    if (sPlaybackPinned) {
+        if (boundaryReset) {
+            // setupObjects can briefly expose the departed route. Keep the
+            // selected opponent until the new route has settled.
+            sPinRouteCheckPending = true;
+        } else if (!pinSurvivesRoute(area, episode, parent,
+                                     sLiveRouteParentArea)) {
+            sPlaybackPinned = false;
+            sPinRouteCheckPending = false;
+        }
+    } else {
+        sPinRouteCheckPending = false;
     }
     if (!sPlaybackPinned &&
         gSettings.getBool(SETTING_GHOST_LAST_SUCCESS) &&
@@ -1113,7 +1203,9 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
     // segment evict the last course ghost.
     const bool recordPromotable = recordReady &&
         recordPromotableForRoute(routeMatches, boundaryReset);
-    const bool keepChallenger = recordPromotable && sPlaybackPinned;
+    const bool keepChallenger =
+        recordReady && sRecord.completed &&
+        sPlaybackPinned && !sRecord.saved;
 
     if (recordPromotable && !sPlaybackPinned) {
         // Keep the newest completed track even when the next attempt changes
@@ -1126,6 +1218,7 @@ void beginAttempt(s32 qf, bool boundaryReset = false) {
         bumpPlaybackToken();
         sPlaybackOriginRecordToken = sRecordToken;
     }
+    captureRaceContext();
     rewindPlayback();
 
     if (!keepChallenger) {
@@ -1599,26 +1692,6 @@ u8 runningRegion() {
 #endif
 }
 
-u32 crc32(const void *data, u32 size, u32 zeroOffset = 0,
-          u32 zeroSize = 0) {
-    static const u32 table[16] = {
-        0x00000000u, 0x1DB71064u, 0x3B6E20C8u, 0x26D930ACu,
-        0x76DC4190u, 0x6B6B51F4u, 0x4DB26158u, 0x5005713Cu,
-        0xEDB88320u, 0xF00F9344u, 0xD6D6A3E8u, 0xCB61B38Cu,
-        0x9B64C2B0u, 0x86D3D2D4u, 0xA00AE278u, 0xBDBDF21Cu,
-    };
-    const u8 *bytes = static_cast<const u8 *>(data);
-    u32 crc = SUSAMUNE_GHOST_CRC32_INIT;
-    for (u32 i = 0; i < size; i++) {
-        const u8 value = i >= zeroOffset && i - zeroOffset < zeroSize
-            ? 0
-            : bytes[i];
-        crc = (crc >> 4) ^ table[(crc ^ value) & 0x0fu];
-        crc = (crc >> 4) ^ table[(crc ^ (value >> 4)) & 0x0fu];
-    }
-    return crc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT;
-}
-
 bool validText(const char *text, u32 capacity, u8 length, bool required) {
     if (!text || length > capacity || (required && length == 0)) return false;
     for (u32 i = 0; i < capacity; i++) {
@@ -1824,14 +1897,15 @@ SaveSelection latestSaveableTrack() {
                 sPlayback.pbToken, SAVE_SOURCE_PLAYBACK};
     }
     // The current attempt owns Save once its clock/route have settled. A
-    // pinned race target is only the fallback; it must never mask a challenger.
+    // loaded race target must never mask a challenger.
     if (sRecord.valid &&
         (!sRecording ||
          (sClockPhase == CLOCK_ACTIVE && !sBoundaryPending))) {
         return {&sRecord, sRecordToken, sRecordIdentityToken,
                 SAVE_SOURCE_RECORD};
     }
-    if (sPlayback.valid) {
+    // A pinned library target is playback-only while the race is active.
+    if (sPlayback.valid && !sPlaybackPinned) {
         return {&sPlayback, kPlaybackTokenBit | sPlaybackToken,
                 kPlaybackTokenBit | sPlaybackToken, SAVE_SOURCE_PLAYBACK};
     }
@@ -2041,18 +2115,20 @@ bool validCanonicalFile(const void *data, u32 size,
         }
     }
     if (extension.segmentTableChecksum !=
-        crc32(bytes + extension.segmentTableOffset,
-              extension.segmentTableSize)) {
+        Checksum::crc32(bytes + extension.segmentTableOffset,
+                        extension.segmentTableSize)) {
         return false;
     }
 
     if (header.headerChecksum !=
-            crc32(bytes, header.headerSize,
-                  SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8) ||
+            Checksum::crc32(bytes, header.headerSize,
+                            SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8) ||
         header.fileChecksum !=
-            crc32(bytes, size, SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4) ||
+            Checksum::crc32(bytes, size,
+                            SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4) ||
         header.payloadChecksum !=
-            crc32(bytes + header.headerSize, header.payloadSize)) {
+            Checksum::crc32(bytes + header.headerSize,
+                            header.payloadSize)) {
         return false;
     }
 
@@ -2290,6 +2366,10 @@ void init() {
     sBoundaryPending = false;
     sLiveRouteValid = false;
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
+    sPlaybackRaceSource = RACE_SOURCE_NONE;
+    sPlaybackRaceToken = 0;
+    clearRaceContext();
     sClockPhase = CLOCK_UNAVAILABLE;
     sClockObservations = 0;
     sClockLastQf = 0;
@@ -2619,6 +2699,8 @@ void update() {
         return;
     }
 
+    if (sClockPhase == CLOCK_PROVISIONAL) refreshProvisionalRoute();
+
     if (sBoundaryPending) {
         if (qf < sClockLastQf || qf < sBoundaryPriorQf) {
             rollbackBoundarySegment();
@@ -2656,6 +2738,7 @@ void update() {
             // short final segment merely because its director never settled.
             sBoundaryPending = false;
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             finishRecording(qf, true);
             updatePlayback(qf);
         } else if (ordered &&
@@ -2664,6 +2747,7 @@ void update() {
             qf - sClockEpochStartQf >= 8) {
             sBoundaryPending = false;
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             if (sRecording && sRecord.count >= 2) sRecord.valid = true;
             updatePlayback(qf);
         } else {
@@ -2705,6 +2789,7 @@ void update() {
             qf - sClockEpochStartQf >= 8 &&
             enoughSamples) {
             sClockPhase = CLOCK_ACTIVE;
+            settlePlaybackPin();
             if (sRecording) sRecord.valid = true;
         } else {
             // Playback follows the observed QFT while recording keeps its
@@ -2817,7 +2902,7 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     extension.segmentTableSize = SUSAMUNE_GHOST_V4_SEGMENT_TABLE_SIZE;
     extension.sampleDataOffset = SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET;
     extension.sampleDataSize = sampleDataSize;
-    extension.segmentTableChecksum = crc32(
+    extension.segmentTableChecksum = Checksum::crc32(
         bytes + extension.segmentTableOffset,
         extension.segmentTableSize);
     extension.attachmentCount = track->attachmentCount;
@@ -2842,14 +2927,14 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     header.profileNameLength = copyText(
         header.profileName, sizeof(header.profileName), profileName);
     header.checksumKind = SUSAMUNE_GHOST_CHECKSUM_CRC32;
-    header.payloadChecksum = crc32(
+    header.payloadChecksum = Checksum::crc32(
         bytes + SUSAMUNE_GHOST_FILE_HEADER_SIZE, payloadSize);
 
     memcpy(bytes, &header, sizeof(header));
-    header.headerChecksum = crc32(
+    header.headerChecksum = Checksum::crc32(
         bytes, sizeof(header), SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 8);
     memcpy(bytes, &header, sizeof(header));
-    header.fileChecksum = crc32(
+    header.fileChecksum = Checksum::crc32(
         bytes, fileSize, SUSAMUNE_GHOST_FILE_CHECKSUM_OFFSET, 4);
     memcpy(bytes, &header, sizeof(header));
 
@@ -2863,7 +2948,7 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     return true;
 }
 
-bool importPlayback(const void *data, u32 size) {
+bool importPlayback(const void *data, u32 size, bool imported) {
     SusamuneGhostFileHeader header;
     if (!validCanonicalFile(data, size, &header)) return false;
     if (sPlayback.valid && sPlayback.pb && !sPlayback.saved &&
@@ -2876,11 +2961,18 @@ bool importPlayback(const void *data, u32 size) {
     bumpPlaybackToken();
     installCanonicalTrack(sPlayback, data, header);
     sPlaybackPinned = true;
+    sPinRouteCheckPending = false;
+    sPlaybackRaceSource = imported ? RACE_SOURCE_IMPORTED
+                                   : RACE_SOURCE_PERSONAL;
+    sPlaybackRaceToken = sPlaybackToken;
     rewindPlayback();
 
-    // Loading a new race target must not destroy a completed challenger that
-    // is waiting for an SD save. An in-progress attempt is intentionally ended.
-    if (sRecording || !sRecord.valid) clearRecord();
+    // A run made before this opponent was selected is not its challenger.
+    // Only Records' protected PB may outlive the import.
+    const bool recordHasUnsavedPB =
+        sRecord.valid && sRecord.pb && !sRecord.saved &&
+        sRecord.pbToken != 0;
+    if (!recordHasUnsavedPB) clearRecord();
     sRecording = false;
     sGhostVisible = false;
     sStageRoutePending = false;
@@ -2951,6 +3043,7 @@ bool importObserverTrack(const void *data, u32 size, bool secondary) {
         bumpPlaybackToken();
         installCanonicalTrack(sPlayback, data, header);
         sPlaybackPinned = false;
+        sPinRouteCheckPending = false;
         sObserverPrimaryReady = true;
     }
     sRecording = false;
@@ -3036,6 +3129,26 @@ bool playbackInfo(PlaybackInfo *out) {
     out->episode = sPlayback.episode;
     out->completed = sPlayback.completed;
     out->pinned = sPlaybackPinned;
+    return true;
+}
+
+bool raceContext(RaceContext *out) {
+    if (!out || !sRaceContextValid || !sPlaybackPinned ||
+        sRaceContextPlaybackToken != sPlaybackToken ||
+        sRaceContext.source != sPlaybackRaceSource)
+        return false;
+    *out = sRaceContext;
+    return true;
+}
+
+bool bindRaceContext(s16 ilEntry, s32 startingPbQf) {
+    if (!sRaceContextValid || !sPlaybackPinned ||
+        sRaceContextPlaybackToken != sPlaybackToken ||
+        sRaceContext.source != sPlaybackRaceSource ||
+        sRaceContext.attemptSerial != gQFTTimer.attemptSerial())
+        return false;
+    sRaceContext.ilEntry = ilEntry;
+    sRaceContext.startingPbQf = startingPbQf;
     return true;
 }
 
@@ -3213,6 +3326,7 @@ bool discardUnsavedPB(u32 token) {
         clearTrack(sPlayback);
         bumpPlaybackToken();
         sPlaybackPinned = false;
+        sPinRouteCheckPending = false;
         sGhostVisible = false;
         rewindPlayback();
         return true;
@@ -3235,7 +3349,10 @@ bool markCurrentRecordingPB(s32 resultQf) {
 
 bool playbackPinned() { return sPlaybackPinned; }
 
-void unpinPlayback() { sPlaybackPinned = false; }
+void unpinPlayback() {
+    sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
+}
 
 void clearPlayback() {
     if (sObserverPhase != OBSERVER_OFF) {
@@ -3251,6 +3368,7 @@ void clearPlayback() {
     clearTrack(sPlayback);
     bumpPlaybackToken();
     sPlaybackPinned = false;
+    sPinRouteCheckPending = false;
     sGhostVisible = false;
     rewindPlayback();
 }
@@ -3281,6 +3399,7 @@ void releaseSavedRecording(u32 recordToken) {
 }
 
 void onSavestateLoaded() {
+    clearRaceContext();
     if (sObserverPhase != OBSERVER_OFF) {
         releaseObserverMario(false);
         endObserver(false, nullptr);
@@ -3295,6 +3414,7 @@ void onSavestateLoaded() {
     sPendingHadLiveRoute = false;
     sPendingContinueRecording = false;
     sBoundaryPending = false;
+    sPinRouteCheckPending = false;
     if (!sPlaybackPinned) {
         stopAll();
         sAttemptSerial = gQFTTimer.attemptSerial();

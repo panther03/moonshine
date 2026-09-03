@@ -113,6 +113,9 @@ public:
     // stick-derived pseudo-buttons) happens. The mod's bind matching reads this
     // directly -- see binds.cpp.
     static PADStatus mPadStatus[4];
+    static CButton mPadButton[4];
+    static CStick mPadMStick[4];
+    static CStick mPadSStick[4];
 
     CButton mButtons;      // _18
     CStick mControlStick;  // _48

@@ -15,6 +15,7 @@ HEADER = ROOT / "include" / "susamune" / "susamune_cfg.h"
 KERNEL = ROOT / "launcher" / "kernel" / "SusamuneCfg.c"
 STAGE_LOADER = ROOT / "src" / "stage_loader.cpp"
 ILING = ROOT / "src" / "iling.cpp"
+ILING_ENTRIES = ROOT / "src" / "iling_entries.inc"
 WARP_WHEEL = ROOT / "src" / "warp_wheel.cpp"
 MENU = ROOT / "src" / "menu.cpp"
 SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
@@ -28,7 +29,7 @@ BUILTINS = 3
 TOTAL = BUILTINS + SLOTS
 REGIONS = 3
 CAPACITY = 120
-ROUTES = 122
+ROUTES = 132
 ACTION_BYTES = CAPACITY // 8
 ACTION_SCHEMA = 1
 ACTION_ROUTES = frozenset((0, 25, 82))
@@ -413,6 +414,124 @@ def identity_change_valid(current: V2Payload, staged: V2Payload) -> bool:
 
 
 class PlaylistFormatTests(unittest.TestCase):
+    def test_streaking_accepts_any_shine_from_the_selected_episode(self) -> None:
+        iling = ILING.read_text(encoding="utf-8")
+        stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
+
+        matcher = iling[
+            iling.index("bool sameEpisodeShine"):
+            iling.index("const char *label", iling.index("bool sameEpisodeShine"))
+        ]
+        self.assertIn("entryFinish(selected) == FINISH_SHINE", matcher)
+        self.assertIn("entryFinish(completed) == FINISH_SHINE", matcher)
+        self.assertIn(
+            "sameCourseEpisode(selected.start, completed.start)", matcher
+        )
+        self.assertIn("isBonusShine(completed)", matcher)
+        self.assertIn("sameCourse(selected.start, completed.start)", matcher)
+
+        episode_matcher = iling[
+            iling.index("u8 parentOrSelf"):
+            iling.index("bool acceptsSkipOrigin")
+        ]
+        self.assertIn("LevelWarp::parentArea(area)", episode_matcher)
+        self.assertIn("sameCourse(a, b) && a.gameInt3 == b.gameInt3", episode_matcher)
+        self.assertIn("parent == 0xFF ? area : parent", episode_matcher)
+
+        origin_matcher = iling[
+            iling.index("bool acceptsSkipOrigin"):
+            iling.index("bool sceneMatches")
+        ]
+        self.assertIn("isBonusShine(item)", origin_matcher)
+        self.assertIn(
+            "sameCourse(sAttemptStart, item.start)",
+            origin_matcher,
+        )
+
+        result = stage_loader[
+            stage_loader.index("void onILResult"):
+            stage_loader.index("void onILWarpCancelled")
+        ]
+        self.assertIn("sRuntime.mode == MODE_STREAKING", result)
+        self.assertIn(
+            "ILing::sameEpisodeShine(expectedStartEntry(), entry)", result
+        )
+        self.assertIn("if (entry != expected && !episodeShine)", result)
+        self.assertRegex(
+            result,
+            r"queueSuccess\(sRuntime\.mode == MODE_STREAKING\s*\?\s*"
+            r"expectedStartEntry\(\)\s*:\s*entry",
+        )
+
+    def test_streak_catalogue_restores_hidden_and_hundred_shines(self) -> None:
+        entries = ILING_ENTRIES.read_text(encoding="utf-8")
+        iling = ILING.read_text(encoding="utf-8")
+        stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
+        menu = MENU.read_text(encoding="utf-8")
+
+        shine_rows = re.findall(
+            r'^SHINE\("([^"]+)",\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*'
+            r"(\d+),",
+            entries,
+            re.MULTILINE,
+        )
+        bonus_labels = {
+            label
+            for label, result in shine_rows
+            if int(result) in {29, 59, 69} or 100 <= int(result) <= 107
+        }
+        self.assertEqual(
+            bonus_labels,
+            {
+                "Bianco 100 (E6)",
+                "Ricco 100 (E3)",
+                "Gelato Hidden",
+                "Gelato 100 (E3)",
+                "Pinna 100 (E8)",
+                "Sirena 100 (E7)",
+                "Noki Hidden",
+                "Noki 100 (E2)",
+                "Pianta Hidden",
+                "Pianta 100 (E5)",
+                "Delfino 100",
+            },
+        )
+
+        bonus_filter = iling[
+            iling.index("bool isBonusShine"):
+            iling.index("bool acceptsSkipOrigin")
+        ]
+        for result in (29, 59, 69, 100, 107):
+            self.assertIn(str(result), bonus_filter)
+        selectable = iling[
+            iling.index("bool streakEntrySelectable"):
+            iling.index("bool sameEpisodeShine")
+        ]
+        self.assertIn("entry >= 0 && entry < kEntryCount", selectable)
+        self.assertNotIn("isBonusShine", selectable)
+
+        start = stage_loader[
+            stage_loader.index("bool startStreak"):
+            stage_loader.index("bool start(int entry")
+        ]
+        self.assertIn("!ILing::streakEntrySelectable(entry)", start)
+        append = stage_loader[
+            stage_loader.index("bool appendQueue"):
+            stage_loader.index("bool removeQueue")
+        ]
+        self.assertNotIn("streakEntrySelectable", append)
+
+        tab = menu[
+            menu.index("class StageLoaderTab"):
+            menu.index("class NestedMenuTab")
+        ]
+        self.assertIn(
+            "return !mStreaking || ILing::streakEntrySelectable(entry);", tab
+        )
+        self.assertIn("if (!catalogueIncludesEntry(entry)) continue;", tab)
+        self.assertIn("catalogueEntryAt(mSel - catalogueFirst())", tab)
+        self.assertIn("catalogueFirst() + catalogueCount()", tab)
+
     def test_streak_auto_reset_off_waits_for_success_and_target_miss(self) -> None:
         stage_loader = STAGE_LOADER.read_text(encoding="utf-8")
         wheel = WARP_WHEEL.read_text(encoding="utf-8")

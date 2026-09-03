@@ -42,12 +42,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "SusamuneTheme.h"
 #include "unzip/unzip.h"
 
-// Background image.
-#include "background_png.h"
-
 GRRLIB_ttfFont *myFont;
 GRRLIB_texImg *background;
-GRRLIB_texImg *screen_buffer;
 static bool bg_isWidescreen = false;
 static float bg_xScale = 1.0f;
 static int bg_xPos = 0;
@@ -151,24 +147,118 @@ void RAMInit(void)
 	*(vu32*)0x8000315C = 0x81;
 }
 
-void unzip_data(const void *input, const unsigned int input_size, 
-	void **output, unsigned int *output_size)
+static bool unzip_data_core(const void *input, const unsigned int input_size,
+	void **output, unsigned int output_capacity, bool allocate_output,
+	unsigned int *output_size)
 {
 	char filepath[20]; //statically linked zip file
-	snprintf(filepath,20,"%x+%x",(unsigned int)input,input_size);
-	unzFile uf = unzOpen(filepath); //opens zip in memory
-	unzOpenCurrentFile(uf); //current file is the only file
-	unz_file_info file_info; //get file info for uncompressed size
-	unzGetCurrentFileInfo(uf,&file_info,NULL,0,NULL,0,NULL,0);
-	*output_size = file_info.uncompressed_size; //set output size
-	*output = malloc(*output_size); //allocate the required size
-	unzReadCurrentFile(uf,*output,*output_size); //read it all
-	unzCloseCurrentFile(uf); //done reading out the only file
-	unzClose(uf); //close our static archive, all done!
+	unzFile uf = NULL;
+	unz_global_info global_info;
+	unz_file_info file_info;
+	void *destination = NULL;
+	unsigned int expected = 0;
+	unsigned int total = 0;
+	bool current_open = false;
+	bool allocated = false;
+	bool ok = false;
+	int result;
+
+	if (input == NULL || input_size == 0 || output == NULL ||
+		output_size == NULL)
+		return false;
+	*output_size = 0;
+	snprintf(filepath, sizeof(filepath), "%x+%x",
+		(unsigned int)input, input_size);
+	uf = unzOpen(filepath);
+	if (uf == NULL)
+		goto done;
+	result = unzGetGlobalInfo(uf, &global_info);
+	if (result != UNZ_OK || global_info.number_entry != 1)
+		goto done;
+	result = unzGetCurrentFileInfo(uf, &file_info, NULL, 0, NULL, 0, NULL, 0);
+	if (result != UNZ_OK || file_info.uncompressed_size == 0 ||
+		file_info.uncompressed_size > output_capacity ||
+		(file_info.compression_method != 0 &&
+		 file_info.compression_method != Z_DEFLATED))
+		goto done;
+	expected = (unsigned int)file_info.uncompressed_size;
+	if (allocate_output)
+	{
+		destination = malloc(expected);
+		if (destination == NULL)
+			goto done;
+		allocated = true;
+	}
+	else
+	{
+		destination = *output;
+		if (destination == NULL)
+			goto done;
+	}
+	if (unzOpenCurrentFile(uf) != UNZ_OK)
+		goto done;
+	current_open = true;
+	while (total < expected)
+	{
+		result = unzReadCurrentFile(uf, (u8*)destination + total,
+			expected - total);
+		if (result <= 0)
+			goto done;
+		total += (unsigned int)result;
+	}
+	result = unzCloseCurrentFile(uf);
+	current_open = false;
+	if (result != UNZ_OK)
+		goto done;
+	result = unzClose(uf);
+	uf = NULL;
+	if (result != UNZ_OK)
+		goto done;
+
+	*output = destination;
+	*output_size = expected;
+	ok = true;
+
+done:
+	if (current_open)
+		unzCloseCurrentFile(uf);
+	if (uf != NULL)
+		unzClose(uf);
+	if (!ok && allocated)
+		free(destination);
+	return ok;
+}
+
+bool unzip_data(const void *input, const unsigned int input_size,
+	void **output, unsigned int *output_size)
+{
+	if (output == NULL)
+		return false;
+	*output = NULL;
+	return unzip_data_core(input, input_size, output, 0xFFFFFFFFu, true,
+		output_size);
+}
+
+bool unzip_data_into(const void *input, const unsigned int input_size,
+	void *output, unsigned int output_capacity, unsigned int *output_size)
+{
+	void *destination = output;
+	return unzip_data_core(input, input_size, &destination, output_capacity,
+		false, output_size);
 }
 
 static void *font_ttf = NULL;
 static unsigned int font_ttf_size = 0;
+
+void FreeLauncherFont(void)
+{
+	// FT_Face borrows the archive buffer until the face is destroyed.
+	GRRLIB_FreeTTF(myFont);
+	myFont = NULL;
+	free(font_ttf);
+	font_ttf = NULL;
+	font_ttf_size = 0;
+}
 
 /**
  * Initialize the loader graphics without exposing the stock background.
@@ -181,11 +271,17 @@ void Initialise(void)
 	VIDEO_Flush();
 	VIDEO_WaitVSync();
 	SusamuneMusicInit();
-	unzip_data(font_zip, font_zip_size, &font_ttf, &font_ttf_size);
-	gprintf("Decompressed font.ttf with %i bytes\r\n", font_ttf_size);
-	myFont = GRRLIB_LoadTTF(font_ttf, font_ttf_size);
-	background = GRRLIB_LoadTexturePNG(background_png);
-	screen_buffer = GRRLIB_CreateEmptyTexture(rmode->fbWidth, rmode->efbHeight);
+	if (unzip_data(font_zip, font_zip_size, &font_ttf, &font_ttf_size))
+	{
+		gprintf("Decompressed font.ttf with %i bytes\r\n", font_ttf_size);
+		myFont = GRRLIB_LoadTTF(font_ttf, font_ttf_size);
+	}
+	else
+	{
+		gprintf("Could not decompress embedded font.ttf\r\n");
+		myFont = NULL;
+	}
+	background = NULL;
 
 	// Calculate the background image scale.
 	bg_isWidescreen = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
@@ -226,8 +322,9 @@ void RevealBackground(bool autoboot)
 					GRRLIB_Rectangle(80+480, 0, 80, 480,
 						RGBA(222, 223, 224, i), true);
 				}
-				GRRLIB_DrawImg(bg_xPos, 0, background, 0, bg_xScale, 1,
-					RGBA(255, 255, 255, i));
+				if (background != NULL)
+					GRRLIB_DrawImg(bg_xPos, 0, background, 0, bg_xScale, 1,
+						RGBA(255, 255, 255, i));
 			}
 			GRRLIB_Render();
 		}
@@ -241,14 +338,9 @@ void RevealBackground(bool autoboot)
 }
 
 static void (*stub)() = (void*)0x80001800;
-inline void DrawBuffer(void) {
-	GRRLIB_DrawImg(0, 0, screen_buffer, 0, 1, 1, 0xFFFFFFFF);
-}
-
 inline void UpdateScreen(void) {
-	GRRLIB_Screen2Texture(0, 0, screen_buffer, GX_FALSE);
-	GRRLIB_Render();
-	DrawBuffer();
+	// Keep the EFB contents so successive status lines accumulate in place.
+	GRRLIB_RenderPreserve();
 }
 
 raw_irq_handler_t BeforeIOSReload()
@@ -296,8 +388,7 @@ void ExitToLoader(int ret)
 	sleep(3);
 	SusamuneThemeShutdown(&background);
 	GRRLIB_FreeTexture(background);
-	GRRLIB_FreeTexture(screen_buffer);
-	GRRLIB_FreeTTF(myFont);
+	FreeLauncherFont();
 	GRRLIB_Exit();
 	CloseDevices();
 	if(KernelLoaded)
@@ -326,8 +417,7 @@ void LoaderShutdown()
 	SusamuneMusicShutdown();
 	SusamuneThemeShutdown(&background);
 	GRRLIB_FreeTexture(background);
-	GRRLIB_FreeTexture(screen_buffer);
-	GRRLIB_FreeTTF(myFont);
+	FreeLauncherFont();
 	GRRLIB_Exit();
 	CloseDevices();
 	gprintf("Loader Shutdown\n");
@@ -392,8 +482,9 @@ inline void ClearScreen()
 			GRRLIB_Rectangle(80+480, 0, 80, 480,
 				RGBA(222, 223, 224, 255), true);
 		}
-		GRRLIB_DrawImg(bg_xPos, 0, background, 0, bg_xScale, 1,
-			RGBA(255, 255, 255, 255));
+		if (background != NULL)
+			GRRLIB_DrawImg(bg_xPos, 0, background, 0, bg_xScale, 1,
+				RGBA(255, 255, 255, 255));
 	}
 }
 

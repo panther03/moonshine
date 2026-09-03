@@ -37,6 +37,13 @@ enum ChoiceSet {
     CHOICES_GHOST_APPEARANCE,
     CHOICES_STAGE_SESSION,
     CHOICES_PB_GHOST_SAVE,
+    CHOICES_PETEY_ROUTE,
+    CHOICES_RICCO_CRANE_SPEED,
+    CHOICES_RICCO_FRUIT_MACHINE,
+    CHOICES_GELATO_PATTERN,
+    CHOICES_HIDDEN_ITEMS,
+    CHOICES_HURTBOX_MODE,
+    CHOICES_HURTBOX_TARGET,
     CHOICES_COUNT,
 };
 
@@ -63,7 +70,11 @@ const char kChoiceLabels[] =
     "Slowest\0Fastest\0"
     "25 pct\0" "50 pct\0" "75 pct\0" "100 pct\0Default\0Never\0"
     "Shadow Mario\0Piantissimo\0Full notification\0Counter\0"
-    "Ask\0Auto-Save\0Don't ask";
+    "Ask\0Auto-Save\0Don't ask\0Retail\0N1-S1-S2-S3\0Slow\0Medium\0Fast\0"
+    "Durians only\0"
+    "Pattern 1\0Pattern 2\0Pattern 3\0Pattern 4\0"
+    "Both\0Fruit\0Coins\0Wireframe\0Transparent\0Solid\0"
+    "All enemies\0Eely teeth only";
 
 const u8 kChoiceMap[] = {
     0, 1,              // bool
@@ -79,12 +90,20 @@ const u8 kChoiceMap[] = {
     28, 29,             // ghost appearance
     30, 31, 0,          // stage session: Full notification, Counter, Off
     32, 33, 34,         // PB ghost save
+    35, 36,              // Petey route
+    35, 20, 37, 38, 39, 21,  // crane speed band
+    35, 40,              // Ricco fruit machine
+    35, 41, 42, 43, 44,  // course pattern
+    0, 45, 46, 47,       // hidden items
+    0, 48, 49, 50,       // hurtbox mode
+    51, 52,               // hurtbox target
 };
 const u8 kChoiceFirst[CHOICES_COUNT + 1] = {
-    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42
+    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 57,
+    61, 65, 67
 };
 
-static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 42,
+static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 67,
               "choice map size changed");
 static_assert(SETTING_HELMET_APPEARANCE == SETTING_GHOST_OPACITY + 1 &&
                   SETTING_CAP_APPEARANCE == SETTING_HELMET_APPEARANCE + 1 &&
@@ -115,6 +134,50 @@ SettingCategory settingCategory(const SettingDesc &desc) {
     return (SettingCategory)(desc.config & kCategoryMask);
 }
 
+int rngFavoriteBit(SettingId id) {
+    if (id >= SETTING_KING_BOO_ALWAYS_FRUIT &&
+        id <= SETTING_RICCO_FRUIT_MACHINE) {
+        return id - SETTING_KING_BOO_ALWAYS_FRUIT;
+    }
+    if (id >= SETTING_GELATO_RED_COIN_FISH_PATTERN &&
+        id <= SETTING_GELATO_BLUE_BIRD_PATTERN) {
+        return 5 + id - SETTING_GELATO_RED_COIN_FISH_PATTERN;
+    }
+    return -1;
+}
+
+struct IlPbSetting {
+    u8 id;
+    u8 safeValue;
+    u8 invalidatesAttempt;
+};
+
+const IlPbSetting kIlPbSettings[] = {
+    {SETTING_ILING_RECORDING, 1, 0},
+    {SETTING_STAGE_INTRO_SKIP, 0, 1},
+    {SETTING_KING_BOO_ALWAYS_FRUIT, 0, 1},
+    {SETTING_PETEY_NO_TORNADO, 0, 1},
+    {SETTING_PETEY_ROUTE, 0, 1},
+    {SETTING_PINNA_HIDDEN_ITEMS, 0, 1},
+    {SETTING_ENEMY_HURTBOXES, 0, 1},
+    {SETTING_RICCO_RACE_CHECKPOINTS, 0, 1},
+};
+
+int ilPbSettingIndex(SettingId id) {
+    for (u32 i = 0; i < sizeof(kIlPbSettings) / sizeof(kIlPbSettings[0]); i++) {
+        if (kIlPbSettings[i].id == id) return (int)i;
+    }
+    return -1;
+}
+
+static_assert(SETTING_RICCO_FRUIT_MACHINE -
+                      SETTING_KING_BOO_ALWAYS_FRUIT ==
+                  4 &&
+                  SETTING_GELATO_BLUE_BIRD_PATTERN -
+                          SETTING_GELATO_RED_COIN_FISH_PATTERN ==
+                      1,
+              "RNG Shined bit mapping changed");
+
 #define SETTING_CONFIG(def, cat) (u8)(((def) << kDefaultShift) | (cat))
 #define SBOOL(name, def, cat) { CHOICES_BOOL, SETTING_CONFIG(def, cat) },
 #define SCHOICE(name, def, choices, cat) { choices, SETTING_CONFIG(def, cat) },
@@ -131,6 +194,8 @@ const SettingDesc kSettingDescs[] = {
 // Generous: the kernel only services the doorbell between disc reads, and a
 // FatFS write of a few hundred bytes can wait behind one.
 const u32 kSaveTimeoutFrames = 300;  // ~5s at 60Hz
+const u16 kSaveRetryFrames = 600;    // ~10s between confirmed failures
+const u32 kFatFsInternalError = 2;
 
 }  // namespace
 
@@ -186,6 +251,15 @@ void Settings::init() {
         return;
     }
 
+    if (cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_READ_ERROR) {
+        // A transient read failure must never turn this boot's defaults into
+        // a replacement for a valid ini. Other persistence mailboxes remain
+        // independent and can still be used.
+        mLastError = kFatFsInternalError;
+        mSaveState = SETTINGS_SAVE_UNSUPPORTED;
+        return;
+    }
+
     adopt(cfg);
     mSaveSeq = cfg->saveSeq;
 
@@ -226,6 +300,7 @@ void Settings::save() {
                  sizeof(cfg->qftDisplay) + sizeof(cfg->metadataStyle) +
                  sizeof(cfg->inputStyle) + sizeof(cfg->creation) +
                  sizeof(cfg->wallkickStyle));
+    DCStoreRange((void *)&cfg->movementStyle, sizeof(cfg->movementStyle));
 
     mSaveSeq     = cfg->saveSeq + 1;
     cfg->saveSeq = mSaveSeq;
@@ -238,6 +313,16 @@ void Settings::save() {
 }
 
 SettingsSaveState Settings::pollSave() {
+    if (mSaveState == SETTINGS_SAVE_ERROR && mDirty &&
+        mLastError != kFatFsInternalError) {
+        if (mSaveWaitFrames > 0) {
+            mSaveWaitFrames--;
+        }
+        if (mSaveWaitFrames == 0) {
+            save();
+        }
+        return (SettingsSaveState)mSaveState;
+    }
     if (mSaveState != SETTINGS_SAVE_PENDING) {
         return (SettingsSaveState)mSaveState;
     }
@@ -250,9 +335,34 @@ SettingsSaveState Settings::pollSave() {
 
     if (cfg->ackSeq == mSaveSeq) {
         mLastError = cfg->status;
-        mSaveState = mLastError ? SETTINGS_SAVE_ERROR : SETTINGS_SAVE_OK;
-    } else if (++mSaveWaitFrames > kSaveTimeoutFrames) {
-        mSaveState = SETTINGS_SAVE_TIMEOUT;
+        if (mLastError) {
+            // An internal error can mean rename aliases were quarantined.
+            // Do not hammer that structural failure in the background.
+            if (mLastError != kFatFsInternalError) {
+                // stageInto() cleared every component's dirty flag. Keep one
+                // aggregate retry marker until a later transaction succeeds.
+                mDirty = true;
+                mSaveWaitFrames = kSaveRetryFrames;
+            }
+            mSaveState = SETTINGS_SAVE_ERROR;
+        } else {
+            mSaveState = SETTINGS_SAVE_OK;
+            // The menu may have been reopened while this request was in
+            // flight. Commit those newer edits now that the payload is no
+            // longer owned by the old transaction.
+            if (mDirty || gBinds.dirty() || gInputDisplay.dirty() ||
+                gMetadataDisplay.dirty() || gQftDisplay.dirty() ||
+                gCreationExtras.dirty()) {
+                save();
+            }
+        }
+    } else if (mSaveWaitFrames <= kSaveTimeoutFrames) {
+        ++mSaveWaitFrames;
+        if (mSaveWaitFrames > kSaveTimeoutFrames) {
+            // The backend still owns this request and may acknowledge it
+            // later. Report once without restaging over its live payload.
+            return SETTINGS_SAVE_TIMEOUT;
+        }
     }
     return (SettingsSaveState)mSaveState;
 }
@@ -313,6 +423,9 @@ void Settings::adopt(const volatile SusamuneCfg *cfg) {
     if (cfg->flags & SUSAMUNE_CFG_FLAG_WALLKICK_STYLE) {
         gCreationExtras.adoptWallkick(&cfg->wallkickStyle);
     }
+    if (cfg->flags & SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE) {
+        gCreationExtras.adoptMovement(&cfg->movementStyle);
+    }
 
     // set() marks dirty; adopting persisted values is not a user edit.
     mDirty     = false;
@@ -337,11 +450,13 @@ void Settings::stageInto(volatile SusamuneCfg *cfg) {
     gQftDisplay.clearDirty();
     gCreationExtras.stageInto(&cfg->creation);
     gCreationExtras.stageWallkickInto(&cfg->wallkickStyle);
+    gCreationExtras.stageMovementInto(&cfg->movementStyle);
     gCreationExtras.clearDirty();
 }
 
 void Settings::set(SettingId id, u8 value) {
-    if (id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) {
+    if ((id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) ||
+        id == SETTING_RNG_FAVORITES) {
         value &= 0x7F;
     } else {
         value = value % choiceCount(kSettingDescs[id]);
@@ -352,20 +467,36 @@ void Settings::set(SettingId id, u8 value) {
     mValues[id] = value;
 }
 
+bool Settings::favoriteable(SettingId id) {
+    return (id >= 0 && id < SETTING_FAVORITES_0) ||
+           rngFavoriteBit(id) >= 0;
+}
+
 bool Settings::favorite(SettingId id) const {
-    if (id < 0 || id >= SETTING_FAVORITES_0) return false;
-    const int index = (int)id;
-    const SettingId storage =
-        (SettingId)(SETTING_FAVORITES_0 + index / 7);
-    return (mValues[storage] & (1u << (index % 7))) != 0;
+    if (id >= 0 && id < SETTING_FAVORITES_0) {
+        const int index = (int)id;
+        const SettingId storage =
+            (SettingId)(SETTING_FAVORITES_0 + index / 7);
+        return (mValues[storage] & (1u << (index % 7))) != 0;
+    }
+    const int bit = rngFavoriteBit(id);
+    return bit >= 0 &&
+           (mValues[SETTING_RNG_FAVORITES] & (1u << bit)) != 0;
 }
 
 void Settings::toggleFavorite(SettingId id) {
-    if (id < 0 || id >= SETTING_FAVORITES_0) return;
-    const int index = (int)id;
-    const SettingId storage =
-        (SettingId)(SETTING_FAVORITES_0 + index / 7);
-    mValues[storage] ^= (u8)(1u << (index % 7));
+    SettingId storage;
+    int bit;
+    if (id >= 0 && id < SETTING_FAVORITES_0) {
+        const int index = (int)id;
+        storage = (SettingId)(SETTING_FAVORITES_0 + index / 7);
+        bit = index % 7;
+    } else {
+        bit = rngFavoriteBit(id);
+        if (bit < 0) return;
+        storage = SETTING_RNG_FAVORITES;
+    }
+    mValues[storage] ^= (u8)(1u << bit);
     mDirty = true;
 }
 
@@ -396,6 +527,43 @@ const char *Settings::name(SettingId id) {
 
 SettingCategory Settings::category(SettingId id) {
     return settingCategory(kSettingDescs[id]);
+}
+
+int Settings::ilPbSettingCount() {
+    return sizeof(kIlPbSettings) / sizeof(kIlPbSettings[0]);
+}
+
+SettingId Settings::ilPbSettingAt(int index) {
+    return index >= 0 && index < ilPbSettingCount()
+               ? (SettingId)kIlPbSettings[index].id
+               : SETTING_COUNT;
+}
+
+u8 Settings::ilPbSafeValue(SettingId id) {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 ? kIlPbSettings[index].safeValue : 0;
+}
+
+bool Settings::affectsIlPb(SettingId id) {
+    return ilPbSettingIndex(id) >= 0;
+}
+
+bool Settings::invalidatesIlAttempt(SettingId id) {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 && kIlPbSettings[index].invalidatesAttempt;
+}
+
+bool Settings::blocksIlPb(SettingId id) const {
+    const int index = ilPbSettingIndex(id);
+    return index >= 0 && mValues[id] != kIlPbSettings[index].safeValue;
+}
+
+int Settings::ilPbBlockerCount() const {
+    int count = 0;
+    for (int i = 0; i < ilPbSettingCount(); i++) {
+        if (blocksIlPb((SettingId)kIlPbSettings[i].id)) count++;
+    }
+    return count;
 }
 
 // kSettingDescs is indexed by SettingId and must stay row-for-row aligned with

@@ -15,6 +15,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/creation_extras.hxx"
 #include "susamune/ghost.hxx"
+#include "susamune/ghost_format.h"
 #include "susamune/menu.hxx"
 #include "susamune/mem2_map.h"
 #include "susamune/packed_text.hxx"
@@ -116,6 +117,9 @@ const u8 kNoShine = 0xFF;
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
         ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
+        ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -137,6 +141,7 @@ constexpr Entry kEntries[] = {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 #undef ENTRY_STATE
@@ -150,6 +155,11 @@ constexpr bool isSecretOnlyPbSlot(int slot) {
 }
 constexpr u8 kGroupFirst[GROUP_COUNT] = {
     0, 13, 25, 38, 52, 65, 78, 90, 92, 94, 110
+};
+// Appended catalogue entries are projected beside their course without
+// changing the byte ids already stored in playlists.
+constexpr u8 kMenuGroupFirst[GROUP_COUNT] = {
+    0, 15, 28, 43, 59, 74, 88, 101, 103, 105, 121
 };
 const int kGeneratedLabelCount = 90;
 const int kRegularLabelSize = 18;
@@ -165,6 +175,8 @@ constexpr char kMenuGroupNames[] =
 constexpr u8 kMenuGroupOffsets[] = {0, 7, 13, 20, 26, 33, 38, 45, 54, 61, 69};
 static_assert(sizeof(kMenuGroupOffsets) == GROUP_COUNT,
               "IL menu group labels changed");
+static_assert(sizeof(kMenuGroupFirst) == GROUP_COUNT,
+              "IL menu group starts changed");
 constexpr char kRegularSuffixes[] =
     "\0\0\0\0 Reds\0 (Full)\0 (Secret)\0 (Race)";
 constexpr char kRegularLabelFormats[] =
@@ -279,6 +291,9 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     RAW(label, area, episode, parent, FINISH_SHINE, id, group, \
         ENTRY_CLEAR_RESULT | ENTRY_PB_OVERRIDE | ENTRY_CARRY_OVERLAY, slot)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    static_assert((slot) >= 126 && (slot) <= 135 && (required) < 70, \
+                  "Full Reds identity changed");
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -295,6 +310,7 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 
@@ -323,6 +339,7 @@ constexpr bool verifyRegularLabel(const char *expected, int parent, int result,
 #define SHINE_ROUTE(label, area, episode, parent, id, group, slot) \
     ENTRY_LABEL(group, label)
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) ENTRY_LABEL(group, label)
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required)
 #define PLAZA(label, source, scenario, finish, result, slot) label "\0"
 #define RAW(label, area, episode, parent, finish, result, group, flags, prerequisite) \
     ENTRY_LABEL(group, label)
@@ -354,6 +371,7 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 #undef ENTRY_LABEL_GROUP_BIANCO
@@ -405,6 +423,9 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #define SHINE_SECRET(label, area, episode, parent, id, group, slot) \
     static_assert(isSecretOnlyPbSlot(slot), \
                   "Secret-only IL left its reserved PB slot range");
+#define SHINE_FULL_REDS(label, area, episode, parent, id, group, slot, required) \
+    static_assert(!isSecretOnlyPbSlot(slot), \
+                  "Full Reds entered the Secret-only PB slot range");
 #define PLAZA(label, source, scenario, finish, result, slot) \
     RAW(label, TGameSequence::AREA_DOLPIC, scenario, source, finish, result, \
         GROUP_ANY_PERCENT, ENTRY_PLAZA | ENTRY_PB_OVERRIDE, slot)
@@ -421,14 +442,17 @@ constexpr int packedLabelCount(const char *pool, u32 bytes) {
 #undef SHINE_INSIDE
 #undef SHINE_ROUTE
 #undef SHINE_SECRET
+#undef SHINE_FULL_REDS
 #undef PLAZA
 #undef RAW
 
 const u8 kPlazaStoryHigh[10] = {0x00, 0x10, 0xF0, 0xF0, 0xF0,
                                 0x30, 0xF0, 0xF0, 0xF0, 0xF0};
-const int kPbSlotCount = 126;
+const int kPbSlotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;
 const int kEntryGelato4Inside = 31;
 const int kEntryGelatoGbs = 121;
+const int kEntryFullRedsFirst = 122;
+const int kEntryFullRedsLast = 131;
 const int kEntryPinnaEyg = 46;
 const int kEntryPinna8 = 50;
 const u8 kPinnaEygParentEpisode = 2;
@@ -498,7 +522,7 @@ const u32 kPbSaveTimeoutFrames = 300;
 const u32 kPbRetryDelayFrames = 300;
 
 static_assert(sizeof(Entry) == 6, "ILing entry layout changed");
-static_assert(kEntryCount == 122, "ILing entry count changed");
+static_assert(kEntryCount == 132, "ILing entry count changed");
 static_assert(kEntryCount <= 0x100, "recent IL entry index exceeds u8");
 static_assert(sizeof(kAnyPercentTheorySlots) == 55,
               "Any% theory route changed");
@@ -506,7 +530,7 @@ static_assert(kGroupFirst[GROUP_AIRSTRIP] == kGeneratedLabelCount,
               "generated IL label range changed");
 static_assert(packedLabelCount(kLiteralShortLabels,
                               sizeof(kLiteralShortLabels)) ==
-                  kEntryCount - kGeneratedLabelCount,
+                  kEntryFullRedsFirst - kGeneratedLabelCount,
               "short IL label table changed");
 
 struct AttemptState {
@@ -520,6 +544,7 @@ struct AttemptState {
     bool havePlazaStoryFlags;
     u8 plazaStoryFlags;
     u8 overlayCount;
+    u8 assistReasons;
     OverlayFlag overlayFlags[kOverlayFlagCount];
     LevelWarp::Dest start;
     u8 finish;
@@ -613,6 +638,7 @@ static_assert(sizeof(ILingRuntime) <= SUSAMUNE_ILING_RUNTIME_SIZE,
 #define sHavePlazaStoryFlags sAttemptState.havePlazaStoryFlags
 #define sPlazaStoryFlags sAttemptState.plazaStoryFlags
 #define sOverlayCount sAttemptState.overlayCount
+#define sAssistReasons sAttemptState.assistReasons
 #define sOverlayFlags sAttemptState.overlayFlags
 #define sAttemptStart sAttemptState.start
 #define sFinishKind sAttemptState.finish
@@ -745,7 +771,7 @@ void adoptPBs(const volatile SusamuneCfg *cfg) {
     if ((cfg->flags & SUSAMUNE_CFG_FLAG_ILING_PBS) &&
         pbs->magic == SUSAMUNE_ILING_PB_MAGIC &&
         pbs->version == SUSAMUNE_ILING_PB_VERSION &&
-        pbs->count <= SUSAMUNE_ILING_PB_MAX_SLOTS) {
+        pbs->count <= SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS) {
         for (u16 slot = 0; slot < pbs->count; slot++) {
             const s32 value = pbs->values[slot];
             if (value >= 0 && value <= SUSAMUNE_ILING_PB_MAX_QF) {
@@ -912,14 +938,37 @@ bool sameDest(const LevelWarp::Dest &a, const LevelWarp::Dest &b) {
            a.gameInt3 == b.gameInt3;
 }
 
-bool acceptsSkipOrigin(const Entry &item) {
+bool isBonusShine(const Entry &item) {
     const bool hidden = item.result == 29 || item.result == 59 ||
                         item.result == 69;
     const bool hundred = item.result >= 100 && item.result <= 107;
-    if ((hidden || hundred) && sAttemptStart.area == item.start.area) {
-        return true;
-    }
-    return false;
+    return hidden || hundred;
+}
+
+u8 parentOrSelf(u8 area) {
+    const u8 parent = LevelWarp::parentArea(area);
+    return parent == 0xFF ? area : parent;
+}
+
+bool sameCourse(const LevelWarp::Dest &a, const LevelWarp::Dest &b) {
+    return parentOrSelf(a.area) == parentOrSelf(b.area);
+}
+
+bool sameCourseEpisode(const LevelWarp::Dest &a,
+                       const LevelWarp::Dest &b) {
+    return sameCourse(a, b) && a.gameInt3 == b.gameInt3;
+}
+
+bool acceptsSkipOrigin(const Entry &item) {
+    return isBonusShine(item) && sameCourse(sAttemptStart, item.start);
+}
+
+int fullRedsBaseShine(int entry) {
+    static const u8 kBaseShines[] = {2, 5, 13, 20, 31,
+                                     35, 41, 43, 55, 64};
+    return entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast
+               ? kBaseShines[entry - kEntryFullRedsFirst]
+               : -1;
 }
 
 bool sceneMatches(const TGameSequence &scene, const LevelWarp::Dest &dest) {
@@ -955,6 +1004,11 @@ bool stageObjectsLive() {
 
 bool isInternalScene(const LevelWarp::Dest &start,
                      const TGameSequence &scene) {
+    if (start.area == TGameSequence::AREA_PINNAPARCO &&
+        start.episode == 3 && start.gameInt3 == 5 &&
+        scene.mAreaID == 0x29 && scene.mEpisodeID == 0) {
+        return true;
+    }
     if (start.area == TGameSequence::AREA_PINNAPARCO &&
         start.episode == 5 && scene.mAreaID == 0x3A &&
         scene.mEpisodeID == 0) {
@@ -1021,7 +1075,8 @@ int entryForResult(u8 result) {
     if (validEntry(sSelectedEntry)) {
         const Entry &selected = kEntries[sSelectedEntry];
         if ((acceptsAnySelectedOrigin(selected) ||
-             sSelectedEntry == kEntryGelatoGbs) &&
+             sSelectedEntry == kEntryGelatoGbs ||
+             fullRedsBaseShine(sSelectedEntry) >= 0) &&
             entryFinish(selected) == FINISH_SHINE &&
             selected.result == result) {
             return sSelectedEntry;
@@ -1100,8 +1155,11 @@ void applyEntryOverlay(int entry) {
         return;
     }
 
-    if (item.prerequisite != kNoShine &&
-        !(item.flags & ENTRY_PB_OVERRIDE)) {
+    const int fullRedsBase = fullRedsBaseShine(entry);
+    if (fullRedsBase >= 0) {
+        applyOverlayFlag(0x10000u + fullRedsBase, true, false);
+    } else if (item.prerequisite != kNoShine &&
+               !(item.flags & ENTRY_PB_OVERRIDE)) {
         applyOverlayFlag(0x10000u + item.prerequisite, true, false);
     }
     if (item.flags & ENTRY_CLEAR_RESULT) {
@@ -1243,6 +1301,7 @@ void clearAttempt() {
     sAttemptReady = false;
     sTransitionPending = false;
     sRecordsEligible = false;
+    sAssistReasons = 0;
     sChildRetryContinuation = false;
     sNativeIgt = false;
     sSecretOnly = false;
@@ -1253,6 +1312,33 @@ void clearAttempt() {
         StageLoader::onILAttemptEnded();
         SplitStats::onILAttemptEnded();
     }
+}
+
+void captureGhostRace(int entry) {
+    if (!validEntry(entry)) return;
+
+    Ghost::RaceContext race;
+    if (!Ghost::raceContext(&race) ||
+        race.attemptSerial != gQFTTimer.attemptSerial() ||
+        race.targetQf > 0x7fffffffu)
+        return;
+    const LevelWarp::Dest &start = kEntries[entry].start;
+    const u8 parentArea = LevelWarp::parentArea(start.area);
+    const u8 routeFlags = parentArea == 0xff
+        ? 0 : SUSAMUNE_GHOST_ROUTE_INTERNAL_SCENE;
+    if (race.area != start.area || race.episode != start.episode ||
+        race.routeVariant != start.gameInt3 ||
+        race.routeParentArea != parentArea || race.routeFlags != routeFlags)
+        return;
+    Ghost::bindRaceContext(static_cast<s16>(entry),
+                           activePBs()[pbSlot(entry)]);
+}
+
+u8 liveGlobalAssistReasons() {
+    return (gSettings.getBool(SETTING_STAGE_INTRO_SKIP) ||
+            actionsFastForwardActive())
+               ? Assist::OTHER
+               : 0;
 }
 
 void armAttempt(const Entry &entry, int selected) {
@@ -1273,12 +1359,12 @@ void armAttempt(const Entry &entry, int selected) {
     if (identity < 0 || identity >= kEntryCount) identity = entryIndex;
     sSecretOnly = isSecretOnlyPbSlot(pbSlot(identity));
     sAttemptSerial = gQFTTimer.attemptSerial();
-    sRecordsEligible = !gSettings.getBool(SETTING_STAGE_INTRO_SKIP) &&
-                       !actionsFastForwardActive();
+    sAssistReasons = liveGlobalAssistReasons();
+    sRecordsEligible = sAssistReasons == 0;
     sNativeIgt = false;
     Records::onILAttemptStarted(entryIndex);
     if (!sRecordsEligible) {
-        Records::invalidateAttempt();
+        Records::invalidateAttempt(sAssistReasons);
         StageLoader::invalidatePlaylistBest();
     }
 }
@@ -1312,7 +1398,7 @@ bool attemptPBRecordingEnabled() {
 
 bool secretAttemptUsedFludd() {
     // isEmitting() reports nozzle pressure, not an accepted water emit.
-    return sRunning && sRecordsEligible && sSecretOnly &&
+    return sRunning && sSecretOnly &&
            stageObjectsLive() && gpMarioOriginal && gpMarioOriginal->mFludd &&
            gpMarioOriginal->mFludd->mIsEmitWater;
 }
@@ -1331,7 +1417,7 @@ bool recordPB(int entry, s32 qf) {
     const s32 previous = pbs[slot];
     pbs[slot] = qf;
     Ghost::markCurrentRecordingPB(qf);
-    Records::onPBAccepted(entry, sActivePbProfile);
+    Records::onPBAccepted(entry, sActivePbProfile, previous, qf);
     reconcileRecordsPBs();
     markPBsDirty();
     if (gSettings.getBool(SETTING_ILING_POPUP)) {
@@ -1380,8 +1466,24 @@ void recordResult(int entry, s32 qf) {
                                   gpMarDirector->mGCConsole
                               ? gpMarDirector->mGCConsole->getFinishedTime()
                               : -1;
-    Records::onILResult(entry, (u8)pbSlot(entry), qf, igtCentis,
-                        sRecordsEligible);
+    const int resultSlot = pbSlot(entry);
+    Ghost::RaceContext race;
+    Records::GhostRaceSource raceSource = Records::GHOST_RACE_NONE;
+    s32 ghostQf = -1;
+    s32 startingPbQf = -1;
+    if (Ghost::raceContext(&race) && race.ilEntry == entry &&
+        race.attemptSerial == sAttemptSerial) {
+        if (race.source == Ghost::RACE_SOURCE_PERSONAL)
+            raceSource = Records::GHOST_RACE_PERSONAL;
+        else if (race.source == Ghost::RACE_SOURCE_IMPORTED)
+            raceSource = Records::GHOST_RACE_IMPORTED;
+        if (raceSource != Records::GHOST_RACE_NONE) {
+            ghostQf = static_cast<s32>(race.targetQf);
+            startingPbQf = race.startingPbQf;
+        }
+    }
+    Records::onILResult(entry, (u8)resultSlot, qf, igtCentis,
+                        sRecordsEligible, raceSource, ghostQf, startingPbQf);
     StageLoader::onILResult(entry, qf, sRecordsEligible);
     recordPB(entry, qf);
     SplitStats::onILResult(entry, qf);
@@ -1412,7 +1514,38 @@ void onPersistenceReady() {
 
 int count() { return kEntryCount; }
 
+bool streakEntrySelectable(int entry) {
+    return entry >= 0 && entry < kEntryCount;
+}
+
+bool sameEpisodeShine(int selectedEntry, int completedEntry) {
+    if (selectedEntry < 0 || selectedEntry >= kEntryCount ||
+        completedEntry < 0 || completedEntry >= kEntryCount) {
+        return false;
+    }
+    const Entry &selected = kEntries[selectedEntry];
+    const Entry &completed = kEntries[completedEntry];
+    if (selectedEntry >= kEntryFullRedsFirst &&
+        selectedEntry <= kEntryFullRedsLast) {
+        return completedEntry == selectedEntry;
+    }
+    return entryFinish(selected) == FINISH_SHINE &&
+           entryFinish(completed) == FINISH_SHINE &&
+           sameCourse(selected.start, completed.start) &&
+           (isBonusShine(completed) ||
+            sameCourseEpisode(selected.start, completed.start));
+}
+
 const char *label(int entry) {
+    static const char kFullRedsLabels[] =
+        "Bianco 3 Full Reds\0Bianco 6 Full Reds\0Ricco 4 Full Reds\0"
+        "Gelato 1 Full Reds\0Pinna 2 Full Reds\0Pinna 6 Full Reds\0"
+        "Sirena 2 Full Reds\0Sirena 4 Full Reds\0Noki 6 Full Reds\0"
+        "Pianta 5 Full Reds";
+    if (entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast) {
+        return PackedText::at(kFullRedsLabels,
+                              entry - kEntryFullRedsFirst);
+    }
     if (entry < kGeneratedLabelCount) {
         const Entry &item = kEntries[entry];
         if (entry == kEntryPinnaEyg) return "Pinna Park EYG";
@@ -1440,6 +1573,13 @@ const char *label(int entry) {
 }
 
 const char *shortLabel(int entry) {
+    static const char kFullRedsShortLabels[] =
+        "BH3FR\0BH6FR\0RH4FR\0GB1FR\0PP2FR\0PP6FR\0SB2FR\0SB4FR\0"
+        "NB6FR\0PV5FR";
+    if (entry >= kEntryFullRedsFirst && entry <= kEntryFullRedsLast) {
+        return PackedText::at(kFullRedsShortLabels,
+                              entry - kEntryFullRedsFirst);
+    }
     if (entry >= kGeneratedLabelCount) {
         return PackedText::at(kLiteralShortLabels,
                               entry - kGeneratedLabelCount);
@@ -1562,6 +1702,65 @@ const char *groupName(int entry) {
     return kMenuGroupNames + kMenuGroupOffsets[group];
 }
 
+int menuEntryAt(int position) {
+    if (position < 0 || position >= kEntryCount) return -1;
+    static const u8 kInsertAfter[] = {
+        4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84
+    };
+    static const u8 kInsertedEntry[] = {
+        122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131
+    };
+    int projected = 0;
+    for (int entry = 0; entry < kEntryGelatoGbs; entry++) {
+        if (projected++ == position) return entry;
+        for (u32 insert = 0; insert < sizeof(kInsertAfter); insert++) {
+            if (kInsertAfter[insert] == entry) {
+                if (projected++ == position) return kInsertedEntry[insert];
+                break;
+            }
+        }
+    }
+    return -1;
+}
+
+int menuPositionOf(int entry) {
+    for (int position = 0; position < kEntryCount; position++) {
+        if (menuEntryAt(position) == entry) return position;
+    }
+    return -1;
+}
+
+int jumpMenuGroup(int position, int direction) {
+    int group = 0;
+    while (group + 1 < GROUP_COUNT &&
+           position >= kMenuGroupFirst[group + 1]) {
+        group++;
+    }
+    group += direction > 0 ? 1 : -1;
+    if (group < 0) {
+        group = GROUP_COUNT - 1;
+    } else if (group >= GROUP_COUNT) {
+        group = 0;
+    }
+    return kMenuGroupFirst[group];
+}
+
+bool beginsMenuGroup(int position) {
+    for (int group = 0; group < GROUP_COUNT; group++) {
+        if (position == kMenuGroupFirst[group]) return true;
+    }
+    return false;
+}
+
+const char *menuGroupName(int position) {
+    int group = 0;
+    while (group + 1 < GROUP_COUNT &&
+           position >= kMenuGroupFirst[group + 1]) {
+        group++;
+    }
+    return kMenuGroupNames + kMenuGroupOffsets[group];
+}
+
 int activeParentEpisode(u8 parentArea) {
     if (sRunning) {
         const u8 startParent = LevelWarp::parentArea(sAttemptStart.area);
@@ -1650,7 +1849,9 @@ bool start(int entry, u32 approvedDiscardToken) {
     sWarpRollbackFluddSecrets = gSettings.get(SETTING_FLUDD_SECRETS);
     const Entry &item = kEntries[entry];
     const u8 routeFlags = item.flags & ENTRY_FLAG_MASK;
-    if ((routeFlags & (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) ==
+    if (fullRedsBaseShine(entry) >= 0) {
+        gSettings.set(SETTING_FLUDD_SECRETS, 2);
+    } else if ((routeFlags & (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) ==
         (ENTRY_CLEAR_RESULT | ENTRY_CARRY_OVERLAY)) {
         gSettings.set(SETTING_FLUDD_SECRETS, 1);
     } else if (routeFlags == ENTRY_CARRY_OVERLAY) {
@@ -1827,7 +2028,11 @@ void onStageSetup() {
         }
     } else if (validEntry(sSelectedEntry) &&
                (kEntries[sSelectedEntry].flags & ENTRY_CARRY_OVERLAY)) {
-        sCarryRestorePending = sOverlayCount != 0;
+        // Full Reds enters the secret through its parent stage. The completed
+        // main-Shine flag must survive until the portal chooses replay mode.
+        const bool keepForChild = atStart &&
+            fullRedsBaseShine(sSelectedEntry) >= 0;
+        sCarryRestorePending = !keepForChild && sOverlayCount != 0;
     } else {
         restoreOverlayFlags();
     }
@@ -1841,20 +2046,10 @@ void onStageSetup() {
 void update() {
     servicePBSave();
 
-    if (sRunning && sRecordsEligible &&
-        (gSettings.getBool(SETTING_STAGE_INTRO_SKIP) ||
-         actionsFastForwardActive())) {
-        sRecordsEligible = false;
-        Records::invalidateAttempt();
-        StageLoader::invalidatePlaylistBest();
-        SplitStats::invalidateAttempt();
-    }
-    if (secretAttemptUsedFludd()) {
-        sRecordsEligible = false;
-        Records::invalidateAttempt();
-        StageLoader::invalidatePlaylistBest();
-        SplitStats::invalidateAttempt();
-    }
+    const u8 globalAssistReasons = liveGlobalAssistReasons();
+    if (sRunning && globalAssistReasons)
+        invalidateForAssist(globalAssistReasons);
+    if (secretAttemptUsedFludd()) invalidateForAssist(Assist::OTHER);
     if (sRunning && stageObjectsLive() && gpMarDirector->mGCConsole &&
         gpMarDirector->mGCConsole->mIsTimerMoving) {
         sNativeIgt = true;
@@ -1942,7 +2137,10 @@ void update() {
         return;
     }
 
-    if (isPlazaEntry(sSelectedEntry) && stageObjectsLive() &&
+    const bool temporaryProgression = isPlazaEntry(sSelectedEntry) ||
+                                      sOverlayCount != 0 ||
+                                      sHavePlazaStoryFlags;
+    if (temporaryProgression && stageObjectsLive() &&
         (gpMarDirector->mCurState == TMarDirector::STATE_PAUSE_MENU ||
          gpMarDirector->mCurState == TMarDirector::STATE_SAVE_CARD)) {
         // Never let temporary route progression reach a card save.
@@ -1967,13 +2165,13 @@ void update() {
             // retail already respawned it at the correct internal checkpoint.
             sAttemptSerial = serial;
             sChildRetryContinuation = sessionChildReset;
-            sRecordsEligible = !sessionChildReset &&
-                !gSettings.getBool(SETTING_STAGE_INTRO_SKIP) &&
-                !actionsFastForwardActive();
+            sAssistReasons = liveGlobalAssistReasons();
+            sRecordsEligible = !sessionChildReset && sAssistReasons == 0;
             sNativeIgt = false;
             const int entry = validEntry(sSelectedEntry)
                                   ? sSelectedEntry
                                   : entryForStartScene(scene);
+            captureGhostRace(entry);
             Records::onILAttemptStarted(entry);
             if (entry >= 0) {
                 StageLoader::onILAttemptStarted(entry);
@@ -1985,7 +2183,8 @@ void update() {
                     SplitStats::onILAttemptStarted(entry, sRecordsEligible);
             }
             if (!sRecordsEligible) {
-                Records::invalidateAttempt();
+                Records::invalidateAttempt(sAssistReasons ? sAssistReasons
+                                                          : Assist::OTHER);
                 StageLoader::invalidatePlaylistBest();
                 SplitStats::invalidateAttempt();
             }
@@ -2000,6 +2199,7 @@ void update() {
                 armAttempt(kEntries[entry], entry);
                 sAttemptSerial = serial;
                 sAttemptReady = true;
+                captureGhostRace(entry);
                 StageLoader::onILAttemptStarted(entry);
                 SplitStats::onILAttemptStarted(entry, sRecordsEligible);
             }
@@ -2023,6 +2223,7 @@ void update() {
                               ? sSelectedEntry
                               : entryForStartScene(gpApplication.mCurrentScene);
         if (entry >= 0) {
+            captureGhostRace(entry);
             StageLoader::onILAttemptStarted(entry);
             SplitStats::onILAttemptStarted(entry, sRecordsEligible);
         }
@@ -2102,10 +2303,14 @@ void onSavestateLoaded() {
     clearAttempt();
 }
 
-void invalidateForAssist() {
-    if (!sRunning || !sRecordsEligible) return;
+void invalidateForAssist(u8 reasons) {
+    if (!sRunning) return;
+    const u8 added = reasons & ~sAssistReasons;
+    if (!added) return;
+    sAssistReasons |= reasons;
+    Records::invalidateAttempt(added);
+    if (!sRecordsEligible) return;
     sRecordsEligible = false;
-    Records::invalidateAttempt();
     StageLoader::invalidatePlaylistBest();
     SplitStats::invalidateAttempt();
 }

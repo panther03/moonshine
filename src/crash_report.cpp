@@ -5,6 +5,7 @@
 #include "SMS/Camera/PolarSubCamera.hxx"
 #include "SMS/System/Application.hxx"
 #include "susamune/addresses.hxx"
+#include "susamune/checksum.hxx"
 #include "susamune/crash_report.h"
 #include "susamune/mod_bin.h"
 
@@ -50,17 +51,10 @@ bool copyReadable(void *destination, u32 address, u32 size) {
 }
 
 u32 checksum(const SusamuneCrashReport *report) {
-    const u8 *bytes = reinterpret_cast<const u8 *>(report);
-    u32 crc = 0xFFFFFFFFu;
-    for (u32 i = 0; i < sizeof(*report); ++i) {
-        const bool checksumByte =
-            i >= __builtin_offsetof(SusamuneCrashReport, checksum) &&
-            i < __builtin_offsetof(SusamuneCrashReport, checksum) + 4;
-        crc ^= checksumByte ? 0u : bytes[i];
-        for (u32 bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
-    }
-    return crc ^ 0xFFFFFFFFu;
+    return Checksum::crc32(
+        report, sizeof(*report),
+        __builtin_offsetof(SusamuneCrashReport, checksum),
+        sizeof(report->checksum));
 }
 
 u32 packScene(const TGameSequence &scene) {

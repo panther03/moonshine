@@ -15,7 +15,7 @@ namespace EmulatorPersistence {
 namespace {
 
 constexpr u32 kRecordMagic = 0x53554346u;  // 'SUCF'
-constexpr u16 kRecordVersion = 4;
+constexpr u16 kRecordVersion = 6;
 constexpr u32 kSectorSize = 0x2000;
 constexpr u32 kFileSize = kSectorSize * 2;
 constexpr char kFileName[] = "susamune_settings";
@@ -72,6 +72,32 @@ struct RecordV3 {
 };
 static_assert(sizeof(RecordV3) == kSectorSize, "V3 card record size changed");
 
+struct RecordV4 {
+    u32 magic;
+    u16 version;
+    u16 payloadSize;
+    u32 generation;
+    u32 checksum;
+    u32 gameVersion;
+    u8 reserved[12];
+    u8 cfg[4928];
+    u8 padding[kSectorSize - 32 - 4928];
+};
+static_assert(sizeof(RecordV4) == kSectorSize, "V4 card record size changed");
+
+struct RecordV5 {
+    u32 magic;
+    u16 version;
+    u16 payloadSize;
+    u32 generation;
+    u32 checksum;
+    u32 gameVersion;
+    u8 reserved[12];
+    u8 cfg[5016];
+    u8 padding[kSectorSize - 32 - 5016];
+};
+static_assert(sizeof(RecordV5) == kSectorSize, "V5 card record size changed");
+
 // Only diskID is needed. The offset and stride come from the decomp's complete
 // CARDControl definition; keep this view tied to its 0x110-byte retail layout.
 struct CardControlIdentity {
@@ -124,11 +150,12 @@ void initBlank(SusamuneCfg *cfg) {
                  SUSAMUNE_CFG_FLAG_INPUT_STYLE |
                  SUSAMUNE_CFG_FLAG_CREATION |
                  SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
-                 SUSAMUNE_CFG_FLAG_ILING_PROFILES;
+                 SUSAMUNE_CFG_FLAG_ILING_PROFILES |
+                 SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
     cfg->ilingPbs.magic = SUSAMUNE_ILING_PB_MAGIC;
     cfg->ilingPbs.version = SUSAMUNE_ILING_PB_VERSION;
-    cfg->ilingPbs.count = SUSAMUNE_ILING_PB_SLOT_COUNT;
-    for (u32 i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++) {
+    cfg->ilingPbs.count = SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT;
+    for (u32 i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++) {
         cfg->ilingPbs.values[i] = SUSAMUNE_ILING_PB_UNSET;
     }
     cfg->ilingProfiles.magic = SUSAMUNE_ILING_PROFILE_MAGIC;
@@ -151,7 +178,7 @@ void migrateLegacyPBs(SusamuneCfg *cfg) {
     if (!(cfg->flags & SUSAMUNE_CFG_FLAG_ILING_PBS) ||
         legacy.magic != SUSAMUNE_ILING_PB_MAGIC ||
         legacy.version != SUSAMUNE_ILING_PB_VERSION ||
-        legacy.count > SUSAMUNE_ILING_PB_MAX_SLOTS) {
+        legacy.count > SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS) {
         return;
     }
     for (u16 slot = 0; slot < legacy.count; slot++) {
@@ -160,6 +187,86 @@ void migrateLegacyPBs(SusamuneCfg *cfg) {
             cfg->ilingProfiles.values[0][slot] = value;
         }
     }
+}
+
+constexpr u32 kProfilesOffsetV1 = 2784;
+constexpr u32 kMovementOffsetV5 =
+    kProfilesOffsetV1 + sizeof(SusamuneILingProfilesCfgV1);
+static_assert(__builtin_offsetof(SusamuneCfg, ilingProfiles) ==
+                  kProfilesOffsetV1,
+              "profile mailbox prefix moved");
+static_assert(kMovementOffsetV5 == 4928,
+              "old movement-style offset changed");
+
+bool validPBValue(s32 value) {
+    return value >= SUSAMUNE_ILING_PB_UNSET &&
+           value <= SUSAMUNE_ILING_PB_MAX_QF;
+}
+
+void migrateProfilesV1(SusamuneCfg *cfg, const u8 *oldCfg) {
+    const SusamuneILingProfilesCfgV1 *old =
+        reinterpret_cast<const SusamuneILingProfilesCfgV1 *>(
+            oldCfg + kProfilesOffsetV1);
+    SusamuneILingProfilesCfg &current = cfg->ilingProfiles;
+    if (old->magic != SUSAMUNE_ILING_PROFILE_MAGIC ||
+        old->version != SUSAMUNE_ILING_PROFILE_VERSION_V1 ||
+        old->profileCount != SUSAMUNE_ILING_PROFILE_COUNT ||
+        old->activeProfile >= SUSAMUNE_ILING_PROFILE_COUNT ||
+        old->slotCount == 0 ||
+        old->slotCount > SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS ||
+        old->nameSize != SUSAMUNE_ILING_PROFILE_NAME_SIZE) {
+        migrateLegacyPBs(cfg);
+        return;
+    }
+
+    for (u32 profile = 0; profile < SUSAMUNE_ILING_PROFILE_COUNT; profile++) {
+        for (u32 slot = 0; slot < old->slotCount; slot++) {
+            if (!validPBValue(old->values[profile][slot])) {
+                migrateLegacyPBs(cfg);
+                return;
+            }
+        }
+    }
+
+    current.magic = SUSAMUNE_ILING_PROFILE_MAGIC;
+    current.version = SUSAMUNE_ILING_PROFILE_VERSION;
+    current.profileCount = SUSAMUNE_ILING_PROFILE_COUNT;
+    current.activeProfile = old->activeProfile;
+    current.slotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;
+    current.nameSize = SUSAMUNE_ILING_PROFILE_NAME_SIZE;
+    current.saveSeq = old->saveSeq;
+    current.ackSeq = old->ackSeq;
+    current.status = old->status;
+    for (u32 profile = 0; profile < SUSAMUNE_ILING_PROFILE_COUNT; profile++) {
+        for (u32 slot = 0; slot < old->slotCount; slot++) {
+            current.values[profile][slot] = old->values[profile][slot];
+        }
+    }
+    memcpy(current.customNames, old->customNames,
+           sizeof(current.customNames));
+}
+
+void migrateRecordCfg(SusamuneCfg *cfg, const u8 *oldCfg, u32 oldSize,
+                      bool hasProfiles, bool hasMovement) {
+    initBlank(cfg);
+    const u32 prefixSize = hasProfiles ? kProfilesOffsetV1 : oldSize;
+    memcpy(cfg, oldCfg, prefixSize);
+    if (hasProfiles) {
+        migrateProfilesV1(cfg, oldCfg);
+    } else {
+        migrateLegacyPBs(cfg);
+    }
+    if (hasMovement) {
+        memcpy(&cfg->movementStyle, oldCfg + kMovementOffsetV5,
+               sizeof(cfg->movementStyle));
+    }
+    cfg->flags |= SUSAMUNE_CFG_FLAG_QFT_DISPLAY |
+                  SUSAMUNE_CFG_FLAG_METADATA_STYLE |
+                  SUSAMUNE_CFG_FLAG_INPUT_STYLE |
+                  SUSAMUNE_CFG_FLAG_CREATION |
+                  SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
+                  SUSAMUNE_CFG_FLAG_ILING_PROFILES |
+                  SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
 }
 
 u32 checksum(Record *record) {
@@ -209,6 +316,26 @@ bool validV3(const Record *source) {
     Record *record = const_cast<Record *>(source);
     return record->magic == kRecordMagic && record->version == 3 &&
            record->payloadSize == 2784 &&
+           record->gameVersion == SUSAMUNE_GAME_VERSION &&
+           record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
+           record->cfg.version == SUSAMUNE_CFG_VERSION &&
+           checksum(record) == record->checksum;
+}
+
+bool validV4(const Record *source) {
+    Record *record = const_cast<Record *>(source);
+    return record->magic == kRecordMagic && record->version == 4 &&
+           record->payloadSize == 4928 &&
+           record->gameVersion == SUSAMUNE_GAME_VERSION &&
+           record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
+           record->cfg.version == SUSAMUNE_CFG_VERSION &&
+           checksum(record) == record->checksum;
+}
+
+bool validV5(const Record *source) {
+    Record *record = const_cast<Record *>(source);
+    return record->magic == kRecordMagic && record->version == 5 &&
+           record->payloadSize == 5016 &&
            record->gameVersion == SUSAMUNE_GAME_VERSION &&
            record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
            record->cfg.version == SUSAMUNE_CFG_VERSION &&
@@ -361,24 +488,27 @@ s32 loadRecords(void *mountWork, Record *record) {
                           slot * kSectorSize);
         if (result != CARD_ERROR_READY) break;
         const bool current = valid(record);
-        const bool v3 = !current && validV3(record);
-        const bool v2 = !current && !v3 && validV2(record);
-        const bool v1 = !current && !v3 && !v2 && validV1(record);
-        if ((current || v3 || v2 || v1) &&
+        const bool v5 = !current && validV5(record);
+        const bool v4 = !current && !v5 && validV4(record);
+        const bool v3 = !current && !v5 && !v4 && validV3(record);
+        const bool v2 = !current && !v5 && !v4 && !v3 && validV2(record);
+        const bool v1 =
+            !current && !v5 && !v4 && !v3 && !v2 && validV1(record);
+        if ((current || v5 || v4 || v3 || v2 || v1) &&
             (!haveRecord || newer(record->generation, bestGeneration))) {
-            initBlank(&sState->cfg);
-            memcpy(&sState->cfg, &record->cfg,
+            if (current) {
+                memcpy(&sState->cfg, &record->cfg, sizeof(sState->cfg));
+            } else {
+                const u32 oldSize =
                     v1 ? sizeof(((RecordV1 *)0)->cfg)
                        : v2 ? sizeof(((RecordV2 *)0)->cfg)
                        : v3 ? sizeof(((RecordV3 *)0)->cfg)
-                            : sizeof(sState->cfg));
-            sState->cfg.flags |= SUSAMUNE_CFG_FLAG_QFT_DISPLAY |
-                                 SUSAMUNE_CFG_FLAG_METADATA_STYLE |
-                                 SUSAMUNE_CFG_FLAG_INPUT_STYLE |
-                                 SUSAMUNE_CFG_FLAG_CREATION |
-                                 SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
-                                 SUSAMUNE_CFG_FLAG_ILING_PROFILES;
-            if (!current) migrateLegacyPBs(&sState->cfg);
+                       : v4 ? sizeof(((RecordV4 *)0)->cfg)
+                            : sizeof(((RecordV5 *)0)->cfg);
+                migrateRecordCfg(&sState->cfg,
+                                 reinterpret_cast<const u8 *>(&record->cfg),
+                                 oldSize, v4 || v5, v5);
+            }
             bestGeneration = record->generation;
             sState->activeRecord = slot;
             sState->initialSave = !current;

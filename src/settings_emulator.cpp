@@ -11,6 +11,7 @@
 
 namespace {
 constexpr u32 kSaveTimeoutFrames = 300;
+constexpr u16 kSaveRetryFrames = 600;
 }
 
 void Settings::init() { resetDefaults(); }
@@ -56,6 +57,15 @@ void Settings::save() {
 }
 
 SettingsSaveState Settings::pollSave() {
+    if (mSaveState == SETTINGS_SAVE_ERROR && mDirty) {
+        if (mSaveWaitFrames > 0) {
+            mSaveWaitFrames--;
+        }
+        if (mSaveWaitFrames == 0) {
+            save();
+        }
+        return static_cast<SettingsSaveState>(mSaveState);
+    }
     if (mSaveState != SETTINGS_SAVE_PENDING) {
         return static_cast<SettingsSaveState>(mSaveState);
     }
@@ -64,14 +74,28 @@ SettingsSaveState Settings::pollSave() {
     switch (EmulatorPersistence::poll(mSaveSeq, &error)) {
     case EmulatorPersistence::SAVE_OK:
         mSaveState = SETTINGS_SAVE_OK;
+        if (mDirty || gBinds.dirty() || gInputDisplay.dirty() ||
+            gMetadataDisplay.dirty() || gQftDisplay.dirty() ||
+            gCreationExtras.dirty()) {
+            save();
+        }
         break;
     case EmulatorPersistence::SAVE_ERROR:
         mLastError = error;
+        // stageInto() cleared every component's dirty flag. Keep one
+        // aggregate retry marker until a later transaction succeeds.
+        mDirty = true;
+        mSaveWaitFrames = kSaveRetryFrames;
         mSaveState = SETTINGS_SAVE_ERROR;
         break;
     case EmulatorPersistence::SAVE_PENDING:
-        if (++mSaveWaitFrames > kSaveTimeoutFrames) {
-            mSaveState = SETTINGS_SAVE_TIMEOUT;
+        if (mSaveWaitFrames <= kSaveTimeoutFrames) {
+            ++mSaveWaitFrames;
+            if (mSaveWaitFrames > kSaveTimeoutFrames) {
+                // Keep polling the original immutable slot until the helper
+                // acknowledges it; this is only a one-shot UI timeout.
+                return SETTINGS_SAVE_TIMEOUT;
+            }
         }
         break;
     }

@@ -9,4 +9,9 @@
 #define SUSAMUNE_NIN_CFG_DISABLE_RUMBLE \
     (1u << SUSAMUNE_NIN_CFG_BIT_DISABLE_RUMBLE)
 
+// The ARM starts after the loader stages this payload and normally clears DIMM.
+#define SUSAMUNE_NIN_CFG_BIT_GCN_IPL_STAGED 21
+#define SUSAMUNE_NIN_CFG_GCN_IPL_STAGED \
+    (1u << SUSAMUNE_NIN_CFG_BIT_GCN_IPL_STAGED)
+
 #endif  // SUSAMUNE_NINTENDONT_CFG_H

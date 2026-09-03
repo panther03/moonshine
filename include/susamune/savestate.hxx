@@ -1,10 +1,7 @@
 #ifndef _SUSAMUNE_SAVESTATE_HXX
 #define _SUSAMUNE_SAVESTATE_HXX
 
-#if ENABLE_SAVESTATE_DBG
-#include "J2D/J2DOrthoGraph.hxx"
-#include "J2D/J2DTextBox.hxx"
-#endif
+#include <Dolphin/types.h>
 
 class Menu;
 
@@ -35,12 +32,13 @@ private:
 
 #if ENABLE_SAVESTATE_DBG
     void setStatus(const char *msg);
-
-    J2DTextBox *mInfoText;
 #endif
     char mFeedback[48];
     int  mFeedbackFrames;
     bool mLoadPending;
+    u16  mLoadWaitFrames;
 };
+static_assert(sizeof(SavestateManager) == 56,
+              "savestate controller layout changed");
 
 #endif // _SUSAMUNE_SAVESTATE_HXX

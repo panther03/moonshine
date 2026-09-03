@@ -109,6 +109,19 @@ struct Painter {
 
     void button(int lx, int ly, int radius, bool down, int slot) const {
         const Color c = lit(slot, 0xbf);
+        if (scale(radius) <= 3) {
+            const int cx = x(lx);
+            const int cy = y(ly);
+            if (down) {
+                menu->fillBox(cx - 2, cy - 2, 5, 5, c);
+            } else {
+                menu->fillBox(cx - 2, cy - 2, 5, 1, c);
+                menu->fillBox(cx - 2, cy + 2, 5, 1, c);
+                menu->fillBox(cx - 2, cy - 1, 1, 3, c);
+                menu->fillBox(cx + 2, cy - 1, 1, 3, c);
+            }
+            return;
+        }
         // The original display is an outline at rest and gains a solid fill
         // only for the frames where the button is held.
         if (down) fillCircle(lx, ly, radius, c);
@@ -154,7 +167,7 @@ CreationStyle InputDisplay::defaultStyle() {
 
 void InputDisplay::resetDefaults() {
     mStyle              = defaultStyle();
-    mCfg.startVisible   = 0;
+    mCfg.startVisible   = 1;
     mCfg.valueMode      = SUSAMUNE_INPUT_VALUES_OFF;
     mCfg.valueSource    = SUSAMUNE_INPUT_SOURCE_RAW;
     mCfg.valuePlacement = SUSAMUNE_INPUT_VALUES_BELOW;
@@ -163,7 +176,7 @@ void InputDisplay::resetDefaults() {
     }
 
     mEditor.reset();
-    mVisible           = false;
+    mVisible           = true;
     mVisibleBeforeEdit = true;
     mDirty             = false;
     mDirtyBeforeEdit   = false;
@@ -397,11 +410,13 @@ void InputDisplay::draw(Menu *menu, bool force) const {
     trigger[2] = trigger[4] = (s16)p.x(170);
     menu->strokePoly(trigger, 4, triggerStroke);
 
-    // The reference uses round knobs inside eight-segment stick gates.
-    const int mx = clampi((s8)raw.mStickX, -100, 100) * 14 / 100;
-    const int my = clampi((s8)raw.mStickY, -100, 100) * 14 / 100;
-    const int cx = clampi((s8)raw.mSubStickX, -100, 100) * 14 / 100;
-    const int cy = clampi((s8)raw.mSubStickY, -100, 100) * 14 / 100;
+    // The original overlay reads JUT's clamped floats, not the raw PAD bytes.
+    const JUTGamePad::CStick &main = JUTGamePad::mPadMStick[0];
+    const JUTGamePad::CStick &sub = JUTGamePad::mPadSStick[0];
+    const int mx = clampi((int)(main.mStickX * 14.0f), -14, 14);
+    const int my = clampi((int)(main.mStickY * 14.0f), -14, 14);
+    const int cx = clampi((int)(sub.mStickX * 14.0f), -14, 14);
+    const int cy = clampi((int)(sub.mStickY * 14.0f), -14, 14);
     const Color mainStick = p.lit(SUSAMUNE_INPUT_COLOR_MAIN_STICK, 0xef);
     p.fillCircle(32 + mx, 52 - my, 12, mainStick);
     p.strokeGate(32, 52, 19, mainStick);
@@ -414,7 +429,7 @@ void InputDisplay::draw(Menu *menu, bool force) const {
     p.button(164, 50, 8, buttons & JUTGamePad::X, SUSAMUNE_INPUT_COLOR_X);
     p.button(119, 41, 8, buttons & JUTGamePad::Y, SUSAMUNE_INPUT_COLOR_Y);
     p.button(144, 34, 6, buttons & JUTGamePad::Z, SUSAMUNE_INPUT_COLOR_Z);
-    p.button(91, 64, 5, buttons & JUTGamePad::START,
+    p.button(91, 64, 7, buttons & JUTGamePad::START,
              SUSAMUNE_INPUT_COLOR_START);
 
     if (lines == 0) return;

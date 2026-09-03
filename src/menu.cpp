@@ -28,12 +28,14 @@
 #include "susamune/raw_prompt_input.hxx"
 #include "susamune/records.hxx"
 #include "susamune/records_persistence.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/settings.hxx"
 #include "susamune/split_stats.hxx"
 #include "susamune/stage_loader.hxx"
 #include "susamune/stage_targets.hxx"
 #include "susamune/susamune_cfg.h"
 #include "susamune/wallkick_display.hxx"
+#include "susamune/movement_display.hxx"
 #include "susamune/warp_wheel.hxx"
 #if ENABLE_DEBUG_WARPS
 #include "susamune/debug_warp.hxx"
@@ -58,6 +60,23 @@ namespace {
 typedef JUtility::TColor Color;
 
 inline Color col(u8 r, u8 g, u8 b, u8 a) { return Color(r, g, b, a); }
+inline Color warningForeground(Color color, bool menuShown) {
+    if (!menuShown && rngControlInvalidatesIl() &&
+        (u16)color.r + color.g + color.b > 192) {
+        color.r = 255;
+        color.g = 0;
+        color.b = 0;
+    }
+    return color;
+}
+inline Color warningText(Color color, bool menuShown) {
+    if (!menuShown && rngControlInvalidatesIl()) {
+        color.r = 255;
+        color.g = 0;
+        color.b = 0;
+    }
+    return color;
+}
 inline int clampi(int value, int lo, int hi) {
     if (value < lo) return lo;
     if (value > hi) return hi;
@@ -129,7 +148,8 @@ int      sFontFixedW  = 0;
 #if defined(SUSAMUNE_VERSION_JP)
 // JP's font has no one-byte slash. Keep raw UI/custom text portable without
 // making every dynamic format string know the regional encoding.
-char sFontSafeText[512];
+char *const sFontSafeText =
+    reinterpret_cast<char *>(SUSAMUNE_MEM2_MENU_TEXT_PPC_BASE);
 
 const char *fontSafeText(const char *text) {
     u32 bytes = 0;
@@ -146,7 +166,7 @@ const char *fontSafeText(const char *text) {
             scan++;
         }
     }
-    if (!slashes || bytes + slashes >= sizeof(sFontSafeText)) return text;
+    if (!slashes || bytes + slashes >= SUSAMUNE_MENU_TEXT_SIZE) return text;
 
     char *out = sFontSafeText;
     scan = reinterpret_cast<const unsigned char *>(text);
@@ -180,6 +200,7 @@ const int TAB_SZ    = 18;
 const int ROW_SZ    = 16;
 const int ROW_H = ROW_SZ + 8;
 const int FOOT_SZ   = 12;
+const int HELP_H    = 32;
 
 const int TAB_GAP   = 12;  // space between tabs
 const int TAB_INNER = 10;  // highlight padding around a tab's text
@@ -199,6 +220,7 @@ const int FOOTER_Y    = PANEL_Y + PANEL_H - 26;
 class MenuTab {
 public:
     virtual const char *title() const              = 0;
+    virtual const char *summary() const { return nullptr; }
     virtual void update(Menu *menu, TMarioGamePad *pad) = 0;
     // Render into the content rect [x, x+w) x [y, y+h).
     virtual void draw(Menu *menu, int x, int y, int w, int h) = 0;
@@ -211,7 +233,12 @@ public:
     // the menu's input grab and stage-freeze behaviour.
     virtual bool fullScreen() const { return false; }
     virtual bool favoriteHint() const { return false; }
+    virtual bool available() const { return true; }
+    // Nested hubs use a non-negative count as a compact Ready/blocked value.
+    virtual int rootAlertCount() const { return -1; }
     virtual void focus() {}
+    // Nested pages consume one Back press before their parent closes.
+    virtual bool back() { return false; }
     // Protected PB saves may need to route through a nested Ghosts page.
     virtual bool beginProtectedPBSave(Menu *, u32) { return false; }
 
@@ -310,6 +337,12 @@ void bgmStatsDraw(Menu *menu) {
 static void drawValueRow(Menu *menu, int x, int y, int w, const char *name,
                          const char *value, bool selected, bool starred,
                          bool arrow);
+static void drawValueRowColored(Menu *menu, int x, int y, int w,
+                                const char *name, const char *value,
+                                bool selected, bool starred, bool arrow,
+                                Color valueColor);
+static void drawHelpLine(Menu *menu, int x, int y, int w, int h,
+                         const char *text);
 
 // ---------------------------------------------------------------------
 // IL and travel practice
@@ -330,10 +363,16 @@ public:
                gCreationExtras.editing();
     }
     bool suppressesBinds() const override {
-        if (mConfirmDelete || mEditingName || mShowingStats) return true;
+        if (grabsInput()) return true;
+        u16 consumed = JUTGamePad::A;
+        if (isOption()) {
+            if (mSel >= 2 && mSel <= 6) consumed |= JUTGamePad::X;
+        } else {
+            consumed |= JUTGamePad::Y;
+            if (ILing::pbQf(selectedEntry()) >= 0) consumed |= JUTGamePad::X;
+        }
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
-        return !isOption() &&
-               (held & (JUTGamePad::A | JUTGamePad::X | JUTGamePad::Y)) != 0;
+        return (held & consumed) != 0;
     }
     bool fullScreen() const override {
         return mEditingName || mShowingStats || gCreationExtras.editing();
@@ -591,10 +630,11 @@ public:
             ry += ROW_H;
         }
 
-        for (int i = 0; i < entries && row < end; i++) {
-            if (ILing::beginsGroup(i)) {
+        for (int position = 0; position < entries && row < end; position++) {
+            if (ILing::beginsMenuGroup(position)) {
                 if (row >= start) {
-                    drawSectionHeader(menu, x, ry, w, ILing::groupName(i));
+                    drawSectionHeader(menu, x, ry, w,
+                                      ILing::menuGroupName(position));
                     ry += ROW_H;
                 }
                 row++;
@@ -605,16 +645,18 @@ public:
                 continue;
             }
 
-            const bool selected = !isOption() && i == selectedEntry();
+            const int entry = ILing::menuEntryAt(position);
+            const bool selected = !isOption() &&
+                                  position == selectedPosition();
             char pb[24];
             const char *value = "(PB: --)";
-            const s32 qf = ILing::pbQf(i);
+            const s32 qf = ILing::pbQf(entry);
             if (qf >= 0) {
                     ILing::formatTime(qf, pb, sizeof(pb),
                                   "(PB: %d:%02d.%03d)");
                 value = pb;
             }
-            drawValueRow(menu, x, ry, w, ILing::label(i), value, selected,
+            drawValueRow(menu, x, ry, w, ILing::label(entry), value, selected,
                          false, true);
             ry += ROW_H;
             row++;
@@ -636,7 +678,10 @@ private:
     enum { OPTION_COUNT = 8 };
 
     bool isOption() const { return mSel < OPTION_COUNT; }
-    int selectedEntry() const { return mSel - OPTION_COUNT; }
+    int selectedPosition() const { return mSel - OPTION_COUNT; }
+    int selectedEntry() const {
+        return ILing::menuEntryAt(selectedPosition());
+    }
 
     static SettingId optionSetting(int option) {
         static const u8 kSettings[5] = {
@@ -696,10 +741,12 @@ private:
     }
 
     void jumpSection(int direction) {
-        const int entry = selectedEntry();
-        int groupFirst = entry;
-        while (groupFirst > 0 && !ILing::beginsGroup(groupFirst)) groupFirst--;
-        const int destination = ILing::jumpGroup(entry, direction);
+        const int position = selectedPosition();
+        int groupFirst = position;
+        while (groupFirst > 0 && !ILing::beginsMenuGroup(groupFirst)) {
+            groupFirst--;
+        }
+        const int destination = ILing::jumpMenuGroup(position, direction);
         if ((direction < 0 && groupFirst == 0) ||
             (direction > 0 && destination == 0)) {
             mSel = 0;
@@ -709,28 +756,28 @@ private:
     }
 
     void jumpFromOptions(int direction) {
-        const int first = direction > 0 ? 0 : ILing::jumpGroup(0, -1);
+        const int first = direction > 0 ? 0 : ILing::jumpMenuGroup(0, -1);
         mSel = OPTION_COUNT + first;
     }
 
-    static int menuRowForEntry(int entry) {
-        int row = entry;
-        for (int i = 0; i <= entry; i++) {
-            if (ILing::beginsGroup(i)) row++;
+    static int menuRowForPosition(int position) {
+        int row = position;
+        for (int i = 0; i <= position; i++) {
+            if (ILing::beginsMenuGroup(i)) row++;
         }
         return row;
     }
 
     static int menuRowCount(int entries) {
         return 2 + OPTION_COUNT + theoryRows() +
-               menuRowForEntry(entries - 1) + 1;
+               menuRowForPosition(entries - 1) + 1;
     }
 
     static int menuRowForSelection(int selection) {
         if (selection < 2) return 1 + selection;
         if (selection < OPTION_COUNT) return 2 + theoryRows() + selection;
         return 2 + OPTION_COUNT + theoryRows() +
-               menuRowForEntry(selection - OPTION_COUNT);
+               menuRowForPosition(selection - OPTION_COUNT);
     }
 
     static int theoryRows() { return ILing::pbProfile() == 0 ? 1 : 0; }
@@ -970,7 +1017,8 @@ public:
     bool suppressesBinds() const override {
         if (grabsInput()) return true;
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
-        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+        return (held & (JUTGamePad::A | JUTGamePad::X |
+                        JUTGamePad::Y | JUTGamePad::Z)) != 0;
     }
 
     bool beginProtectedPBSave(Menu *menu, u32 token) override {
@@ -1171,7 +1219,7 @@ public:
             return;
         }
 
-        const int listH = h - ROW_H;
+        const int listH = h - ROW_H - HELP_H;
         const int maxRows = listH / ROW_H;
         const int selectedRow = selectionRow(mSel);
         const int start = listScrollStart(selectedRow, DISPLAY_ROW_COUNT,
@@ -1234,7 +1282,7 @@ public:
                 drawSectionHeader(menu, x, ry, w, summary);
             } else if (row == IMPORT_SCAN_DISPLAY) {
                 drawValueRow(menu, x, ry, w, "Scan import folder",
-                             "drag & drop .smsghost",
+                             "drag and drop .smsghost",
                              mSel == IMPORT_SCAN_SELECTION, false, true);
             } else {
                 int index;
@@ -1249,6 +1297,7 @@ public:
 
         drawScrollHints(menu, x, y, w, listH, start, end,
                         DISPLAY_ROW_COUNT);
+        drawHelpLine(menu, x, y, w, h - ROW_H, selectionHelp());
         const bool settingRow = mSel == DISPLAY_ROW || mSel == OPACITY_ROW ||
                                 mSel == APPEARANCE_ROW ||
                                 mSel == AUTO_TARGET_ROW ||
@@ -1269,6 +1318,30 @@ public:
     }
 
 private:
+    const char *selectionHelp() const {
+        if (mSel == DISPLAY_ROW)
+            return "Shows or hides the selected ghost while racing or watching.";
+        if (mSel == OPACITY_ROW)
+            return "Changes how transparent the ghost looks in the stage.";
+        if (mSel == APPEARANCE_ROW)
+            return "Chooses Shadow Mario or Piantissimo as the ghost model.";
+        if (mSel == AUTO_TARGET_ROW)
+            return "Chooses whether a restart races the last attempt or success.";
+        if (mSel == PB_SAVE_ROW)
+            return "Chooses when a newly accepted PB ghost is saved to the SD.";
+        if (mSel == PROFILE_ROW)
+            return "Selects which IL profile supplies PBs and ghost names.";
+        if (mSel == TARGET_ROW)
+            return "Shows the pinned race ghost; press A or X to clear it.";
+        if (mSel == IMPORT_SCAN_SELECTION)
+            return "Finds .smsghost files copied into the import folder.";
+        if (isPersonalSlot())
+            return "A personal SD slot. Select to Race or Watch; X deletes it.";
+        if (isImportedSlot())
+            return "An imported ghost. Select to Race, Watch or export it.";
+        return "Saved and imported ghosts available for racing or watching.";
+    }
+
     enum Choice : u8 {
         CHOICE_NONE,
         CHOICE_ACTION,
@@ -2203,7 +2276,7 @@ private:
     void drawPBConfirmation(Menu *menu, int x, int y, int w) const {
         const char *title = "Discard unsaved PB ghost?";
         const char *note = "The selected ghost action will destroy it.";
-        const char *hint = SUSAMUNE_GLYPH_A " Discard & continue    "
+        const char *hint = SUSAMUNE_GLYPH_A " Discard and continue    "
                            SUSAMUNE_GLYPH_B " Cancel";
         menu->fillBox(x, y + 24, w, 150,
                       JUtility::TColor(36, 30, 20, 245));
@@ -2409,6 +2482,18 @@ public:
           mScope(RecordsPersistence::SCOPE_GLOBAL) {}
 
     const char *title() const override { return "Records"; }
+    bool suppressesBinds() const override {
+        u16 consumed = mPage == PAGE_ROOT ? 0 : JUTGamePad::B;
+        if (mPage == PAGE_ROOT || mPage == PAGE_ACHIEVEMENT_CATEGORIES ||
+            mPage == PAGE_WORLDS ||
+            (mPage == PAGE_ACHIEVEMENTS &&
+             Records::categoryAchievementCount(
+                 (Records::Category)mCategory) > 0)) {
+            consumed |= JUTGamePad::A;
+        }
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & consumed) != 0;
+    }
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
         if ((rapid & TMarioGamePad::B) && mPage != PAGE_ROOT) {
@@ -2468,6 +2553,10 @@ public:
                 mAchievement = wrap(mAchievement - 1, count);
             else if (rapid & TMarioGamePad::CSTICK_DOWN)
                 mAchievement = wrap(mAchievement + 1, count);
+            else if (rapid & TMarioGamePad::CSTICK_LEFT)
+                jumpAchievementTier(-1);
+            else if (rapid & TMarioGamePad::CSTICK_RIGHT)
+                jumpAchievementTier(+1);
             if (rapid & TMarioGamePad::A)
                 mPage = PAGE_ACHIEVEMENT_DETAIL;
             break;
@@ -2556,6 +2645,36 @@ private:
         return 0;
     }
 
+    void jumpAchievementTier(int direction) {
+        const Records::Category category = (Records::Category)mCategory;
+        int selectedTier = 0;
+        int tierFirst = 0;
+        for (int tier = 0; tier < Records::TIER_COUNT; tier++) {
+            const int count = Records::categoryTierAchievementCount(
+                category, (Records::Tier)tier);
+            if (count > 0 && mAchievement < tierFirst + count) {
+                selectedTier = tier;
+                break;
+            }
+            tierFirst += count;
+        }
+
+        for (int step = 1; step < Records::TIER_COUNT; step++) {
+            const int tier = wrap(selectedTier + direction * step,
+                                  Records::TIER_COUNT);
+            if (Records::categoryTierAchievementCount(
+                    category, (Records::Tier)tier) <= 0) {
+                continue;
+            }
+            mAchievement = 0;
+            for (int previous = 0; previous < tier; previous++) {
+                mAchievement += Records::categoryTierAchievementCount(
+                    category, (Records::Tier)previous);
+            }
+            return;
+        }
+    }
+
     void moveSelection(u32 rapid, int count) {
         if (rapid & TMarioGamePad::CSTICK_UP)
             mSel = wrap(mSel - 1, count);
@@ -2635,10 +2754,20 @@ private:
                          (RecordsPersistence::Scope)mScope),
                      mSel == 3, false, true);
         ry += ROW_H;
-        drawValueRow(menu, x, ry, w, "Unlock popup & chime",
+        drawValueRow(menu, x, ry, w, "Unlock popup and chime",
                      gSettings.valueLabel(SETTING_ACHIEVEMENT_NOTIFICATIONS),
                      mSel == 4, false, true);
-        menu->drawText("Moonshine V2.1.1",
+        const char *help = mSel == 0
+            ? "Browse every achievement and its unlock requirements."
+            : mSel == 1
+                ? "View overall play, attempt, PB and ghost statistics."
+                : mSel == 2
+                    ? "View time and completion statistics for each world."
+                    : mSel == 3
+                        ? "Switch Records between this region and all regions."
+                        : "Shows a popup and chime when an achievement unlocks.";
+        drawHelpLine(menu, x, y, w, h - 52, help);
+        menu->drawText("Moonshine V2.2.0",
                        x + 4, y + h - 44, FOOT_SZ, FOOT_SZ, cRowDim());
         menu->drawText(storageStatus(), x + 4, y + h - 24,
                        FOOT_SZ, FOOT_SZ,
@@ -2730,7 +2859,8 @@ private:
             }
         }
         drawScrollHints(menu, x, listY, w, listH, start, end, rows);
-        menu->drawText(SUSAMUNE_GLYPH_A " Details    "
+        menu->drawText(SUSAMUNE_GLYPH_C " L/R Tier   "
+                       SUSAMUNE_GLYPH_A " Details   "
                        SUSAMUNE_GLYPH_B " Back",
                        x + 4, y + h - FOOT_SZ, FOOT_SZ, FOOT_SZ, cFooter());
     }
@@ -2936,6 +3066,9 @@ class WarpPresetsTab : public MenuTab {
 public:
     WarpPresetsTab() : mSel(0) {}
     const char *title() const override { return "Warps"; }
+    bool suppressesBinds() const override {
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
@@ -2977,6 +3110,9 @@ class WarpStagesTab : public MenuTab {
 public:
     WarpStagesTab() : mArea(0), mEpisode(0) {}
     const char *title() const override { return "Stages"; }
+    bool suppressesBinds() const override {
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         const u32 rapid = menu->navigationInput(pad);
@@ -3024,6 +3160,98 @@ private:
 #endif
 
 // ---------------------------------------------------------------------
+// PB Safety
+// ---------------------------------------------------------------------
+class PBSafetyTab final : public MenuTab {
+public:
+    PBSafetyTab() : mSel(0) {}
+
+    const char *title() const override { return "PB Safety"; }
+    const char *summary() const override {
+        return "Find and fix every setting that can stop an IL PB.";
+    }
+    int rootAlertCount() const override {
+        return gSettings.ilPbBlockerCount();
+    }
+    bool suppressesBinds() const override {
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
+
+    void update(Menu *menu, TMarioGamePad *pad) override {
+        const int count = Settings::ilPbSettingCount();
+        const u32 rapid = menu->navigationInput(pad);
+        if (rapid & TMarioGamePad::CSTICK_UP)
+            mSel = (u8)wrap(mSel - 1, count);
+        else if (rapid & TMarioGamePad::CSTICK_DOWN)
+            mSel = (u8)wrap(mSel + 1, count);
+
+        if (rapid & TMarioGamePad::X) {
+            int fixed = 0;
+            bool restart = false;
+            for (int i = 0; i < count; i++) {
+                const SettingId id = Settings::ilPbSettingAt(i);
+                if (!gSettings.blocksIlPb(id)) continue;
+                restart |= Settings::invalidatesIlAttempt(id);
+                gSettings.set(id, Settings::ilPbSafeValue(id));
+                fixed++;
+            }
+            menu->toast(!fixed ? "PB settings already safe"
+                        : restart ? "PB settings fixed - restart the IL"
+                                  : "PB settings fixed");
+        } else if (rapid & TMarioGamePad::A) {
+            const SettingId id = Settings::ilPbSettingAt(mSel);
+            if (gSettings.blocksIlPb(id)) {
+                gSettings.set(id, Settings::ilPbSafeValue(id));
+                menu->toast(Settings::invalidatesIlAttempt(id)
+                                ? "PB setting fixed - restart the IL"
+                                : "PB setting fixed");
+            } else {
+                menu->toast("Setting is already PB-safe");
+            }
+        }
+    }
+
+    void draw(Menu *menu, int x, int y, int w, int h) override {
+        const int count = Settings::ilPbSettingCount();
+        const int footerH = ROW_H;
+        const int listH = h - HELP_H - footerH;
+        const int maxRows = listH / ROW_H;
+        const int start = listScrollStart(mSel, count, maxRows);
+        int end = start + maxRows;
+        if (end > count) end = count;
+        int ry = y;
+        for (int i = start; i < end; i++, ry += ROW_H) {
+            const SettingId id = Settings::ilPbSettingAt(i);
+            const bool blocked = gSettings.blocksIlPb(id);
+            char value[32];
+            snprintf(value, sizeof(value), "%s - %s",
+                     gSettings.valueLabel(id), blocked ? "PB OFF" : "Safe");
+            drawValueRowColored(menu, x, ry, w, Settings::name(id), value,
+                                i == mSel, false, false,
+                                blocked ? col(255, 72, 72, 255) : cValue());
+        }
+        drawScrollHints(menu, x, y, w, listH, start, end, count);
+        const SettingId selected = Settings::ilPbSettingAt(mSel);
+        const char *help = !gSettings.blocksIlPb(selected)
+            ? "This setting is PB-safe."
+            : selected == SETTING_ILING_RECORDING
+                  ? "PB recording is off; other Records remain eligible."
+                  : "This setting invalidates an active IL attempt.";
+        drawHelpLine(menu, x, y, w, h - footerH, help);
+        menu->drawText(SUSAMUNE_GLYPH_A " Fix   " SUSAMUNE_GLYPH_X
+                       " Fix all",
+                       x + 4, y + h - FOOT_SZ,
+                       FOOT_SZ, FOOT_SZ, cFooter());
+    }
+
+private:
+    u8 mSel;
+};
+
+static_assert(sizeof(PBSafetyTab) <= 8, "PB Safety tab grew unexpectedly");
+
+// ---------------------------------------------------------------------
 // Category settings tab (generic settings renderer)
 //
 // Renders every setting tagged with `mCat` -- one tab per SettingCategory.
@@ -3034,72 +3262,337 @@ private:
 namespace {
 
 const char kCategoryTitles[] =
-    "Gameplay\0Savestate\0Practice\0Cosmetics\0Display\0Timer\0Shined";
+    "Gameplay and QoL\0Savestates\0Practice tools\0Appearance\0"
+    "HUD and displays\0Timer and splits\0RNG controls\0Shined";
 
 enum CategoryTitleOffset {
     TITLE_QOL       = 0,
-    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay"),
-    TITLE_MISC      = TITLE_SAVESTATE + sizeof("Savestate"),
-    TITLE_COSMETIC  = TITLE_MISC + sizeof("Practice"),
-    TITLE_UI        = TITLE_COSMETIC + sizeof("Cosmetics"),
-    TITLE_TIMER     = TITLE_UI + sizeof("Display"),
-    TITLE_STARRED   = TITLE_TIMER + sizeof("Timer"),
+    TITLE_SAVESTATE = TITLE_QOL + sizeof("Gameplay and QoL"),
+    TITLE_MISC      = TITLE_SAVESTATE + sizeof("Savestates"),
+    TITLE_COSMETIC  = TITLE_MISC + sizeof("Practice tools"),
+    TITLE_UI        = TITLE_COSMETIC + sizeof("Appearance"),
+    TITLE_TIMER     = TITLE_UI + sizeof("HUD and displays"),
+    TITLE_RNG       = TITLE_TIMER + sizeof("Timer and splits"),
+    TITLE_STARRED   = TITLE_RNG + sizeof("RNG controls"),
 };
 
-static_assert(sizeof(kCategoryTitles) == 59, "category title offsets changed");
+static_assert(TITLE_STARRED + sizeof("Shined") == sizeof(kCategoryTitles),
+              "category title offsets changed");
 static_assert(SETTING_COUNT <= 0x100, "setting ids no longer fit in a byte");
 static_assert(SETTING_CAT_COUNT <= 0x100, "setting categories no longer fit in a byte");
 const u8 kStarredCategory = SETTING_CAT_COUNT;
+const u8 kRngCategory = SETTING_CAT_COUNT + 1;
+
+struct SettingPage {
+    const char *name;
+    const char *help;
+    const u8 *ids;
+    u8 count;
+};
+
+const u8 kGameplayCoreSettings[] = {
+    SETTING_FAST_TEXT,
+    SETTING_INFINITE_LIVES,
+    SETTING_INFINITE_JUICE,
+    SETTING_FREE_PAUSE,
+    SETTING_EXIT_AREA_EVERYWHERE,
+};
+const u8 kGameplaySkipSettings[] = {
+    SETTING_FMV_SKIPS,
+    SETTING_INTRO_SKIP,
+    SETTING_UNLOCK_YOSHI,
+    SETTING_UNLOCK_NOZZLES,
+    SETTING_RESPAWN_SHINES,
+};
+const u8 kGameplayWorldSettings[] = {
+    SETTING_FLUDD_SECRETS,
+    SETTING_AREA_LOCK,
+    SETTING_DISABLE_BLUE_COIN,
+    SETTING_FAST_PIANTISSIMO,
+    SETTING_DISABLE_THIRD_CHOMPLET_AGGRO,
+    SETTING_YOSHI_NOZZLE_SAVE_PROMPT,
+    SETTING_DISABLE_RETAIL_PAUSE,
+};
+const SettingPage kGameplayPages[] = {
+    {"General gameplay", "Everyday speed and convenience options.",
+     kGameplayCoreSettings, sizeof(kGameplayCoreSettings)},
+    {"Skips and unlocks", "Skip downtime or unlock route requirements.",
+     kGameplaySkipSettings, sizeof(kGameplaySkipSettings)},
+    {"World rules", "Change how stages and their objects behave.",
+     kGameplayWorldSettings, sizeof(kGameplayWorldSettings)},
+};
+
+const u8 kTimerDisplaySettings[] = {
+    SETTING_TIMER_SUNSHINE_VISIBILITY,
+    SETTING_TIMER_QFT_VISIBILITY,
+    SETTING_TIMER_SECTIONS,
+    SETTING_LEVEL_SPLITS,
+};
+const u8 kTimerFreezeSettings[] = {
+    SETTING_TIMER_FREEZE_DURATION,
+    SETTING_TIMER_FREEZE_YELLOW_COIN,
+    SETTING_TIMER_FREEZE_RED_COIN,
+    SETTING_TIMER_FREEZE_BLUE_COIN,
+    SETTING_TIMER_FREEZE_ITEM,
+    SETTING_TIMER_FREEZE_TAKE,
+    SETTING_TIMER_FREEZE_DROP,
+    SETTING_TIMER_FREEZE_PUT,
+    SETTING_TIMER_FREEZE_JUMP,
+    SETTING_TIMER_FREEZE_DOUBLE_JUMP,
+    SETTING_TIMER_FREEZE_TRIPLE_JUMP,
+    SETTING_TIMER_FREEZE_SPIN_JUMP,
+    SETTING_TIMER_FREEZE_DIVE,
+    SETTING_TIMER_FREEZE_DIVE_ROLLOUT,
+    SETTING_TIMER_FREEZE_DIVE_GETUP,
+    SETTING_TIMER_FREEZE_LEDGE_GRAB,
+    SETTING_TIMER_FREEZE_WALL_KICK,
+    SETTING_TIMER_FREEZE_ROPE_JUMP,
+    SETTING_TIMER_FREEZE_BOUNCE,
+    SETTING_TIMER_FREEZE_MOVING_PLATFORM,
+    SETTING_TIMER_FREEZE_AIRGRAB,
+    SETTING_TIMER_FREEZE_TALK,
+    SETTING_TIMER_FREEZE_DEMO,
+    SETTING_TIMER_FREEZE_CLEANED,
+    SETTING_TIMER_FREEZE_BOWSER,
+    SETTING_TIMER_FREEZE_PETEY_WAKEUP,
+    SETTING_TIMER_FREEZE_EEL_ACTIVATE,
+    SETTING_TIMER_FREEZE_EEL_TOOTH,
+    SETTING_TIMER_FREEZE_YOSHI,
+};
+const SettingPage kTimerPages[] = {
+    {"Timer and splits", "Choose the timers, history and split overlays shown.",
+     kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
+    {"QFT freezes", "Choose which actions briefly freeze the QFT display.",
+     kTimerFreezeSettings, sizeof(kTimerFreezeSettings)},
+};
+
+const u8 kRngGeneralSettings[] = {
+    SETTING_PATTERN_SELECTOR,
+    SETTING_ANY_FRUIT_YOSHI,
+};
+const u8 kRngBossSettings[] = {
+    SETTING_KING_BOO_ALWAYS_FRUIT,
+    SETTING_PETEY_NO_TORNADO,
+    SETTING_PETEY_ROUTE,
+};
+const u8 kRngRiccoSettings[] = {
+    SETTING_RICCO_CRANE_SPEED,
+    SETTING_RICCO_FRUIT_MACHINE,
+};
+const u8 kRngCourseSettings[] = {
+    SETTING_GELATO_RED_COIN_FISH_PATTERN,
+    SETTING_GELATO_BLUE_BIRD_PATTERN,
+};
+const SettingPage kRngPages[] = {
+    {"General patterns", "General-purpose deterministic practice helpers.",
+     kRngGeneralSettings, sizeof(kRngGeneralSettings)},
+    {"Boss fights", "Force the supported Petey and King Boo outcomes.",
+     kRngBossSettings, sizeof(kRngBossSettings)},
+    {"Ricco Harbor", "Control Ricco's crane and casino fruit machine.",
+     kRngRiccoSettings, sizeof(kRngRiccoSettings)},
+    {"Birds and fish (testing)", "Experimental repeatable course patterns.",
+     kRngCourseSettings, sizeof(kRngCourseSettings)},
+};
+
+const u8 kDisplayMovementSettings[] = {
+    SETTING_WALLKICK_DISPLAY,
+    SETTING_ROLLOUT_DISPLAY,
+    SETTING_DUST_DISPLAY,
+};
+const u8 kDisplayPracticeSettings[] = {
+    SETTING_PINNA_HIDDEN_ITEMS,
+    SETTING_HIDDEN_ITEM_LABELS,
+    SETTING_ENEMY_HURTBOXES,
+    SETTING_HURTBOX_TARGET,
+    SETTING_RICCO_RACE_CHECKPOINTS,
+};
+const u8 kDisplayOtherSettings[] = {
+    SETTING_SHOW_BGM_SLOTS,
+    SETTING_RESTART_QUEUED_FEEDBACK,
+};
+const SettingPage kDisplayPages[] = {
+    {"Movement displays", "Frame feedback for movement practice.",
+     kDisplayMovementSettings,
+     sizeof(kDisplayMovementSettings)},
+    {"Practice visuals", "Reveal practice-only objects, volumes and routes.",
+     kDisplayPracticeSettings, sizeof(kDisplayPracticeSettings)},
+    {"Other HUD", "Small status messages and diagnostic counters.",
+     kDisplayOtherSettings, sizeof(kDisplayOtherSettings)},
+};
+
+const u8 kAppearanceMarioSettings[] = {
+    SETTING_SHINE_OUTFIT,
+    SETTING_HELMET_APPEARANCE,
+    SETTING_CAP_APPEARANCE,
+    SETTING_SHADES_APPEARANCE,
+    SETTING_SHINE_SHIRT_APPEARANCE,
+};
+const u8 kAppearanceWorldSettings[] = {
+    SETTING_MUTE_BGM,
+    SETTING_REPLACE_EPISODE_NAMES,
+    SETTING_SHINY_SHINES,
+    SETTING_VISIBLE_GOOP,
+};
+const SettingPage kAppearancePages[] = {
+    {"Mario appearance", "Choose Mario's optional costume pieces.",
+     kAppearanceMarioSettings,
+     sizeof(kAppearanceMarioSettings)},
+    {"World and audio", "Cosmetic stage, Shine and music changes.",
+     kAppearanceWorldSettings,
+     sizeof(kAppearanceWorldSettings)},
+};
 
 const u8 kSettingSectionStarts[] = {
-    SETTING_FAST_TEXT,
-    SETTING_FMV_SKIPS,
-    SETTING_FREE_PAUSE,
-    SETTING_YOSHI_NOZZLE_SAVE_PROMPT,
     SETTING_NOZZLE_LOCK,
+    SETTING_DISABLE_Z_MENU,
     SETTING_ATTEMPT_COUNTER,
     SETTING_FORCE_BOX_GAME,
-    SETTING_MUTE_BGM,
-    SETTING_VISIBLE_GOOP,
-    SETTING_SHOW_BGM_SLOTS,
-    SETTING_WALLKICK_DISPLAY,
-    SETTING_TIMER_SUNSHINE_VISIBILITY,
-    SETTING_TIMER_FREEZE_DURATION,
-    SETTING_TIMER_SECTIONS,
     SETTING_SAVE_RNG_STATE,
     SETTING_SAVESTATE_FEEDBACK,
 };
 const char kSettingSectionNames[] =
-    "GENERAL\0SKIPS & UNLOCKS\0WORLD RULES\0SAVE PROMPTS\0"
-    "LEVEL RULES\0PRACTICE TOOLS\0BOX GAMES\0PRESENTATION\0WORLD\0"
-    "DIAGNOSTICS\0PRACTICE FEEDBACK\0DISPLAY\0FREEZE EVENTS\0"
-    "SECTION HISTORY\0STATE\0FEEDBACK";
+    "LEVEL RULES\0MENU CONTROLS\0COUNTERS\0BOX GAME\0STATE\0FEEDBACK";
+
+const char *settingHelp(SettingId id) {
+    if ((id >= SETTING_TIMER_FREEZE_YELLOW_COIN &&
+         id <= SETTING_TIMER_FREEZE_BOUNCE) ||
+        (id >= SETTING_TIMER_FREEZE_JUMP &&
+         id <= SETTING_TIMER_FREEZE_EEL_TOOTH) ||
+        id == SETTING_TIMER_FREEZE_DIVE_ROLLOUT ||
+        id == SETTING_TIMER_FREEZE_DIVE_GETUP ||
+        id == SETTING_TIMER_FREEZE_MOVING_PLATFORM ||
+        id == SETTING_TIMER_FREEZE_AIRGRAB) {
+        return "Freezes the QFT display when this event occurs.";
+    }
+
+    switch (id) {
+    case SETTING_FAST_TEXT: return "Speeds up dialogue and message boxes.";
+    case SETTING_INFINITE_LIVES: return "Prevents Mario's life count from dropping.";
+    case SETTING_INFINITE_JUICE: return "Prevents Yoshi's juice meter from draining.";
+    case SETTING_FREE_PAUSE: return "Allows pausing during normally locked moments.";
+    case SETTING_EXIT_AREA_EVERYWHERE: return "Allows Exit Area wherever pausing is available.";
+    case SETTING_FMV_SKIPS: return "Skips supported pre-rendered movies.";
+    case SETTING_INTRO_SKIP: return "Skips the boot logos on the next launch.";
+    case SETTING_UNLOCK_YOSHI: return "Makes Yoshi available without story progression.";
+    case SETTING_UNLOCK_NOZZLES: return "Makes Rocket and Turbo boxes available.";
+    case SETTING_RESPAWN_SHINES: return "Respawns one-time Shines for repeat practice.";
+    case SETTING_FLUDD_SECRETS: return "Controls when FLUDD is removed in secret stages.";
+    case SETTING_AREA_LOCK: return "Turns any stage exit into a restart of that area.";
+    case SETTING_DISABLE_BLUE_COIN: return "Stops blue coins setting their collected flag.";
+    case SETTING_FAST_PIANTISSIMO: return "Forces a Piantissimo race speed preset.";
+    case SETTING_DISABLE_THIRD_CHOMPLET_AGGRO: return "Stops the third Chomplet targeting Mario early.";
+    case SETTING_YOSHI_NOZZLE_SAVE_PROMPT: return "Shows a warning before Yoshi or nozzle progress saves.";
+    case SETTING_DISABLE_RETAIL_PAUSE: return "Uses only Moonshine's pause handling.";
+    case SETTING_SAVE_RNG_STATE: return "Includes the game RNG seed in practice savestates.";
+    case SETTING_SAVESTATE_FEEDBACK: return "Shows a status popup after saving or loading a state.";
+    case SETTING_NOZZLE_LOCK: return "Forces Mario to keep the selected FLUDD nozzle.";
+    case SETTING_FORCE_PLAZA_EVENTS: return "Keeps Delfino Plaza story events available.";
+    case SETTING_NEVER_PAUSE_IGT: return "Keeps in-game time running while paused.";
+    case SETTING_SHADOW_MARIO_HP: return "Shows Shadow Mario's remaining health.";
+    case SETTING_STAGE_INTRO_SKIP: return "Skips the stage-opening camera sequence.";
+    case SETTING_DEATHLESS_BLOOPER: return "Prevents Blooper surfing crashes from killing Mario.";
+    case SETTING_NO_SHINE_ANIM: return "Skips the Shine-get animation.";
+    case SETTING_FRUIT_NEVER_TIMEOUT: return "Stops loose fruit disappearing over time.";
+    case SETTING_DISABLE_Z_MENU: return "Stops Z opening the retail debug-style menu.";
+    case SETTING_DISABLE_WARPS: return "Disables Moonshine's quick stage warps.";
+    case SETTING_ATTEMPT_COUNTER: return "Tracks and displays attempts for the current practice.";
+    case SETTING_ATTEMPT_IN_STAGE_CONTROLS: return "Allows attempt-count binds while inside a stage.";
+    case SETTING_FORCE_BOX_GAME: return "Forces a selected Delfino crate-game layout.";
+    case SETTING_MUTE_BGM: return "Mutes background music without muting sound effects.";
+    case SETTING_REPLACE_EPISODE_NAMES: return "Shows internal IDs instead of episode names.";
+    case SETTING_SHINE_OUTFIT: return "Uses Mario's Shine celebration outfit.";
+    case SETTING_SHINY_SHINES: return "Adds a stronger gleam to Shine Sprites.";
+    case SETTING_VISIBLE_GOOP: return "Makes normally hidden goop easier to see.";
+    case SETTING_HELMET_APPEARANCE: return "Controls when Mario's helmet is visible.";
+    case SETTING_CAP_APPEARANCE: return "Controls when Mario's cap is visible.";
+    case SETTING_SHADES_APPEARANCE: return "Controls when Mario's sunglasses are visible.";
+    case SETTING_SHINE_SHIRT_APPEARANCE: return "Controls when Mario's Shine shirt is visible.";
+    case SETTING_TIMER_SUNSHINE_VISIBILITY: return "Chooses when the main Sunshine timer is shown.";
+    case SETTING_TIMER_QFT_VISIBILITY: return "Chooses when the bottom-left QFT is shown.";
+    case SETTING_TIMER_FREEZE_DURATION: return "Sets how long event-triggered QFT freezes remain.";
+    case SETTING_TIMER_SECTIONS: return "Shows the recent QFT section history.";
+    case SETTING_LEVEL_SPLITS: return "Shows route splits during supported ILs.";
+    case SETTING_PATTERN_SELECTOR: return "Enables repeatable patterns for supported practice.";
+    case SETTING_ILING_FANFARE: return "Plays a fanfare when an IL personal best is accepted.";
+    case SETTING_ILING_RECENT: return "Shows a short history of recently completed ILs.";
+    case SETTING_ILING_RECORDING: return "Allows completed ILs to update their saved PB.";
+    case SETTING_ILING_POPUP: return "Shows a popup when an IL PB is accepted.";
+    case SETTING_ILING_SHORT_NAMES: return "Uses compact route names in the recent-IL display.";
+    case SETTING_ANY_FRUIT_YOSHI: return "Lets any fruit colour open a Yoshi egg.";
+    case SETTING_KING_BOO_ALWAYS_FRUIT: return "Forces King Boo's valid fruit and no-fruit cycle.";
+    case SETTING_PETEY_NO_TORNADO: return "Prevents Petey using his tornado attack.";
+    case SETTING_PETEY_ROUTE: return "Forces Petey's N1, S1, S2, S3 flight route.";
+    case SETTING_RICCO_CRANE_SPEED: return "Randomises the crane within the selected speed band.";
+    case SETTING_RICCO_FRUIT_MACHINE: return "Forces the Ricco fruit machine to give durians.";
+    case SETTING_GELATO_RED_COIN_FISH_PATTERN: return "Selects a repeatable Gelato 6 fish pattern.";
+    case SETTING_GELATO_BLUE_BIRD_PATTERN: return "Selects a repeatable blue-bird pattern.";
+    case SETTING_WALLKICK_DISPLAY: return "Shows the timing of Mario's last wall kick.";
+    case SETTING_ROLLOUT_DISPLAY: return "Shows the effective A-hold frames of a rollout.";
+    case SETTING_DUST_DISPLAY: return "Shows frames from landing until the rollout input.";
+    case SETTING_SHOW_BGM_SLOTS: return "Shows free music slots for audio diagnostics.";
+    case SETTING_RESTART_QUEUED_FEEDBACK: return "Shows when a restart has been queued.";
+    case SETTING_PINNA_HIDDEN_ITEMS: return "Reveals spray-hidden fruit and coin locations globally.";
+    case SETTING_HIDDEN_ITEM_LABELS: return "Adds Fruit and Coin names to hidden-item markers.";
+    case SETTING_ENEMY_HURTBOXES: return "Chooses how enemy damage volumes are drawn.";
+    case SETTING_HURTBOX_TARGET: return "Shows all enemies or only Eely's teeth.";
+    case SETTING_RICCO_RACE_CHECKPOINTS: return "Reveals the ordered checkpoints used by the Ricco race.";
+    default: return "Changes this option for practice or presentation.";
+    }
+}
 
 }  // namespace
 
 class CategorySettingsTab : public MenuTab {
 public:
     CategorySettingsTab(u8 titleOffset, u8 cat)
-        : mSel(0), mCat(cat), mTitleOffset(titleOffset), mResetConfirm(0) {}
+        : mSel(0), mCat(cat), mTitleOffset(titleOffset), mMode(0) {}
 
     const char *title() const override { return kCategoryTitles + mTitleOffset; }
-    bool favoriteHint() const override { return true; }
+    const char *summary() const override {
+        if (isStarred()) return "Your favourite settings in one quick list.";
+        if (isGameplay()) return "Core gameplay rules, skips and unlocks.";
+        if (isTimer()) return "Timer visibility, splits and QFT freezes.";
+        if (isRng()) return "Repeatable boss, object and course outcomes.";
+        if (isDisplay()) return "Movement feedback and practice overlays.";
+        if (isAppearance()) return "Mario, world and audio cosmetics.";
+        if (mCat == SETTING_CAT_SAVESTATE)
+            return "Savestate behaviour and feedback.";
+        return "Practice helpers, counters and menu rules.";
+    }
+    bool favoriteHint() const override {
+        if (pageRoot()) return false;
+        u8 ids[SETTING_COUNT];
+        const int settings = buildList(ids);
+        return mSel < settings &&
+               Settings::favoriteable((SettingId)ids[mSel]);
+    }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
+    bool back() override {
+        if (!hasPages() || !mMode) return false;
+        mSel = mMode - 1;
+        mMode = 0;
+        return true;
+    }
     bool grabsInput() const override {
-        return mResetConfirm ||
+        return resetConfirm() ||
                (hasVisualEditor() && gCreationExtras.editing());
     }
     bool fullScreen() const override { return grabsInput(); }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
-        if (mResetConfirm) {
+        if (resetConfirm()) {
             const u32 rapid = pad->mButtons.mRapidInput;
             if (rapid & TMarioGamePad::B) {
-                mResetConfirm = 0;
+                mMode = 0;
             } else if (rapid & TMarioGamePad::A) {
-                if (mResetConfirm & 1) mResetConfirm++;
+                if (mMode & 1) mMode++;
                 else {
-                    const bool records = mResetConfirm == 4;
-                    mResetConfirm = 0;
+                    const bool records = mMode == 4;
+                    mMode = 0;
                     if (records) {
                         RecordsPersistence::resetAll();
                         menu->toast("Records reset");
@@ -3112,6 +3605,10 @@ public:
         }
         if (hasVisualEditor() && gCreationExtras.editing()) {
             gCreationExtras.updateEditor(pad);
+            return;
+        }
+        if (pageRoot()) {
+            updatePageRoot(menu, pad);
             return;
         }
         u8  ids[SETTING_COUNT];
@@ -3139,15 +3636,19 @@ public:
             if (rapid & TMarioGamePad::A) {
                 if (hasFeedbackEditor())
                     gCreationExtras.beginSavestateFeedbackEditor();
-                else if (hasWallkickEditor())
-                    gCreationExtras.beginWallkickEditor();
+                else if (hasMovementEditors()) {
+                    const int editor = mSel - settings;
+                    if (editor == 0) gCreationExtras.beginWallkickEditor();
+                    else if (editor == 1) gCreationExtras.beginRolloutEditor();
+                    else gCreationExtras.beginDustEditor();
+                }
                 else if (hasFactoryReset())
-                    mResetConfirm = mSel == settings ? 1 : 3;
+                    mMode = mSel == settings ? 1 : 3;
             }
             return;
         }
         SettingId id = (SettingId)ids[mSel];
-        if (rapid & TMarioGamePad::X) {
+        if ((rapid & TMarioGamePad::X) && Settings::favoriteable(id)) {
             gSettings.toggleFavorite(id);
             menu->toast(gSettings.favorite(id)
                             ? "Added to Shined"
@@ -3159,9 +3660,9 @@ public:
     }
 
     void draw(Menu *menu, int x, int y, int w, int h) override {
-        if (mResetConfirm) {
-            const bool records = mResetConfirm >= 3;
-            const bool first = mResetConfirm & 1;
+        if (resetConfirm()) {
+            const bool records = mMode >= 3;
+            const bool first = mMode & 1;
             const char *title = records
                 ? (first ? "Reset all Records progress?"
                          : "Reset Records now?")
@@ -3189,6 +3690,10 @@ public:
             gCreationExtras.drawEditor(menu);
             return;
         }
+        if (pageRoot()) {
+            drawPageRoot(menu, x, y, w, h);
+            return;
+        }
         u8  ids[SETTING_COUNT];
         const int settings = buildList(ids);
         const int n = settings + extraRows();
@@ -3200,9 +3705,11 @@ public:
                                y + ROW_H, FOOT_SZ, FOOT_SZ, cFooter());
             return;
         }
+        const char *help = selectionHelp(ids, settings);
+        const int listH = help ? h - HELP_H : h;
         const u32 metrics = displayMetrics(ids, settings, n);
         const int rows = metrics >> 16;
-        const int maxRows = h / ROW_H;
+        const int maxRows = listH / ROW_H;
         const int start = listScrollStart(
             (u16)metrics, rows, maxRows);
         int end = start + maxRows;
@@ -3232,44 +3739,161 @@ public:
                 val = gSettings.valueLabel(id);
             } else {
                 name = hasFeedbackEditor() ? "Feedback display"
-                     : hasWallkickEditor() ? "Wallkick display style"
+                     : hasMovementEditors()
+                           ? movementEditorName(i - settings)
                      : i == settings ? "Factory reset"
                                      : "Reset Records";
                 val = hasVisualEditor() ? "Edit" : "Reset";
             }
             const bool starred = i < settings &&
                 gSettings.favorite((SettingId)ids[i]);
-            drawValueRow(menu, x, ry, w, name, val, selected, starred, false);
+            const bool pbSetting = i < settings &&
+                Settings::affectsIlPb((SettingId)ids[i]);
+            const bool pbBlocked = pbSetting &&
+                gSettings.blocksIlPb((SettingId)ids[i]);
+            drawValueRowColored(
+                menu, x, ry, w, name, val, selected, starred, false,
+                pbBlocked ? col(255, 72, 72, 255) : cValue());
+            if (pbSetting) {
+                const char *tag = pbBlocked ? "PB OFF" : "PB";
+                const int valueX = x + w - Menu::textWidth(val, ROW_SZ) - 8;
+                const int tagSize = 10;
+                menu->drawText(tag,
+                    valueX - Menu::textWidth(tag, tagSize) - 10,
+                    ry + 2, tagSize, tagSize,
+                    pbBlocked ? col(255, 72, 72, 255) : cRowDim());
+            }
             ry += ROW_H;
             row++;
         }
     
-        drawScrollHints(menu, x, y, w, h, start, end, rows);
+        drawScrollHints(menu, x, y, w, listH, start, end, rows);
+        drawHelpLine(menu, x, y, w, h, help);
     }
 
 private:
     bool isStarred() const { return mCat == kStarredCategory; }
+    bool isGameplay() const { return mCat == SETTING_CAT_QOL; }
+    bool isTimer() const { return mCat == SETTING_CAT_TIMER; }
+    bool isRng() const { return mCat == kRngCategory; }
+    bool isDisplay() const { return mCat == SETTING_CAT_UI; }
+    bool isAppearance() const { return mCat == SETTING_CAT_COSMETIC; }
+    bool hasPages() const {
+        return isGameplay() || isTimer() || isRng() || isDisplay() ||
+               isAppearance();
+    }
+    bool pageRoot() const { return hasPages() && !mMode; }
+    bool resetConfirm() const { return hasFactoryReset() && mMode; }
     bool hasFeedbackEditor() const {
         return mCat == SETTING_CAT_SAVESTATE;
     }
-    bool hasWallkickEditor() const { return mCat == SETTING_CAT_UI; }
+    bool hasMovementEditors() const {
+        return isDisplay() && (!hasPages() || mMode == 1);
+    }
     bool hasVisualEditor() const {
-        return hasFeedbackEditor() || hasWallkickEditor();
+        return hasFeedbackEditor() || hasMovementEditors();
     }
     bool hasFactoryReset() const { return mCat == SETTING_CAT_MISC; }
     int extraRows() const {
-        return hasFactoryReset() ? 2 : hasVisualEditor() ? 1 : 0;
+        return hasFactoryReset() ? 2 : hasMovementEditors() ? 3
+             : hasFeedbackEditor() ? 1 : 0;
+    }
+
+    const SettingPage *pages() const {
+        if (isGameplay()) return kGameplayPages;
+        if (isTimer()) return kTimerPages;
+        if (isRng()) return kRngPages;
+        return isDisplay() ? kDisplayPages : kAppearancePages;
+    }
+    int pageCount() const {
+        if (isGameplay())
+            return sizeof(kGameplayPages) / sizeof(kGameplayPages[0]);
+        if (isTimer()) return sizeof(kTimerPages) / sizeof(kTimerPages[0]);
+        if (isRng()) return sizeof(kRngPages) / sizeof(kRngPages[0]);
+        if (isDisplay())
+            return sizeof(kDisplayPages) / sizeof(kDisplayPages[0]);
+        return sizeof(kAppearancePages) / sizeof(kAppearancePages[0]);
+    }
+    const SettingPage &currentPage() const { return pages()[mMode - 1]; }
+
+    const char *movementEditorName(int editor) const {
+        return editor == 0 ? "Wallkick display style"
+             : editor == 1 ? "Rollout display style"
+                           : "Dust display style";
+    }
+
+    const char *pageRootSection(int page) const {
+        if (isTimer()) return page == 0 ? "TIMING AND SPLITS" : "QFT";
+        if (isRng()) {
+            if (page == 0) return "PRACTICE CODES";
+            if (page == 1) return "ASSISTED RNG";
+            return page == 2 ? "COURSE RNG" : "TESTING";
+        }
+        if (isGameplay()) {
+            if (page == 0) return "CORE";
+            return page == 1 ? "ROUTE SETUP" : "WORLD";
+        }
+        if (isDisplay()) {
+            if (page == 0) return "MOVEMENT";
+            return page == 1 ? "PRACTICE VISUALS" : "GENERAL HUD";
+        }
+        return page == 0 ? "MARIO" : "WORLD AND AUDIO";
+    }
+
+    void updatePageRoot(Menu *menu, TMarioGamePad *pad) {
+        const int count = pageCount();
+        const u32 rapid = menu->navigationInput(pad);
+        if (rapid & TMarioGamePad::CSTICK_UP)
+            mSel = wrap(mSel - 1, count);
+        else if (rapid & TMarioGamePad::CSTICK_DOWN)
+            mSel = wrap(mSel + 1, count);
+        if (rapid & TMarioGamePad::A) {
+            mMode = mSel + 1;
+            mSel = 0;
+        }
+    }
+
+    void drawPageRoot(Menu *menu, int x, int y, int w, int h) const {
+        int ry = y;
+        for (int page = 0; page < pageCount(); page++) {
+            const char *section = pageRootSection(page);
+            if (section) {
+                drawSectionHeader(menu, x, ry, w, section);
+                ry += ROW_H;
+            }
+            drawValueRow(menu, x, ry, w, pages()[page].name, nullptr,
+                         page == mSel, false, true);
+            ry += ROW_H;
+        }
+        drawHelpLine(menu, x, y, w, h, pages()[mSel].help);
+    }
+
+    const char *selectionHelp(const u8 *ids, int settings) const {
+        if (mSel < settings) return settingHelp((SettingId)ids[mSel]);
+        if (hasFeedbackEditor()) return "Changes the savestate status popup layout.";
+        if (hasMovementEditors()) return "Changes this display's position, size and colours.";
+        return mSel == settings
+                   ? "Restores settings, binds and layouts to defaults."
+                   : "Clears Records progress without deleting IL PBs.";
     }
 
     int buildList(u8 *out) const {
+        if (hasPages()) {
+            if (!mMode) return 0;
+            const SettingPage &page = currentPage();
+            for (u8 i = 0; i < page.count; i++) out[i] = page.ids[i];
+            return page.count;
+        }
         int n = 0;
-        const int count = isStarred() ? SETTING_FAVORITES_0 : SETTING_COUNT;
+        const int count = SETTING_COUNT;
         for (int i = 0; i < count; i++) {
             const SettingId id = (SettingId)i;
-            if (isStarred()
-                    ? Settings::category(id) != SETTING_CAT_HIDDEN &&
+            const bool include = isStarred()
+                    ? Settings::favoriteable(id) &&
+                          Settings::category(id) != SETTING_CAT_HIDDEN &&
                           gSettings.favorite(id)
-                    : Settings::category(id) == (SettingCategory)mCat) {
+                    : Settings::category(id) == (SettingCategory)mCat;
+            if (include) {
                 out[n++] = (u8)i;
             }
         }
@@ -3279,6 +3903,18 @@ private:
     const char *sectionName(const u8 *ids, int settings, int logical) const {
         if (logical < settings) {
             if (isStarred()) return nullptr;
+            if (hasPages()) {
+                if (!isTimer())
+                    return logical == 0 ? currentPage().name : nullptr;
+                if (mMode == 1) {
+                    if (logical == 0) return "TIMER DISPLAY";
+                    return logical == 2 ? "HISTORY AND SPLITS" : nullptr;
+                }
+                if (logical == 0) return "DURATION";
+                if (logical == 1) return "COINS AND OBJECTS";
+                if (logical == 8) return "MOVEMENT";
+                return logical == 21 ? "EVENTS AND BOSSES" : nullptr;
+            }
             const SettingId id = (SettingId)ids[logical];
             for (u32 i = 0; i < sizeof(kSettingSectionStarts); i++) {
                 if (kSettingSectionStarts[i] == id)
@@ -3287,7 +3923,8 @@ private:
             return nullptr;
         }
         if (hasFeedbackEditor()) return "FEEDBACK STYLE";
-        if (hasWallkickEditor()) return "DISPLAY STYLE";
+        if (hasMovementEditors())
+            return logical == settings ? "DISPLAY STYLE" : nullptr;
         if (hasFactoryReset()) return logical == settings ? "RESET" : nullptr;
         return nullptr;
     }
@@ -3318,7 +3955,7 @@ private:
     u8 mSel;
     u8 mCat;
     u8 mTitleOffset;
-    u8 mResetConfirm;
+    u8 mMode;
 };
 
 static_assert(sizeof(CategorySettingsTab) == 8, "category tab must stay one slot");
@@ -3330,10 +3967,18 @@ class CreationTab final : public MenuTab {
 public:
     CreationTab() : mSel(ROW_QFT_EDITOR) {}
 
-    const char *title() const override { return "Creation"; }
+    const char *title() const override { return "Layout editor"; }
+    const char *summary() const override {
+        return "Move, resize and recolour Moonshine HUD elements.";
+    }
+    bool available() const override { return !rngControlInvalidatesIl(); }
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
                gMetadataDisplay.editing() || gCreationExtras.editing();
+    }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        return (JUTGamePad::mPadStatus[0].mButton & JUTGamePad::A) != 0;
     }
     bool fullScreen() const override { return grabsInput(); }
 
@@ -3388,9 +4033,9 @@ public:
         }
 
         const int hintY = y + h - FOOT_SZ;
-        h -= ROW_H;
+        const int listH = h - ROW_H - HELP_H;
         const int count = ROW_COUNT;
-        const int maxRows = h / ROW_H;
+        const int maxRows = listH / ROW_H;
         const int start = listScrollStart(mSel, count, maxRows);
         int end = start + maxRows;
         if (end > count) end = count;
@@ -3410,7 +4055,8 @@ public:
             }
             ry += ROW_H;
         }
-        drawScrollHints(menu, x, y, w, h, start, end, count);
+        drawScrollHints(menu, x, y, w, listH, start, end, count);
+        drawHelpLine(menu, x, y, w, h - ROW_H, rowHelp(mSel));
         menu->drawText(SUSAMUNE_GLYPH_A " Open" SUSAMUNE_GLYPH_SLASH
                        "Change   " SUSAMUNE_GLYPH_C " L"
                        SUSAMUNE_GLYPH_SLASH "R Section   Saved on close",
@@ -3547,6 +4193,58 @@ private:
         return gCreationExtras.menuRowValue(extraRow(row));
     }
 
+    const char *rowHelp(int row) const {
+        if (row == ROW_QFT_EDITOR)
+            return "Moves, resizes and recolours the compact QFT display.";
+        if (row == ROW_QFT_LEADING_ZERO)
+            return "Shows a leading zero before single-digit QFT values.";
+        if (row == ROW_SUNSHINE_TIMER_CHARACTERS)
+            return "Sets colours for the timer digits and separators.";
+        if (row == ROW_SUNSHINE_TIMER_STREAK)
+            return "Changes the colour streak behind the Sunshine timer.";
+        if (row == ROW_SUNSHINE_TIMER_LABEL)
+            return "Changes the TIME or TEMPO label colour.";
+        if (row == ROW_SUNSHINE_TIMER_LABEL_VISIBLE)
+            return "Shows or hides the TIME or TEMPO label.";
+        if (row >= ROW_INPUT_FIRST && row < ROW_INPUT_END) {
+            switch (inputRow(row)) {
+            case 0: return "Shows the controller overlay when Moonshine starts.";
+            case 1: return "Adds stick-only or full numeric input values.";
+            case 2: return "Chooses raw controller data or Mario-processed input.";
+            case 3: return "Places numeric values above, below or inside the pad.";
+            case 4: return "Moves, resizes and recolours the controller overlay.";
+            default: return "Restores the controller overlay's default layout.";
+            }
+        }
+        if (row >= ROW_METADATA_FIRST && row < ROW_METADATA_END) {
+            const int local = metadataRow(row);
+            if (local == 0) return "Shows the metadata overlay when Moonshine starts.";
+            if (local == 1) return "Chooses short, long or custom field labels.";
+            if (local >= 2 && local < 2 + MetadataDisplay::FIELD_COUNT)
+                return "Shows or hides this value in the metadata overlay.";
+            if (local == 2 + MetadataDisplay::FIELD_COUNT)
+                return "Stacks metadata vertically or lays it out in one row.";
+            if (local == 3 + MetadataDisplay::FIELD_COUNT)
+                return "Moves, resizes and recolours the metadata overlay.";
+            return "Restores the metadata overlay's default layout.";
+        }
+        const int local = extraRow(row);
+        if (local >= 1 && local <= 7)
+            return "Changes this part of the retail HUD's colour theme.";
+        if (local == 9 || local == 12 || local == 15)
+            return "Edits the custom word shown on the game HUD.";
+        if (local == 10 || local == 13 || local == 16)
+            return "Moves, resizes and recolours this custom HUD word.";
+        if (local == 11 || local == 14 || local == 17)
+            return "Shows or hides this custom HUD word.";
+        if (local == 19) return "Changes the mod menu's panel colour.";
+        if (local == 20) return "Moves and styles the achievement popup.";
+        if (local == 21) return "Moves and styles Moonshine status messages.";
+        if (local == 22) return "Moves and styles the IL PB popup.";
+        if (local == 23) return "Moves and styles the Stage Loader counter.";
+        return "Changes this HUD element's layout or appearance.";
+    }
+
     static int inputRow(int row) {
         const int local = row - ROW_INPUT_FIRST;
         if (local == 0) return 4;
@@ -3577,13 +4275,52 @@ private:
 // menu while it runs -- otherwise pressing L to record would switch tabs
 // and Y+Start would close the menu.
 // ---------------------------------------------------------------------
+namespace {
+
+const u8 kBindSectionStarts[] = {
+    BIND_REGRAB_OBJECT,
+    BIND_MENU_TOGGLE,
+    BIND_SAVESTATE_SAVE,
+    BIND_WARP_WHEEL,
+    BIND_TOGGLE_INPUT_DISPLAY,
+    BIND_ATTEMPT_SHOW,
+    BIND_POSITION_SAVE,
+};
+const char kBindSectionNames[] =
+    "ACTIONS\0MENU\0SAVESTATES\0WARPS AND RESTARTS\0DISPLAY\0ATTEMPT COUNTER\0POSITION";
+enum {
+    kBindSectionCount =
+        sizeof(kBindSectionStarts) / sizeof(kBindSectionStarts[0]),
+};
+static_assert(kBindSectionCount == 7,
+              "bind section metadata must be validated together");
+static_assert(BIND_REGRAB_OBJECT == 0 &&
+                  BIND_REGRAB_OBJECT < BIND_MENU_TOGGLE &&
+                  BIND_MENU_TOGGLE < BIND_SAVESTATE_SAVE &&
+                  BIND_SAVESTATE_SAVE < BIND_WARP_WHEEL &&
+                  BIND_WARP_WHEEL < BIND_TOGGLE_INPUT_DISPLAY &&
+                  BIND_TOGGLE_INPUT_DISPLAY < BIND_ATTEMPT_SHOW &&
+                  BIND_ATTEMPT_SHOW < BIND_POSITION_SAVE &&
+                  BIND_POSITION_SAVE < BIND_COUNT,
+              "bind section starts must be ordered and in bounds");
+
+}  // namespace
+
 class BindsTab : public MenuTab {
 public:
     BindsTab() : mSel(0) {}
 
-    const char *title() const override { return "Binds"; }
+    const char *title() const override { return "Button binds"; }
+    const char *summary() const override {
+        return "Choose the controller combo for each Moonshine action.";
+    }
 
     bool grabsInput() const override { return gBinds.recording(); }
+    bool suppressesBinds() const override {
+        if (grabsInput()) return true;
+        const u16 held = JUTGamePad::mPadStatus[0].mButton;
+        return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
+    }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
         if (gBinds.recording()) {
@@ -3602,6 +4339,10 @@ public:
             mSel = wrap(mSel - 1, BIND_COUNT);
         } else if (rapid & TMarioGamePad::CSTICK_DOWN) {
             mSel = wrap(mSel + 1, BIND_COUNT);
+        } else if (rapid & TMarioGamePad::CSTICK_LEFT) {
+            jumpSection(-1);
+        } else if (rapid & TMarioGamePad::CSTICK_RIGHT) {
+            jumpSection(+1);
         }
         if (rapid & TMarioGamePad::A) {
             gBinds.beginRecord((BindId)mSel);
@@ -3616,16 +4357,32 @@ public:
         const int hintY = y + h - FOOT_SZ;
         h -= ROW_H;
 
+        const u32 metrics = displayMetrics();
+        const int rows = metrics >> 16;
         int maxRows = h / ROW_H;
-        int start   = listScrollStart(mSel, BIND_COUNT, maxRows);
+        int start   = listScrollStart((u16)metrics, rows, maxRows);
         int end     = start + maxRows;
-        if (end > BIND_COUNT) {
-            end = BIND_COUNT;
+        if (end > rows) {
+            end = rows;
         }
 
         char text[kBindTextMax];
         int  ry = y;
-        for (int i = start; i < end; i++) {
+        int row = 0;
+        for (int i = 0; i < BIND_COUNT && row < end; i++) {
+            const char *section = sectionName(i);
+            if (section) {
+                if (row >= start) {
+                    drawSectionHeader(menu, x, ry, w, section);
+                    ry += ROW_H;
+                }
+                row++;
+                if (row >= end) break;
+            }
+            if (row < start) {
+                row++;
+                continue;
+            }
             BindId id       = (BindId)i;
             bool   selected = (i == mSel);
             if (selected) {
@@ -3651,9 +4408,10 @@ public:
             int vx = x + w - Menu::textWidth(val, ROW_SZ) - 8;
             menu->drawText(val, vx, ry, ROW_SZ, ROW_SZ, valCol);
             ry += ROW_H;
+            row++;
         }
 
-        drawScrollHints(menu, x, y, w, h, start, end, BIND_COUNT);
+        drawScrollHints(menu, x, y, w, h, start, end, rows);
 
         menu->drawText(gBinds.recording()
                            ? "Release a button to set, or " SUSAMUNE_GLYPH_C " to cancel"
@@ -3663,6 +4421,43 @@ public:
     }
 
 private:
+    const char *sectionName(int bind) const {
+        for (int i = 0; i < kBindSectionCount; i++) {
+            if (kBindSectionStarts[i] == bind)
+                return PackedText::at(kBindSectionNames, i);
+        }
+        return nullptr;
+    }
+
+    __attribute__((always_inline)) u32 displayMetrics() const {
+        int selectedRow = mSel;
+        for (int i = 0; i < kBindSectionCount; i++) {
+            if (kBindSectionStarts[i] <= mSel) selectedRow++;
+        }
+        return ((u32)(BIND_COUNT + kBindSectionCount) << 16) |
+               (u16)selectedRow;
+    }
+
+    void jumpSection(int direction) {
+        if (direction > 0) {
+            for (int i = 0; i < kBindSectionCount; i++) {
+                if (kBindSectionStarts[i] > mSel) {
+                    mSel = kBindSectionStarts[i];
+                    return;
+                }
+            }
+            mSel = kBindSectionStarts[0];
+        } else if (direction < 0) {
+            for (int i = kBindSectionCount - 1; i >= 0; i--) {
+                if (kBindSectionStarts[i] < mSel) {
+                    mSel = kBindSectionStarts[i];
+                    return;
+                }
+            }
+            mSel = kBindSectionStarts[kBindSectionCount - 1];
+        }
+    }
+
     int mSel;
 };
 
@@ -3765,7 +4560,7 @@ public:
         const int entries = ILing::count();
         const int listH = h - ROW_H;
         const int maxRows = listH / ROW_H;
-        const int rows = menuRowCount(entries);
+        const int rows = menuRowCount();
         const int start = listScrollStart(menuRowForSelection(mSel), rows,
                                           maxRows);
         int end = start + maxRows;
@@ -3870,11 +4665,14 @@ public:
         }
         row++;
 
-        for (int entry = 0; entry < entries && row < end; entry++) {
-            if (ILing::beginsGroup(entry)) {
+        for (int position = 0; position < entries && row < end;
+             position++) {
+            const int entry = ILing::menuEntryAt(position);
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (ILing::beginsMenuGroup(position)) {
                 if (row >= start) {
                     drawSectionHeader(menu, x, ry, w,
-                                      ILing::groupName(entry));
+                                      ILing::menuGroupName(position));
                     ry += ROW_H;
                 }
                 row++;
@@ -3967,17 +4765,52 @@ private:
     }
     bool isCatalogueRow() const { return mSel >= catalogueFirst(); }
     int queuePosition() const { return mSel - optionCount(); }
-    int catalogueEntry() const { return mSel - catalogueFirst(); }
+    bool catalogueIncludesEntry(int entry) const {
+        return !mStreaking || ILing::streakEntrySelectable(entry);
+    }
+    int catalogueCount() const {
+        if (!mStreaking) return ILing::count();
+        int count = 0;
+        for (int entry = 0; entry < ILing::count(); entry++) {
+            if (catalogueIncludesEntry(entry)) count++;
+        }
+        return count;
+    }
+    int catalogueEntryAt(int index) const {
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (index-- == 0) return entry;
+        }
+        return -1;
+    }
+    int catalogueIndexForEntry(int selected) const {
+        int index = 0;
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (entry == selected) return index;
+            index++;
+        }
+        return -1;
+    }
+    int catalogueEntry() const {
+        return catalogueEntryAt(mSel - catalogueFirst());
+    }
     int selectionCount() const {
-        return catalogueFirst() + ILing::count();
+        return catalogueFirst() + catalogueCount();
     }
 
     void activateOption(Menu *menu) {
         const Option option = selectedOption();
         if (option == OPTION_MODE) {
             mStreaking = !mStreaking;
-            if (mStreaking)
+            if (mStreaking) {
+                if (!ILing::streakEntrySelectable(mStreakEntry)) {
+                    mStreakEntry = catalogueEntryAt(0);
+                }
                 mTargetQf = StageTargets::get(mStreakEntry);
+            }
             mSel = OPTION_MODE;
             return;
         }
@@ -4079,20 +4912,24 @@ private:
 
     void jumpCatalogue(int direction) {
         const int entry = catalogueEntry();
-        int groupFirst = entry;
-        while (groupFirst > 0 && !ILing::beginsGroup(groupFirst)) groupFirst--;
-        const int destination = ILing::jumpGroup(entry, direction);
+        const int position = ILing::menuPositionOf(entry);
+        int groupFirst = position;
+        while (groupFirst > 0 && !ILing::beginsMenuGroup(groupFirst)) {
+            groupFirst--;
+        }
+        const int destination = ILing::jumpMenuGroup(position, direction);
         if ((direction < 0 && groupFirst == 0) ||
             (direction > 0 && destination == 0)) {
             mSel = OPTION_MODE;
             return;
         }
-        mSel = catalogueFirst() + destination;
+        mSel = catalogueFirst() + catalogueIndexForEntry(
+            ILing::menuEntryAt(destination));
     }
 
     void jumpFromOptions(int direction) {
         const int entry = direction > 0 ? 0 : ILing::jumpGroup(0, -1);
-        mSel = catalogueFirst() + entry;
+        mSel = catalogueFirst() + catalogueIndexForEntry(entry);
     }
 
     void beginTextEditor(Editor editor) {
@@ -4257,12 +5094,27 @@ private:
         return true;
     }
 
-    static int catalogueRowForEntry(int entry) {
-        int row = entry;
-        for (int i = 0; i <= entry; i++) {
-            if (ILing::beginsGroup(i)) row++;
+    int catalogueRowForEntry(int selected) const {
+        int row = 0;
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (ILing::beginsMenuGroup(position)) row++;
+            if (entry == selected) return row;
+            row++;
         }
         return row;
+    }
+
+    int catalogueRowCount() const {
+        int rows = 0;
+        for (int position = 0; position < ILing::count(); position++) {
+            const int entry = ILing::menuEntryAt(position);
+            if (!catalogueIncludesEntry(entry)) continue;
+            if (ILing::beginsMenuGroup(position)) rows++;
+            rows++;
+        }
+        return rows;
     }
 
     int catalogueBaseRow() const {
@@ -4275,8 +5127,8 @@ private:
         return row + 1;
     }
 
-    int menuRowCount(int entries) const {
-        return catalogueBaseRow() + catalogueRowForEntry(entries - 1) + 1;
+    int menuRowCount() const {
+        return catalogueBaseRow() + catalogueRowCount();
     }
 
     int menuRowForSelection(int selection) const {
@@ -4284,8 +5136,8 @@ private:
         if (!mStreaking && selection < catalogueFirst()) {
             return optionCount() + 1 + selection - optionCount();
         }
-        return catalogueBaseRow() +
-               catalogueRowForEntry(selection - catalogueFirst());
+        return catalogueBaseRow() + catalogueRowForEntry(
+            catalogueEntryAt(selection - catalogueFirst()));
     }
 
     int mSel;
@@ -4366,6 +5218,10 @@ public:
                 return;
             }
             if (mNavInput.update() & JUTGamePad::B) {
+                if (child->back()) {
+                    mNavInput.begin(JUTGamePad::B);
+                    return;
+                }
                 mPage = -1;
                 mNavInput.begin(JUTGamePad::A);
                 return;
@@ -4379,8 +5235,16 @@ public:
             mSel = (u8)wrap(mSel - 1, mCount);
         } else if (rapid & TMarioGamePad::CSTICK_DOWN) {
             mSel = (u8)wrap(mSel + 1, mCount);
+        } else if (rapid & TMarioGamePad::CSTICK_LEFT) {
+            jumpRootSection(-1);
+        } else if (rapid & TMarioGamePad::CSTICK_RIGHT) {
+            jumpRootSection(+1);
         }
         if (mNavInput.update() & JUTGamePad::A) {
+            if (!mChildren[mSel]->available()) {
+                menu->toast("Disable boss RNG controls first");
+                return;
+            }
             mPage = (s8)mSel;
             mNavInput.begin(JUTGamePad::B);
         }
@@ -4389,17 +5253,58 @@ public:
     void draw(Menu *menu, int x, int y, int w, int h) override {
         MenuTab *child = current();
         if (!child) {
-            int ry = y;
+            const char *help = mChildren[mSel]->summary();
+            const int listH = help ? h - HELP_H : h;
+            int rows = mCount;
+            int selectedRow = mSel;
             for (int i = 0; i < mCount; i++) {
+                if (!sectionName(i)) continue;
+                rows++;
+                if (i <= mSel) selectedRow++;
+            }
+            const int maxRows = listH / ROW_H;
+            const int start = listScrollStart(selectedRow, rows, maxRows);
+            int end = start + maxRows;
+            if (end > rows) end = rows;
+            int ry = y;
+            int row = 0;
+            for (int i = 0; i < mCount && row < end; i++) {
                 const char *section = sectionName(i);
                 if (section) {
-                    drawSectionHeader(menu, x, ry, w, section);
-                    ry += ROW_H;
+                    if (row >= start) {
+                        drawSectionHeader(menu, x, ry, w, section);
+                        ry += ROW_H;
+                    }
+                    row++;
+                    if (row >= end) break;
                 }
-                drawValueRow(menu, x, ry, w, mChildren[i]->title(), nullptr,
-                             i == mSel, false, true);
+                if (row < start) {
+                    row++;
+                    continue;
+                }
+                const bool available = mChildren[i]->available();
+                const int alertCount = available
+                    ? mChildren[i]->rootAlertCount() : -1;
+                char alert[20];
+                const char *value = available ? nullptr : "Disabled";
+                Color valueColor = cValue();
+                if (alertCount >= 0) {
+                    if (alertCount == 0) {
+                        value = "Ready";
+                    } else {
+                        snprintf(alert, sizeof(alert), "%d blocked", alertCount);
+                        value = alert;
+                        valueColor = col(255, 72, 72, 255);
+                    }
+                }
+                drawValueRowColored(menu, x, ry, w,
+                                    mChildren[i]->title(), value,
+                                    i == mSel, false, available, valueColor);
                 ry += ROW_H;
+                row++;
             }
+            drawScrollHints(menu, x, y, w, listH, start, end, rows);
+            drawHelpLine(menu, x, y, w, h, help);
             return;
         }
 
@@ -4409,29 +5314,62 @@ public:
         }
 
         child->draw(menu, x, y, w, h - ROW_H);
-        char hint[40];
-        snprintf(hint, sizeof(hint), SUSAMUNE_GLYPH_B " Back to %s", mName);
-        menu->drawText(hint, x + 4, y + h - FOOT_SZ,
+        menu->drawText(SUSAMUNE_GLYPH_B " Back", x + 4,
+                       y + h - FOOT_SZ,
                        FOOT_SZ, FOOT_SZ, cFooter());
     }
 
 private:
-    enum { MAX_CHILDREN = 8 };
+    enum { MAX_CHILDREN = 10 };
 
     MenuTab *current() const {
-        return mPage >= 0 && mPage < mCount ? mChildren[mPage] : nullptr;
+        MenuTab *child = mPage >= 0 && mPage < mCount
+                             ? mChildren[mPage] : nullptr;
+        return child && child->available() ? child : nullptr;
     }
 
     const char *sectionName(int child) const {
         if (mSectionStyle == SECTIONS_SETTINGS) {
-            if (child == 0) return "PRACTICE & GAMEPLAY";
-            if (child == 4) return "PRESENTATION";
-            if (child == 6) return "TOOLS & CONTROLS";
+            if (child == 0) return "PB STATUS";
+            if (child == 1) return "GAMEPLAY AND PRACTICE";
+            if (child == 5) return "TIMING AND HUD";
+            if (child == 8) return "LAYOUT AND CONTROLS";
         } else if (mSectionStyle == SECTIONS_ILS) {
             if (child == 0) return "PRACTICE";
             if (child == 2) return "SESSIONS";
         }
         return nullptr;
+    }
+
+    void jumpRootSection(int direction) {
+        if (mSectionStyle == SECTIONS_NONE) return;
+        if (direction > 0) {
+            for (int child = mSel + 1; child < mCount; child++) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+            for (int child = 0; child <= mSel; child++) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+        } else {
+            for (int child = mSel - 1; child >= 0; child--) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+            for (int child = mCount - 1; child >= mSel; child--) {
+                if (sectionName(child)) {
+                    mSel = (u8)child;
+                    return;
+                }
+            }
+        }
     }
 
     const char *mName;
@@ -4518,12 +5456,14 @@ void drawAchievementBanner(Menu *menu) {
          sAchievementBannerFrames == 0))) return;
 
     Records::Tier tier = Records::TIER_GOLD;
+    Records::Category category = Records::CATEGORY_TIMES;
     const char *name = "Achievement preview";
     if (!preview) {
         const Records::AchievementDesc *desc =
             Records::achievement(sAchievementBannerId);
         if (!desc) return;
         tier = desc->tier;
+        category = desc->category;
         name = recordText(desc->name, "Unnamed achievement");
     }
 
@@ -4537,6 +5477,7 @@ void drawAchievementBanner(Menu *menu) {
     const int pad = 14 * scale / 100;
     const int labelSize = 12 * scale / 100;
     const char *tierName = recordTierName(tier);
+    const char *categoryName = recordText(Records::categoryName(category));
     const Color outline = recordTierColor(tier);
 
     menu->fillBox(x, y, w, h, outline);
@@ -4544,10 +5485,16 @@ void drawAchievementBanner(Menu *menu) {
                   col(4, 6, 12, 225));
     menu->drawText("ACHIEVEMENT UNLOCKED", x + pad, y + 10 * scale / 100,
                    labelSize, labelSize, cRowDim());
-    menu->drawText(tierName,
-                   x + w - Menu::textWidth(tierName, labelSize) - pad,
-                   y + 10 * scale / 100,
+    const int tierX = x + w - Menu::textWidth(tierName, labelSize) - pad;
+    menu->drawText(tierName, tierX, y + 10 * scale / 100,
                    labelSize, labelSize, outline);
+    const int slashX = tierX - Menu::textWidth(" / ", labelSize);
+    menu->drawText(" / ", slashX, y + 10 * scale / 100,
+                   labelSize, labelSize, cRowDim());
+    menu->drawText(categoryName,
+                   slashX - Menu::textWidth(categoryName, labelSize),
+                   y + 10 * scale / 100,
+                   labelSize, labelSize, cRowSel());
     const int nameSize = fittedRecordTextSize(
         name, w - pad * 2, 18 * scale / 100, labelSize);
     menu->drawText(name, x + pad, y + 31 * scale / 100,
@@ -4565,6 +5512,7 @@ struct __attribute__((aligned(8))) MenuRuntime {
     u8 presets[sizeof(WarpPresetsTab)] __attribute__((aligned(8)));
     u8 stages[sizeof(WarpStagesTab)] __attribute__((aligned(8)));
 #endif
+    u8 pbSafety[sizeof(PBSafetyTab)] __attribute__((aligned(8)));
     u8 starred[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 qol[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 cosmetic[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
@@ -4572,6 +5520,7 @@ struct __attribute__((aligned(8))) MenuRuntime {
     u8 savestate[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 ui[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 timer[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
+    u8 rng[sizeof(CategorySettingsTab)] __attribute__((aligned(8)));
     u8 creation[sizeof(CreationTab)] __attribute__((aligned(8)));
     u8 iling[sizeof(ILingTab)] __attribute__((aligned(8)));
     u8 ghosts[sizeof(GhostsTab)] __attribute__((aligned(8)));
@@ -4592,6 +5541,7 @@ static_assert(sizeof(MenuRuntime) <= SUSAMUNE_MENU_RUNTIME_SIZE,
 #define sPresetsBuf sMenuRuntime.presets
 #define sStagesBuf sMenuRuntime.stages
 #endif
+#define sPbSafetyBuf sMenuRuntime.pbSafety
 #define sStarredBuf sMenuRuntime.starred
 #define sQolBuf sMenuRuntime.qol
 #define sCosmeticBuf sMenuRuntime.cosmetic
@@ -4599,6 +5549,7 @@ static_assert(sizeof(MenuRuntime) <= SUSAMUNE_MENU_RUNTIME_SIZE,
 #define sSavestateBuf sMenuRuntime.savestate
 #define sUiBuf sMenuRuntime.ui
 #define sTimerBuf sMenuRuntime.timer
+#define sRngBuf sMenuRuntime.rng
 #define sCreationBuf sMenuRuntime.creation
 #define sILingBuf sMenuRuntime.iling
 #define sGhostsBuf sMenuRuntime.ghosts
@@ -4658,6 +5609,7 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *starred =
         new (sStarredBuf) CategorySettingsTab(TITLE_STARRED,
                                               kStarredCategory);
+    MenuTab *pbSafety = new (sPbSafetyBuf) PBSafetyTab();
     MenuTab *practice =
         new (sMiscBuf) CategorySettingsTab(TITLE_MISC, SETTING_CAT_MISC);
     MenuTab *savestate =
@@ -4667,6 +5619,8 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
         new (sTimerBuf) CategorySettingsTab(TITLE_TIMER, SETTING_CAT_TIMER);
     MenuTab *gameplay =
         new (sQolBuf) CategorySettingsTab(TITLE_QOL, SETTING_CAT_QOL);
+    MenuTab *rng =
+        new (sRngBuf) CategorySettingsTab(TITLE_RNG, kRngCategory);
     MenuTab *display =
         new (sUiBuf) CategorySettingsTab(TITLE_UI, SETTING_CAT_UI);
     MenuTab *cosmetics =
@@ -4680,13 +5634,13 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *records = new (sRecordsBuf) RecordsTab();
 
     MenuTab *settingsChildren[] = {
-        practice, savestate, timer, gameplay,
-        display, cosmetics, creation, binds,
+        pbSafety, gameplay, practice, rng, savestate,
+        timer, display, cosmetics, creation, binds,
     };
     MenuTab *ilChildren[] = {
         iling, ghosts, stageLoader,
     };
-    static_assert(sizeof(settingsChildren) / sizeof(settingsChildren[0]) <= 8,
+    static_assert(sizeof(settingsChildren) / sizeof(settingsChildren[0]) <= 10,
                   "Settings hub exceeds nested menu capacity");
     static_assert(sizeof(ilChildren) / sizeof(ilChildren[0]) <= 8,
                   "IL hub exceeds nested menu capacity");
@@ -4762,6 +5716,7 @@ int Menu::textWidth(const char *s, int sizeX) {
 }
 
 void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color color) {
+    color = warningText(color, mShown);
     mText.mCharSizeX      = sizeX;
     mText.mCharSizeY      = sizeY;
     mText.mGradientTop    = color;
@@ -4775,7 +5730,24 @@ void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color col
     mText.draw(x, baseline);
 }
 
+#if ENABLE_SAVESTATE_DBG
+void Menu::drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
+                            Color color) {
+    color = warningText(color, mShown);
+    mText.mCharSizeX      = sizeX;
+    mText.mCharSizeY      = sizeY;
+    mText.mGradientTop    = color;
+    mText.mGradientBottom = color;
+#if defined(SUSAMUNE_VERSION_JP)
+    s = fontSafeText(s);
+#endif
+    mText.mStrPtr = const_cast<char *>(s);
+    mText.draw(x, y);
+}
+#endif
+
 void Menu::fillBox(int x, int y, int w, int h, Color color) {
+    color = warningForeground(color, mShown);
     // Restore the flat pos+color vertex state before filling. J2DFillBox draws
     // with whatever GX vertex descriptor is current, and J2DTextBox/JUTResFont
     // switch it to a textured layout; without this, any fill after a text draw
@@ -4822,11 +5794,11 @@ __attribute__((noinline)) void drawPolygon(J2DOrthoGraph *ortho,
 }  // namespace
 
 void Menu::fillPoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, false, color);
+    drawPolygon(mOrtho, xy, n, false, warningForeground(color, mShown));
 }
 
 void Menu::strokePoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, true, color);
+    drawPolygon(mOrtho, xy, n, true, warningForeground(color, mShown));
 }
 
 void Menu::switchTab(int dir) {
@@ -4891,6 +5863,13 @@ void Menu::requestSettingsSave() {
 __attribute__((noinline)) static void drawValueRow(
     Menu *menu, int x, int y, int w, const char *name, const char *value,
     bool selected, bool starred, bool arrow) {
+    drawValueRowColored(menu, x, y, w, name, value, selected, starred, arrow,
+                        cValue());
+}
+
+__attribute__((noinline)) static void drawValueRowColored(
+    Menu *menu, int x, int y, int w, const char *name, const char *value,
+    bool selected, bool starred, bool arrow, Color valueColor) {
     if (selected) drawRowHighlight(menu, x, y, w, ROW_H);
     if (selected && arrow)
         menu->drawText(">", x - 2, y, ROW_SZ, ROW_SZ, cAccent());
@@ -4902,7 +5881,15 @@ __attribute__((noinline)) static void drawValueRow(
                    ROW_SZ, ROW_SZ, selected ? cRowSel() : cRow());
     if (value)
         menu->drawText(value, x + w - Menu::textWidth(value, ROW_SZ) - 8,
-                       y, ROW_SZ, ROW_SZ, cValue());
+                       y, ROW_SZ, ROW_SZ, valueColor);
+}
+
+__attribute__((noinline)) static void drawHelpLine(
+    Menu *menu, int x, int y, int w, int h, const char *text) {
+    if (!text || !text[0]) return;
+    const int top = y + h - HELP_H;
+    menu->fillBox(x + 4, top, w - 8, 1, cRowDim());
+    menu->drawText(text, x + 6, top + 10, FOOT_SZ, FOOT_SZ, cFooter());
 }
 
 void Menu::factoryReset() {
@@ -4928,11 +5915,11 @@ void Menu::hide() {
 }
 
 void Menu::pollSettingsSave() {
+    SettingsSaveState st = gSettings.pollSave();
     if (!mSaveWatch) {
         return;
     }
 
-    SettingsSaveState st = gSettings.pollSave();
     if (st == SETTINGS_SAVE_PENDING) {
         // Hold the "saving" message up rather than letting it time out.
         mToastFrames = kToastFrames;
@@ -5027,8 +6014,12 @@ int Menu::tabWidth(int i) const {
 }
 
 bool Menu::suppressesBinds() const {
-    return WarpWheel::promptPending() ||
-           (mShown && mTabs[mCurTab]->suppressesBinds());
+    if (WarpWheel::promptPending()) return true;
+    if (gBinds.wasPressedRaw(BIND_MENU_TOGGLE)) return true;
+    if (!mShown) return false;
+    const u16 held = JUTGamePad::mPadStatus[0].mButton;
+    return (held & (JUTGamePad::L | JUTGamePad::R)) != 0 ||
+           mTabs[mCurTab]->suppressesBinds();
 }
 
 void Menu::update(TMarioGamePad *pad) {
@@ -5057,7 +6048,7 @@ void Menu::update(TMarioGamePad *pad) {
         return;
     }
 
-    if (gBinds.wasPressed(BIND_MENU_TOGGLE)) {
+    if (gBinds.wasPressedRaw(BIND_MENU_TOGGLE)) {
         mShown = !mShown;
         if (mShown) mTabs[mCurTab]->focus();
         // Closing with edits pending writes them back to the SD card. Gated on
@@ -5081,7 +6072,10 @@ void Menu::update(TMarioGamePad *pad) {
         switchTab(+1);
     }
 
+    const bool invalidBefore = rngControlInvalidatesIl();
     mTabs[mCurTab]->update(this, pad);
+    if (invalidBefore != rngControlInvalidatesIl())
+        gCreationExtras.update();
 }
 
 void Menu::draw(J2DOrthoGraph *ortho) {
@@ -5096,6 +6090,7 @@ void Menu::draw(J2DOrthoGraph *ortho) {
         gAttemptCounter.draw(this);
         gCreationExtras.draw(this);
         WallkickDisplay::draw(this);
+        MovementDisplay::draw(this);
         drawToast();  // still visible with the menu closed
         drawAchievementBanner(this);
         bgmStatsDraw(this);
@@ -5153,6 +6148,20 @@ void Menu::draw(J2DOrthoGraph *ortho) {
     drawToast();
     drawAchievementBanner(this);
     bgmStatsDraw(this);
+}
+
+void Menu::drawInvalidIlWarning() {
+    if (!rngControlInvalidatesIl()) return;
+    const char *text = "INVALID IL";
+    const int size = 18;
+    const int visibleBottom = 448;
+    const int bottomInset = 12;
+    const int x = 616 - textWidth(text, size);
+    const int y = visibleBottom - size - bottomInset;
+    static_assert(bottomInset >= 2, "INVALID IL warning exceeds the EFB");
+    fillBox(x - 4, y - 2, textWidth(text, size) + 8, size + 4,
+            col(0, 0, 0, 190));
+    drawText(text, x, y, size, size, col(255, 0, 0, 255));
 }
 
 // =====================================================================

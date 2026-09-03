@@ -6,6 +6,7 @@
 #include "SMS/Player/Mario.hxx"
 #include "SMS/Player/Watergun.hxx"
 #include "SMS/Enemy/Conductor.hxx"
+#include "SMS/Manager/FlagManager.hxx"
 #include "SMS/Manager/EnemyManager.hxx"
 #include "SMS/System/Application.hxx"
 #include "SMS/System/MarDirector.hxx"
@@ -25,7 +26,9 @@ const s32 kTasbotQf = 1656;
 const u8 kTrialGoal = 97;
 const u8 kLaunchTimeCount = 29;
 const u8 kRC1TimeCount = 10;
+const u8 kLegacyTimeCount = 64;
 const u8 kLaunchStreakCount = 16;
+const u8 kLegacyStreakCount = 26;
 
 constexpr u32 qfAtLeastSeconds(u32 seconds) {
     const u64 numerator = static_cast<u64>(seconds) * 120000u;
@@ -64,6 +67,7 @@ enum StreakFlags {
     STREAK_QFT = 1,
     STREAK_QFT_INCLUSIVE = 2,
     STREAK_IGT = 3,
+    STREAK_QFT_EXACT = 4,
 };
 
 enum ActionFlags {
@@ -71,6 +75,7 @@ enum ActionFlags {
     ACTION_ROCKET = 1 << 1,
     ACTION_TURBO  = 1 << 2,
     ACTION_YOSHI  = 1 << 3,
+    ACTION_SPRAY  = 1 << 4,
 };
 
 struct TimeRule {
@@ -113,9 +118,25 @@ constexpr TimeRule kTimeRules[] = {
     {4000, 84, 68}, {3175, 109, 118},
     // RC2 Frontier
     {13900, 37, 102}, {12000, 64, 104},
+
+    // V2.2 Bronze
+    {6500, 13, 10}, {6000, 78, 60},
+    // V2.2 Silver
+    {4000, 15, 19}, {4000, 97, 91},
+    // V2.2 Gold
+    {4000, 88, 69},
+    // V2.2 Diamond
+    {5500, 65, 50}, {3000, 80, 62}, {1800, 34, 26},
+    // V2.2 Demon
+    {3670, 2, 2}, {3900, 8, 71}, {1600, 10, 6}, {1503, 22, 16},
+    {2175, 62, 46}, {1560, 74, 56}, {12000, 60, 44}, {8700, 52, 40},
+    // V2.2 Frontier
+    {6000, 50, 37}, {4640, 13, 10}, {13000, 6, 4}, {5200, 20, 14},
 };
 
 constexpr u8 kNuttyTimeIndex = 56;
+constexpr u8 kHouseAlwaysWinsTimeIndex = kLegacyTimeCount + 14;
+constexpr u8 kPerfectPeterTimeIndex = kLegacyTimeCount + 18;
 
 struct StreakRule {
     u16 valueCentis;
@@ -153,6 +174,22 @@ const StreakRule kStreakRules[] = {
     {5400, 65, 5, STREAK_QFT, 0},       // Mole Mangler
     {2750, 47, 5, STREAK_QFT, 0},       // Clockwork Crisis
     {2700, 121, 10, STREAK_QFT, 0},     // Lord of the Nut
+
+    {0, 0, 5, STREAK_FINISH, 0},        // Rooted
+    {0, 95, 3, STREAK_FINISH, 0},       // No Refunds
+    {0, 63, 5, STREAK_FINISH, 0},       // Scooby Dooby Doo
+    {6000, 4, 5, STREAK_QFT, 0},        // Pieces Rouges de la Grotte
+    {4000, 15, 5, STREAK_QFT, 0},       // Surf's Up
+    {12000, 89, 5, STREAK_QFT, 0},      // Robbing the Village
+    {2500, 56, 5, STREAK_QFT, 0},       // Hotel Loyalty
+    {8300, 69, 5, STREAK_QFT, 0},       // Brush Your Teeth
+    {6000, 48, 5, STREAK_QFT, 0},       // Round and Round
+    {9000, 50, 7, STREAK_QFT, 0},       // Clean Sweep
+    {5600, 20, 5, STREAK_QFT, 0},       // He Loves Squids
+    {3500, 42, 5, STREAK_QFT, 0},       // Motion Sickness
+    {9000, 77, 3, STREAK_QFT, 0},       // Baywatch
+    {1656, 3, 3, STREAK_QFT_EXACT, 0},  // Thanks for My Gun
+    {4800, 13, 10, STREAK_QFT, 0},      // A Certain Someone
 };
 
 struct WorldPBRule {
@@ -215,20 +252,23 @@ const CourseRule kCourseRules[] = {
     {375, 375, 615, 615}, // Pianta 6:15 / 10:15
 };
 
+const u8 kShadowSlots[] = {6, 16, 26, 36, 46, 56, 66};
+const u16 kShadowSlayerCentis = 14500;
+
 const u8 kTierCounts[Records::CATEGORY_COUNT][Records::TIER_COUNT] = {
-    {8, 13, 11, 9, 16, 7},
-    {2, 2, 3, 2, 0, 0},
-    {7, 7, 7, 7, 0, 0},
-    {4, 3, 3, 4, 9, 3},
-    {3, 11, 5, 3, 3, 2},
+    {9, 14, 12, 12, 24, 10},
+    {2, 3, 5, 4, 1, 0},
+    {8, 8, 8, 8, 1, 0},
+    {8, 5, 6, 7, 10, 5},
+    {4, 15, 7, 6, 4, 4},
 };
 
 const u8 kRCTierCounts[2][Records::TIER_COUNT] = {
-    {1, 3, 1, 1, 2, 2},
+    {1, 3, 1, 1, 2, 1},
     {2, 1, 1, 2, 3, 1},
 };
 
-const u8 kCategoryCounts[] = {64, 9, 28, 26, 27};
+const u8 kCategoryCounts[] = {81, 15, 33, 41, 40};
 
 const u8 kLaunchTierFirst[Records::CATEGORY_COUNT][Records::TIER_COUNT] = {
     {14, 19, 24, 29, 34, 40},
@@ -244,13 +284,29 @@ const u8 kRCTierFirst[2][Records::TIER_COUNT] = {
 };
 
 const u8 kRC2TierCounts[2][Records::TIER_COUNT] = {
-    {2, 5, 5, 3, 8, 2},
+    {1, 4, 5, 3, 8, 2},
     {1, 1, 1, 1, 1, 1},
 };
 
 const u8 kRC2TierFirst[2][Records::TIER_COUNT] = {
-    {138, 140, 145, 150, 153, 161},
+    {138, 141, 145, 150, 153, 161},
     {163, 164, 165, 166, 167, 168},
+};
+
+const u8 kV22TierCounts[Records::CATEGORY_COUNT][Records::TIER_COUNT] = {
+    {2, 2, 1, 3, 8, 4},
+    {0, 1, 2, 2, 1, 0},
+    {1, 1, 1, 1, 1, 0},
+    {4, 2, 3, 3, 1, 2},
+    {1, 4, 2, 3, 1, 2},
+};
+
+const u8 kV22TierFirst[Records::CATEGORY_COUNT][Records::TIER_COUNT] = {
+    {169, 171, 173, 174, 177, 185},
+    {0, 189, 190, 192, 194, 0},
+    {195, 196, 197, 198, 199, 0},
+    {200, 204, 206, 209, 212, 213},
+    {215, 216, 220, 222, 225, 226},
 };
 
 const u8 kAreaMap[] = {
@@ -289,11 +345,11 @@ constexpr char kCoreAchievementNames[] =
 constexpr char kRCTimeNames[] =
     "Sand in the Hourglass\0I Just Landed\0Red Tide\0Hillside Hustle\0"
     "Then It's War!\0Casino Royale\0They See Me Rollin' (Out)\0"
-    "Ghostly Reds\0Where There Is a Will There Is a Way\0Chuckster Change";
+    "Ghostly Reds\0Where There Is a Will There Is a Way\0";
 
 constexpr char kRC2TimeNames[] =
-    "Wiggler Wrestling\0No Kidding\0"
-    "Tower Titan\0Just Fishin'\0Village Life\0There it is!\0Captain Mario\0"
+    "Wiggler Wrestling\0\0"
+    "\0Just Fishin'\0Village Life\0There it is!\0Captain Mario\0"
     "Plant Punisher\0Swimming with the fishes\0Where are they?\0"
     "Birds and Bees\0Squeaky Clean\0"
     "Red Freak\0My hat?!\0Traumatic Memories\0"
@@ -342,6 +398,63 @@ constexpr char kRC2SpecialDescriptions[] =
     "Save 1 hour of ghosts.\0Save 250 ghosts lifetime.\0"
     "Save over 50 hours of ghosts lifetime.";
 
+constexpr char kV22TimeNames[] =
+    "Dock Knock\0Chain Reaction\0Squid Pro Quo\0Leaf Me Here\0"
+    "Praise the Sun\0Uncorked\0Goopy Business\0Stop, Thief!\0"
+    "Hillside Heist\0Triple Terror\0I Have the High Ground!\0"
+    "Stop Right There, Criminal Scum\0Security!!\0"
+    "By the Order of the Elder!\0The House Always Wins\0Mantastic\0"
+    "Bombastic Balloons\0Skipped Sumi\0Perfect Peter\0The Culmination";
+
+constexpr char kV22ChallengeNames[] =
+    "Lost and FLUDD\0A New Leaf\0Reef Runner\0Ruins Rampage\0"
+    "No Safety Net\0Orange's Quest";
+
+constexpr char kV22ChallengeDescriptions[] =
+    "Finish Pianta 3 without firing Hover.\0"
+    "Finish Lily Pad without firing Spray.\0"
+    "Gelato 6: after the first red coin, never touch the seabed.\0"
+    "Noki 2: under 0:50.000 QFT without firing Hover or Spray.\0"
+    "Finish Pachinko without firing Hover.\0"
+    "Collect Right Bell without Rocket or Yoshi.";
+
+constexpr char kV22MasteryNames[] =
+    "Plaza Beginnings\0Plaza Specialist\0Plaza Graduate\0Plaza Master\0"
+    "Shadow Slayer";
+
+constexpr char kV22MasteryDescriptions[] =
+    "Delfino Any percent: set every IL PB.\0"
+    "Delfino Any percent PB sum: under 8:00.000.\0"
+    "Delfino: set every IL PB.\0"
+    "Delfino all-IL PB sum: under 20:00.000.\0"
+    "All seven course Shadow Mario PBs: under 2:25.000 total.";
+
+constexpr char kV22StreakNames[] =
+    "Rooted\0No Refunds\0Scooby Dooby Doo\0Pieces rouges de la grotte\0"
+    "Surf's Up\0Robbing the Village\0Hotel Loyalty\0Brush Your Teeth\0"
+    "Round and Round\0Clean Sweep\0He Loves Squids\0Motion Sickness\0"
+    "Baywatch\0Thanks for My Gun\0A Certain Someone";
+
+constexpr char kV22SpecialNames[] =
+    "New Kid on the Block\0By a Nose\0Mirror Match\0Upstart\0"
+    "Serious Business\0Magnate\0Industrialist\0Stranger Danger\0"
+    "Dead Heat\0Robber Baron\0Mogul\0Tycoon\0Emperor";
+
+constexpr char kV22SpecialDescriptions[] =
+    "Have 25 achievements.\0"
+    "Improve an existing IL PB by exactly 1 frame.\0"
+    "Beat a Personal ghost that matched your PB when the race began.\0"
+    "Have 50 achievements.\0"
+    "Have 75 achievements.\0"
+    "Have 100 achievements.\0"
+    "Have 125 achievements.\0"
+    "Beat an Imported ghost that was faster than your PB.\0"
+    "Exactly tie a selected ghost's QFT.\0"
+    "Have 150 achievements.\0"
+    "Have 175 achievements.\0"
+    "Have 200 achievements.\0"
+    "Unlock every other achievement.";
+
 constexpr char kMasterySuffixes[] =
     "Beginnings!\0Specialist\0Graduate\0Master";
 
@@ -353,7 +466,7 @@ constexpr int packedCount(const char *pool, u32 bytes) {
     return count;
 }
 
-static_assert(sizeof(kTimeRules) / sizeof(kTimeRules[0]) == 64,
+static_assert(sizeof(kTimeRules) / sizeof(kTimeRules[0]) == 84,
               "Times rule count changed");
 static_assert(kNuttyTimeIndex ==
                   kLaunchTimeCount + kRC1TimeCount +
@@ -362,7 +475,7 @@ static_assert(kNuttyTimeIndex ==
                   kTimeRules[kNuttyTimeIndex].slotFlags == 17 &&
                   kTimeRules[kNuttyTimeIndex].valueCentis == 4500,
               "Nutty live-only rule moved");
-static_assert(sizeof(kStreakRules) / sizeof(kStreakRules[0]) == 26,
+static_assert(sizeof(kStreakRules) / sizeof(kStreakRules[0]) == 41,
               "Streak rule count changed");
 static_assert(sizeof(kAnySlots) == 55, "Any-percent PB route changed");
 static_assert(sizeof(kAllSlots) == 122, "all-IL PB route changed");
@@ -371,6 +484,7 @@ static_assert(sizeof(kWorldPBRules) / sizeof(kWorldPBRules[0]) ==
               "world PB ranges changed");
 static_assert(sizeof(kCourseRules) / sizeof(kCourseRules[0]) == 7,
               "course mastery rules changed");
+static_assert(sizeof(kShadowSlots) == 7, "Shadow Mario PB route changed");
 static_assert(sizeof(kAreaMap) == 0x3d, "area map changed");
 static_assert(packedCount(kCoreAchievementNames,
                           sizeof(kCoreAchievementNames)) == 38,
@@ -394,7 +508,23 @@ static_assert(packedCount(kRC2SpecialNames,
                   packedCount(kRC2SpecialDescriptions,
                               sizeof(kRC2SpecialDescriptions)) == 6,
               "RC2 special text count changed");
-static_assert(Records::ACHIEVEMENT_ACTIVE_COUNT == 154,
+static_assert(packedCount(kV22TimeNames, sizeof(kV22TimeNames)) == 20 &&
+                  packedCount(kV22ChallengeNames,
+                              sizeof(kV22ChallengeNames)) == 6 &&
+                  packedCount(kV22ChallengeDescriptions,
+                              sizeof(kV22ChallengeDescriptions)) == 6 &&
+                  packedCount(kV22MasteryNames,
+                              sizeof(kV22MasteryNames)) == 5 &&
+                  packedCount(kV22MasteryDescriptions,
+                              sizeof(kV22MasteryDescriptions)) == 5 &&
+                  packedCount(kV22StreakNames,
+                              sizeof(kV22StreakNames)) == 15 &&
+                  packedCount(kV22SpecialNames,
+                              sizeof(kV22SpecialNames)) == 13 &&
+                  packedCount(kV22SpecialDescriptions,
+                              sizeof(kV22SpecialDescriptions)) == 13,
+              "V2.2 achievement text count changed");
+static_assert(Records::ACHIEVEMENT_ACTIVE_COUNT == 210,
               "achievement roster changed");
 static_assert(Records::ACH_RETIRED_INDIANA_JONES + 1 ==
                   Records::ACH_BIANCO_BEGINNINGS,
@@ -408,12 +538,22 @@ static_assert(Records::ACH_WIGGLER_WRESTLING == 138 &&
                   Records::ACH_HIGH_KING == 162 &&
                   Records::ACH_GHASTLY == 163 &&
                   Records::ACH_PHANTASMAL == 168 &&
-                  Records::ACHIEVEMENT_ID_END == 169,
-              "RC2 achievement IDs moved");
+                  Records::ACH_DOCK_KNOCK == 169 &&
+                  Records::ACH_LOST_AND_FLUDD == 189 &&
+                  Records::ACH_PLAZA_BEGINNINGS == 195 &&
+                  Records::ACH_ROOTED == 200 &&
+                  Records::ACH_NEW_KID_ON_THE_BLOCK == 215 &&
+                  Records::ACH_EMPEROR == 227 &&
+                  Records::ACHIEVEMENT_ID_END == 228,
+              "achievement IDs moved");
 static_assert(Records::ACHIEVEMENT_ID_END <= Records::ACHIEVEMENT_CAPACITY,
               "achievement storage capacity exceeded");
+// The journal reserves 512 bits, but the live queue/count remain byte-wide.
+// Widen both before assigning ID 256 or reaching 256 active achievements.
 static_assert(Records::ACHIEVEMENT_ID_END <= 0x100,
               "unlock queue ID width exceeded");
+static_assert(Records::ACHIEVEMENT_ACTIVE_COUNT <= 0xff,
+              "unlocked achievement counter width exceeded");
 static_assert(Records::ACHIEVEMENT_BYTES ==
                   SUSAMUNE_PROGRESS_ACHIEVEMENT_BYTES,
               "achievement storage capacity changed");
@@ -450,6 +590,7 @@ struct RecordsState {
     u8 gameArea;
     u8 episode;
     u8 actionFlags;
+    u8 attemptAssistReasons;
     u8 activeProfile;
     u8 attemptStartArea;
     u8 attemptStartEpisode;
@@ -468,6 +609,8 @@ struct RecordsState {
     bool pbNotifyPending;
     u8 nonFrontierUnlocks;
     bool cataquacksObserved;
+    bool reefStarted;
+    bool reefTouched;
 };
 
 static_assert(sizeof(RecordsState) <= SUSAMUNE_RECORDS_RUNTIME_SIZE,
@@ -486,6 +629,7 @@ RecordsState *const sState = reinterpret_cast<RecordsState *>(
 #define sGameArea (sState->gameArea)
 #define sEpisode (sState->episode)
 #define sActionFlags (sState->actionFlags)
+#define sAttemptAssistReasons (sState->attemptAssistReasons)
 #define sStreakProgress (sState->streakProgress)
 #define sAnyCoverage (sState->anyCoverage)
 #define sAllCoverage (sState->allCoverage)
@@ -515,6 +659,8 @@ RecordsState *const sState = reinterpret_cast<RecordsState *>(
 #define sPBNotifyPending (sState->pbNotifyPending)
 #define sNonFrontierUnlocks (sState->nonFrontierUnlocks)
 #define sCataquacksObserved (sState->cataquacksObserved)
+#define sReefStarted (sState->reefStarted)
+#define sReefTouched (sState->reefTouched)
 
 __attribute__((noinline)) s32 strictQfForCentis(u32 centis) {
     if (centis == 0) return -1;
@@ -553,12 +699,15 @@ int timeRuleIndex(Records::AchievementId id) {
         id <= Records::ACH_NINJA_WARRIOR)
         return id - Records::ACH_HERO_OF_THE_VILLAGE;
     if (id >= Records::ACH_SAND_IN_THE_HOURGLASS &&
-        id <= Records::ACH_CHUCKSTER_CHANGE)
+        id <= Records::ACH_RETIRED_CHUCKSTER_CHANGE)
         return kLaunchTimeCount + id - Records::ACH_SAND_IN_THE_HOURGLASS;
     if (id >= Records::ACH_WIGGLER_WRESTLING &&
         id <= Records::ACH_HIGH_KING)
         return kLaunchTimeCount + kRC1TimeCount +
                id - Records::ACH_WIGGLER_WRESTLING;
+    if (id >= Records::ACH_DOCK_KNOCK &&
+        id <= Records::ACH_THE_CULMINATION)
+        return kLegacyTimeCount + id - Records::ACH_DOCK_KNOCK;
     return -1;
 }
 
@@ -566,10 +715,14 @@ Records::AchievementId timeAchievement(u8 index) {
     if (index < kLaunchTimeCount)
         return (Records::AchievementId)(Records::ACH_HERO_OF_THE_VILLAGE + index);
     index -= kLaunchTimeCount;
-    return index < kRC1TimeCount
-        ? (Records::AchievementId)(Records::ACH_SAND_IN_THE_HOURGLASS + index)
-        : (Records::AchievementId)(Records::ACH_WIGGLER_WRESTLING +
-                                   index - kRC1TimeCount);
+    if (index < kRC1TimeCount)
+        return (Records::AchievementId)(Records::ACH_SAND_IN_THE_HOURGLASS + index);
+    index -= kRC1TimeCount;
+    const u8 rc2Count = kLegacyTimeCount - kLaunchTimeCount - kRC1TimeCount;
+    if (index < rc2Count)
+        return (Records::AchievementId)(Records::ACH_WIGGLER_WRESTLING + index);
+    return (Records::AchievementId)(Records::ACH_DOCK_KNOCK +
+                                    index - rc2Count);
 }
 
 int streakRuleIndex(Records::AchievementId id) {
@@ -579,14 +732,19 @@ int streakRuleIndex(Records::AchievementId id) {
     if (id >= Records::ACH_RUN_KILLER_CONQUERED &&
         id <= Records::ACH_LORD_OF_THE_NUT)
         return kLaunchStreakCount + id - Records::ACH_RUN_KILLER_CONQUERED;
+    if (id >= Records::ACH_ROOTED && id <= Records::ACH_A_CERTAIN_SOMEONE)
+        return kLegacyStreakCount + id - Records::ACH_ROOTED;
     return -1;
 }
 
 Records::AchievementId streakAchievement(u8 index) {
-    return index < kLaunchStreakCount
-        ? (Records::AchievementId)(Records::ACH_GETTING_THERE + index)
-        : (Records::AchievementId)(Records::ACH_RUN_KILLER_CONQUERED +
-                                   index - kLaunchStreakCount);
+    if (index < kLaunchStreakCount)
+        return (Records::AchievementId)(Records::ACH_GETTING_THERE + index);
+    index -= kLaunchStreakCount;
+    const u8 rcCount = kLegacyStreakCount - kLaunchStreakCount;
+    if (index < rcCount)
+        return (Records::AchievementId)(Records::ACH_RUN_KILLER_CONQUERED + index);
+    return (Records::AchievementId)(Records::ACH_ROOTED + index - rcCount);
 }
 
 int rcTierTable(Records::Category category) {
@@ -604,17 +762,31 @@ int rc2TierTable(Records::Category category) {
 bool validAchievement(Records::AchievementId id) {
     return id >= Records::ACHIEVEMENT_FIRST &&
            id < Records::ACHIEVEMENT_ID_END &&
-           id != Records::ACH_RETIRED_INDIANA_JONES;
+           id != Records::ACH_RETIRED_INDIANA_JONES &&
+           id != Records::ACH_RETIRED_CHUCKSTER_CHANGE &&
+           id != Records::ACH_RETIRED_NO_KIDDING &&
+           id != Records::ACH_RETIRED_TOWER_TITAN;
 }
 
 Records::Category categoryFor(Records::AchievementId id) {
+    if (id >= Records::ACH_DOCK_KNOCK &&
+        id <= Records::ACH_THE_CULMINATION)
+        return Records::CATEGORY_TIMES;
+    if (id >= Records::ACH_LOST_AND_FLUDD && id <= Records::ACH_ORANGES_QUEST)
+        return Records::CATEGORY_CHALLENGES;
+    if (id >= Records::ACH_PLAZA_BEGINNINGS && id <= Records::ACH_SHADOW_SLAYER)
+        return Records::CATEGORY_COURSE_MASTERY;
+    if (id >= Records::ACH_ROOTED && id <= Records::ACH_A_CERTAIN_SOMEONE)
+        return Records::CATEGORY_STREAKS;
+    if (id >= Records::ACH_NEW_KID_ON_THE_BLOCK && id <= Records::ACH_EMPEROR)
+        return Records::CATEGORY_SPECIAL;
     if (id >= Records::ACH_WIGGLER_WRESTLING &&
         id <= Records::ACH_HIGH_KING)
         return Records::CATEGORY_TIMES;
     if (id >= Records::ACH_GHASTLY && id <= Records::ACH_PHANTASMAL)
         return Records::CATEGORY_SPECIAL;
     if (id >= Records::ACH_SAND_IN_THE_HOURGLASS &&
-        id <= Records::ACH_CHUCKSTER_CHANGE)
+        id <= Records::ACH_RETIRED_CHUCKSTER_CHANGE)
         return Records::CATEGORY_TIMES;
     if (id >= Records::ACH_RUN_KILLER_CONQUERED &&
         id <= Records::ACH_LORD_OF_THE_NUT)
@@ -632,6 +804,14 @@ Records::Category categoryFor(Records::AchievementId id) {
 Records::Tier tierFor(Records::AchievementId id) {
     const Records::Category category = categoryFor(id);
     if (category >= Records::CATEGORY_COUNT) return Records::TIER_COUNT;
+    if (id >= Records::ACH_DOCK_KNOCK) {
+        for (int tier = Records::TIER_COUNT - 1; tier >= 0; tier--) {
+            if (kV22TierCounts[category][tier] &&
+                id >= kV22TierFirst[category][tier])
+                return (Records::Tier)tier;
+        }
+        return Records::TIER_COUNT;
+    }
     const bool rc2 = id >= Records::ACH_WIGGLER_WRESTLING;
     const bool rc1 = !rc2 && id >= Records::ACH_SAND_IN_THE_HOURGLASS;
     const int rc1Table = rcTierTable(category);
@@ -645,7 +825,8 @@ Records::Tier tierFor(Records::AchievementId id) {
             : rc1 ? kRCTierCounts[rc1Table][tier]
                   : kTierCounts[category][tier] -
                         (rc1Table >= 0 ? kRCTierCounts[rc1Table][tier] : 0) -
-                        (rc2Table >= 0 ? kRC2TierCounts[rc2Table][tier] : 0);
+                        (rc2Table >= 0 ? kRC2TierCounts[rc2Table][tier] : 0) -
+                        kV22TierCounts[category][tier];
         if (count && id >= first[tier]) return (Records::Tier)tier;
     }
     return Records::TIER_COUNT;
@@ -655,6 +836,20 @@ bool bitUnlocked(Records::AchievementId id) {
     if (!validAchievement(id)) return false;
     const u16 value = (u16)id;
     return (sAchievements[value >> 3] & (1u << (value & 7))) != 0;
+}
+
+bool migrateAchievementBit(Records::AchievementId retired,
+                           Records::AchievementId replacement) {
+    const u16 retiredValue = (u16)retired;
+    const u8 retiredMask = (u8)(1u << (retiredValue & 7));
+    u8 &retiredSlot = sAchievements[retiredValue >> 3];
+    if (!(retiredSlot & retiredMask)) return false;
+
+    retiredSlot &= (u8)~retiredMask;
+    const u16 replacementValue = (u16)replacement;
+    sAchievements[replacementValue >> 3] |=
+        (u8)(1u << (replacementValue & 7));
+    return true;
 }
 
 void rebuildUnlockCounts() {
@@ -738,6 +933,21 @@ __attribute__((noinline)) void resetAttemptActions() {
     sMashathonFrames = 0;
     sMashathonClimbing = false;
     sCataquacksObserved = false;
+    sReefStarted = false;
+    sReefTouched = false;
+}
+
+void updateReefRunner(const TMario *mario) {
+    if (!sAttemptActive || !sAttemptEligible || sAttemptEntry != 33 ||
+        !TFlagManager::smInstance || !mario)
+        return;
+    if (!sReefStarted) {
+        sReefStarted = TFlagManager::smInstance->Type6Flag.mRedCoinCount > 0;
+        return;
+    }
+    if (mario->mAttributes.mIsWater && mario->mFloorTriangle &&
+        mario->mTranslation.y <= mario->mFloorBelow + 5.0f)
+        sReefTouched = true;
 }
 
 void updateCataquacks() {
@@ -855,10 +1065,12 @@ void evaluatePBProfile(const s32 *pbs, u16 count, bool notify, bool cache) {
     }
 
     const WorldPBRule &delfino = kWorldPBRules[Records::WORLD_DELFINO];
-    const u8 delfinoAny = pbMetrics(pbs, count,
-        kAnySlots + delfino.anyFirst, delfino.anyCount) >> 24;
-    const u8 delfinoAll = pbMetrics(pbs, count,
-        kAllSlots + delfino.allFirst, delfino.allCount) >> 24;
+    const u32 delfinoAnyMetrics = pbMetrics(
+        pbs, count, kAnySlots + delfino.anyFirst, delfino.anyCount);
+    const u32 delfinoAllMetrics = pbMetrics(
+        pbs, count, kAllSlots + delfino.allFirst, delfino.allCount);
+    const u8 delfinoAny = delfinoAnyMetrics >> 24;
+    const u8 delfinoAll = delfinoAllMetrics >> 24;
     anyTotal += delfinoAny;
     allTotal += delfinoAll;
     if (delfinoAll) worldsVisited++;
@@ -866,6 +1078,21 @@ void evaluatePBProfile(const s32 *pbs, u16 count, bool notify, bool cache) {
         sAnyCoverage[Records::WORLD_DELFINO] = delfinoAny;
         sAllCoverage[Records::WORLD_DELFINO] = delfinoAll;
     }
+    if (delfinoAny == delfino.anyCount) {
+        unlock(Records::ACH_PLAZA_BEGINNINGS, notify);
+        if ((delfinoAnyMetrics & 0xffffffu) <= strictQfForCentis(48000u))
+            unlock(Records::ACH_PLAZA_SPECIALIST, notify);
+    }
+    if (delfinoAll == delfino.allCount) {
+        unlock(Records::ACH_PLAZA_GRADUATE, notify);
+        if ((delfinoAllMetrics & 0xffffffu) <= strictQfForCentis(120000u))
+            unlock(Records::ACH_PLAZA_MASTER, notify);
+    }
+    const u32 shadowMetrics = pbMetrics(
+        pbs, count, kShadowSlots, sizeof(kShadowSlots));
+    if ((shadowMetrics >> 24) == sizeof(kShadowSlots) &&
+        (shadowMetrics & 0xffffffu) <= strictQfForCentis(kShadowSlayerCentis))
+        unlock(Records::ACH_SHADOW_SLAYER, notify);
 
     if (anyTotal == sizeof(kAnySlots))
         unlock(Records::ACH_FULL_RUN, notify);
@@ -941,6 +1168,17 @@ u8 unlockedCategoryCount(Records::Category category) {
     return category < Records::CATEGORY_COUNT ? sCategoryUnlocks[category] : 0;
 }
 
+bool everyOtherAchievementUnlocked() {
+    for (u16 value = Records::ACHIEVEMENT_FIRST;
+         value < Records::ACHIEVEMENT_ID_END; value++) {
+        const Records::AchievementId id = (Records::AchievementId)value;
+        if (id != Records::ACH_EMPEROR && validAchievement(id) &&
+            !bitUnlocked(id))
+            return false;
+    }
+    return true;
+}
+
 void evaluateMetaAchievements(bool notify) {
     if (sEvaluatingMeta) return;
     sEvaluatingMeta = true;
@@ -959,6 +1197,19 @@ void evaluateMetaAchievements(bool notify) {
     // not silently make Trial By Sunshine harder.
     if (sNonFrontierUnlocks == kTrialGoal)
         unlock(Records::ACH_TRIAL_BY_SUNSHINE, notify);
+
+    const Records::AchievementId milestones[] = {
+        Records::ACH_NEW_KID_ON_THE_BLOCK, Records::ACH_UPSTART,
+        Records::ACH_SERIOUS_BUSINESS, Records::ACH_MAGNATE,
+        Records::ACH_INDUSTRIALIST, Records::ACH_ROBBER_BARON,
+        Records::ACH_MOGUL, Records::ACH_TYCOON,
+    };
+    const u8 goals[] = {25, 50, 75, 100, 125, 150, 175, 200};
+    for (u8 i = 0; i < sizeof(goals); i++) {
+        if (sUnlockedCount >= goals[i]) unlock(milestones[i], notify);
+    }
+    if (everyOtherAchievementUnlocked())
+        unlock(Records::ACH_EMPEROR, notify);
 
     sEvaluatingMeta = false;
 }
@@ -992,7 +1243,13 @@ const char *makeDescription(Records::AchievementId id, char *out) {
         const u16 value = timeRuleValue(timeIndex);
         char time[16];
         formatCentis(value, time, (rule.slotFlags & TIME_IGT) != 0);
-        if (id == Records::ACH_NUTTY)
+        if (id == Records::ACH_THE_HOUSE_ALWAYS_WINS)
+            sprintf(out, "Sirena 5: under %s QFT. King Boo control allowed.",
+                    time);
+        else if (id == Records::ACH_PERFECT_PETER)
+            sprintf(out, "Bianco 5: under %s QFT. Petey controls allowed.",
+                    time);
+        else if (id == Records::ACH_NUTTY)
             sprintf(out, "%s: under %s QFT without Yoshi.",
                     ILing::label(rule.entry), time);
         else if (rule.slotFlags & TIME_IGT)
@@ -1005,6 +1262,9 @@ const char *makeDescription(Records::AchievementId id, char *out) {
 
     if (id >= Records::ACH_PLATFORM_RIDER && id <= Records::ACH_MASHATHON)
         return challengeDescription(id);
+    if (id >= Records::ACH_LOST_AND_FLUDD && id <= Records::ACH_ORANGES_QUEST)
+        return PackedText::at(kV22ChallengeDescriptions,
+                              id - Records::ACH_LOST_AND_FLUDD);
 
     if (id >= Records::ACH_BIANCO_BEGINNINGS &&
         id <= Records::ACH_PIANTA_MASTER) {
@@ -1032,12 +1292,19 @@ const char *makeDescription(Records::AchievementId id, char *out) {
         }
         return out;
     }
+    if (id >= Records::ACH_PLAZA_BEGINNINGS &&
+        id <= Records::ACH_SHADOW_SLAYER)
+        return PackedText::at(kV22MasteryDescriptions,
+                              id - Records::ACH_PLAZA_BEGINNINGS);
 
     const int streakIndex = streakRuleIndex(id);
     if (streakIndex >= 0) {
         const StreakRule &rule = kStreakRules[streakIndex];
         const u16 value = streakRuleValue(streakIndex);
-        if (rule.flags == STREAK_FINISH) {
+        if (rule.flags == STREAK_QFT_EXACT) {
+            sprintf(out, "%s: exactly 0:13.81 QFT, %u in a row.",
+                    ILing::label(rule.entry), rule.goal);
+        } else if (rule.flags == STREAK_FINISH) {
             sprintf(out, "%s: %u finishes in a row.",
                     ILing::label(rule.entry), rule.goal);
         } else {
@@ -1063,6 +1330,9 @@ const char *makeDescription(Records::AchievementId id, char *out) {
     if (id >= Records::ACH_GHASTLY && id <= Records::ACH_PHANTASMAL)
         return PackedText::at(kRC2SpecialDescriptions,
                               id - Records::ACH_GHASTLY);
+    if (id >= Records::ACH_NEW_KID_ON_THE_BLOCK && id <= Records::ACH_EMPEROR)
+        return PackedText::at(kV22SpecialDescriptions,
+                              id - Records::ACH_NEW_KID_ON_THE_BLOCK);
     return specialDescription(id);
 }
 
@@ -1078,9 +1348,23 @@ bool streakSucceeded(u8 index, s32 qf, s32 igtCentis) {
         return qf >= 0 && qf <= inclusiveQfForCentis(value);
     case STREAK_IGT:
         return igtCentis >= 0 && (u32)igtCentis >= value;
+    case STREAK_QFT_EXACT:
+        return qf == value;
     default:
         return false;
     }
+}
+
+bool timeEligibleWithAssist(u8 index) {
+    if (introSkipEnabled()) return false;
+    const u8 reasons = sAttemptAssistReasons;
+    if (index == kHouseAlwaysWinsTimeIndex)
+        return reasons == Assist::KING_BOO_FRUIT;
+    if (index == kPerfectPeterTimeIndex) {
+        const u8 petey = Assist::PETEY_NO_TORNADO | Assist::PETEY_ROUTE;
+        return reasons != 0 && !(reasons & ~petey);
+    }
+    return false;
 }
 
 void resetRuntimeObservers() {
@@ -1110,6 +1394,11 @@ void init() {
 void adopt(const u8 achievements[ACHIEVEMENT_BYTES],
            const u32 stats[STAT_CAPACITY]) {
     if (achievements) memcpy(sAchievements, achievements, sizeof(sAchievements));
+    bool migrated = false;
+    migrated |= migrateAchievementBit(ACH_RETIRED_CHUCKSTER_CHANGE,
+                                      ACH_DOOTSTERS);
+    migrated |= migrateAchievementBit(ACH_RETIRED_NO_KIDDING, ACH_SCROOGE);
+    migrated |= migrateAchievementBit(ACH_RETIRED_TOWER_TITAN, ACH_RED_TIDE);
     if (stats) {
         memcpy(sStats, stats, sizeof(sStats));
         memcpy(sGlobalStats, stats, sizeof(sGlobalStats));
@@ -1117,8 +1406,8 @@ void adopt(const u8 achievements[ACHIEVEMENT_BYTES],
     sUnlockFirst = 0;
     sUnlockCount = 0;
     rebuildUnlockCounts();
-    sDirty = false;
-    sAchievementDirty = false;
+    sDirty = migrated;
+    sAchievementDirty = migrated;
     resetRuntimeObservers();
     evaluateMetaAchievements(false);
 }
@@ -1161,7 +1450,9 @@ void update(bool creationEditing, bool observerFrame) {
         countSecond(areaStat((Area)sArea), sAreaFrames[sArea]);
     }
 
-    if (introSkipEnabled() && sAttemptEligible) invalidateAttempt();
+    if (introSkipEnabled() && sAttemptActive &&
+        !(sAttemptAssistReasons & Assist::OTHER))
+        invalidateAttempt(Assist::OTHER);
 
     if (serial != sLastAttemptSerial) {
         sLastAttemptSerial = serial;
@@ -1175,6 +1466,7 @@ void update(bool creationEditing, bool observerFrame) {
         if (sAttemptActive && !sILAttemptAwaitingSerial) {
             resetAllStreaks();
             resetAttemptActions();
+            sAttemptAssistReasons = 0;
             sAttemptEligible = !introSkipEnabled();
             sStageEligible = sAttemptEligible;
             sAttemptStartArea = sGameArea;
@@ -1205,8 +1497,11 @@ void update(bool creationEditing, bool observerFrame) {
                     sActionFlags |= ACTION_ROCKET;
                 else if (fludd->mCurrentNozzle == TWaterGun::Turbo)
                     sActionFlags |= ACTION_TURBO;
+                else if (fludd->mCurrentNozzle == TWaterGun::Spray)
+                    sActionFlags |= ACTION_SPRAY;
             }
         }
+        updateReefRunner(gpMarioOriginal);
         if (gpMarioOriginal->checkStatusType(0x2000)) onHotTubSwimming();
         onMarioHeight(gpMarioOriginal->mTranslation.y);
         updateCataquacks();
@@ -1257,6 +1552,7 @@ void onILAttemptStarted(int entry) {
     sAttemptStartArea = sGameArea;
     sAttemptStartEpisode = sEpisode;
     sILAttemptAwaitingSerial = true;
+    sAttemptAssistReasons = 0;
     resetAttemptActions();
 }
 
@@ -1266,22 +1562,38 @@ void onILAttemptEnded() {
     sAttemptEligible = false;
     sAttemptEntry = -1;
     sILAttemptAwaitingSerial = false;
+    sAttemptAssistReasons = 0;
     resetAttemptActions();
 }
 
 void onILResult(int entry, u8 pbSlot, s32 qf, s32 igtCentis,
-                bool challengeEligible) {
+                bool challengeEligible, GhostRaceSource ghostSource,
+                s32 ghostQf, s32 priorPbQf) {
     const int routeEntry = canonicalResultEntry(entry);
     addStat(STAT_IL_FINISHES, 1);
     addStat(worldFinishStat(worldForEntry(routeEntry)), 1);
 
     const bool eligible = challengeEligible && sAttemptEligible &&
                           !introSkipEnabled();
+    for (u32 i = 0; i < sizeof(kTimeRules) / sizeof(kTimeRules[0]); i++) {
+        const TimeRule &rule = kTimeRules[i];
+        if (routeEntry != rule.entry || (!eligible && !timeEligibleWithAssist(i)))
+            continue;
+        const u16 value = timeRuleValue(i);
+        const bool passed = (rule.slotFlags & TIME_IGT)
+            ? igtCentis >= 0 && (u32)igtCentis >= value
+            : qf >= 0 && qf <= strictQfForCentis(value);
+        if (passed &&
+            (i != kNuttyTimeIndex || !(sActionFlags & ACTION_YOSHI)))
+            unlock(timeAchievement(i));
+    }
+
     if (!eligible) {
         failCurrentAttempt();
         sAttemptActive = false;
         sAttemptEntry = -1;
         sILAttemptAwaitingSerial = false;
+        sAttemptAssistReasons = 0;
         return;
     }
 
@@ -1293,16 +1605,14 @@ void onILResult(int entry, u8 pbSlot, s32 qf, s32 igtCentis,
         sActivePBs[pbSlot] >= 0 && sActivePBs[pbSlot] == qf)
         unlock(ACH_DEJA_VU);
 
-    for (u32 i = 0; i < sizeof(kTimeRules) / sizeof(kTimeRules[0]); i++) {
-        const TimeRule &rule = kTimeRules[i];
-        if (routeEntry != rule.entry) continue;
-        const u16 value = timeRuleValue(i);
-        const bool passed = (rule.slotFlags & TIME_IGT)
-            ? igtCentis >= 0 && (u32)igtCentis >= value
-            : qf >= 0 && qf <= strictQfForCentis(value);
-        if (passed &&
-            (i != kNuttyTimeIndex || !(sActionFlags & ACTION_YOSHI)))
-            unlock(timeAchievement(i));
+    if (ghostSource != GHOST_RACE_NONE && ghostQf >= 0) {
+        if (qf == ghostQf) unlock(ACH_DEAD_HEAT);
+        if (qf < ghostQf && priorPbQf >= 0) {
+            if (ghostSource == GHOST_RACE_PERSONAL && ghostQf == priorPbQf)
+                unlock(ACH_MIRROR_MATCH);
+            if (ghostSource == GHOST_RACE_IMPORTED && ghostQf < priorPbQf)
+                unlock(ACH_STRANGER_DANGER);
+        }
     }
 
     if (entry == 46) unlock(ACH_PLATFORM_RIDER);
@@ -1315,6 +1625,20 @@ void onILResult(int entry, u8 pbSlot, s32 qf, s32 igtCentis,
     if (routeEntry == 121 &&
         !(sActionFlags & (ACTION_YOSHI | ACTION_HOVER)))
         unlock(ACH_NOHOVER);
+    if (routeEntry == 66 && qf >= 0 && qf <= strictQfForCentis(5000) &&
+        !(sActionFlags & (ACTION_HOVER | ACTION_SPRAY)))
+        unlock(ACH_RUINS_RAMPAGE);
+    if (routeEntry == 95 && !(sActionFlags & ACTION_HOVER))
+        unlock(ACH_NO_SAFETY_NET);
+    if (routeEntry == 97 && !(sActionFlags & ACTION_SPRAY))
+        unlock(ACH_A_NEW_LEAF);
+    if (routeEntry == 103 &&
+        !(sActionFlags & (ACTION_ROCKET | ACTION_YOSHI)))
+        unlock(ACH_ORANGES_QUEST);
+    if (routeEntry == 80 && !(sActionFlags & ACTION_HOVER))
+        unlock(ACH_LOST_AND_FLUDD);
+    if (routeEntry == 33 && sReefStarted && !sReefTouched)
+        unlock(ACH_REEF_RUNNER);
 
     for (u32 i = 0; i < sizeof(kStreakRules) / sizeof(kStreakRules[0]); i++) {
         const StreakRule &rule = kStreakRules[i];
@@ -1334,11 +1658,14 @@ void onILResult(int entry, u8 pbSlot, s32 qf, s32 igtCentis,
     sAttemptEligible = false;
     sAttemptEntry = -1;
     sILAttemptAwaitingSerial = false;
+    sAttemptAssistReasons = 0;
     resetAttemptActions();
 }
 
-void onPBAccepted(int, u8) {
+void onPBAccepted(int, u8, s32 previousQf, s32 newQf) {
     addStat(STAT_PBS_EARNED, 1);
+    if (previousQf >= 0 && previousQf - newQf == 4)
+        unlock(ACH_BY_A_NOSE);
     sPBNotifyPending = true;
 }
 
@@ -1404,7 +1731,9 @@ void onCataquacksCleared() {
         unlock(ACH_EXTERMINATOR);
 }
 
-void invalidateAttempt() {
+void invalidateAttempt(u8 assistReasons) {
+    if (sAttemptActive)
+        sAttemptAssistReasons |= assistReasons ? assistReasons : Assist::OTHER;
     failCurrentAttempt();
     sStageEligible = false;
 }
@@ -1415,6 +1744,7 @@ void onSavestateLoaded() {
     sAttemptActive = false;
     sAttemptEntry = -1;
     sILAttemptAwaitingSerial = false;
+    sAttemptAssistReasons = 0;
     resetRuntimeObservers();
 }
 
@@ -1479,6 +1809,13 @@ World worldForArea(Area area) {
 
 World worldForEntry(int entry) {
     if (entry == 121) return WORLD_GELATO;
+    if (entry == 122 || entry == 123) return WORLD_BIANCO;
+    if (entry == 124) return WORLD_RICCO;
+    if (entry == 125) return WORLD_GELATO;
+    if (entry == 126 || entry == 127) return WORLD_PINNA;
+    if (entry == 128 || entry == 129) return WORLD_SIRENA;
+    if (entry == 130) return WORLD_NOKI;
+    if (entry == 131) return WORLD_PIANTA;
     if (entry >= 0 && entry < 13) return WORLD_BIANCO;
     if (entry < 25) return entry >= 13 ? WORLD_RICCO : WORLD_INVALID;
     if (entry < 38) return WORLD_GELATO;
@@ -1541,7 +1878,7 @@ const AchievementDesc *achievement(AchievementId id) {
         const int special = id <= ACH_COMPLETIONIST
             ? id - ACH_GRINDER : 3 + id - ACH_GRAND_TOUR;
         desc.name = PackedText::at(kSpecialNames, special);
-    } else if (id <= ACH_CHUCKSTER_CHANGE) {
+    } else if (id <= ACH_RETIRED_CHUCKSTER_CHANGE) {
         desc.name = PackedText::at(kRCTimeNames,
                                    id - ACH_SAND_IN_THE_HOURGLASS);
     } else if (id <= ACH_LORD_OF_THE_NUT) {
@@ -1551,8 +1888,21 @@ const AchievementDesc *achievement(AchievementId id) {
     } else if (id <= ACH_HIGH_KING) {
         desc.name = PackedText::at(kRC2TimeNames,
                                    id - ACH_WIGGLER_WRESTLING);
-    } else {
+    } else if (id <= ACH_PHANTASMAL) {
         desc.name = PackedText::at(kRC2SpecialNames, id - ACH_GHASTLY);
+    } else if (id <= ACH_THE_CULMINATION) {
+        desc.name = PackedText::at(kV22TimeNames, id - ACH_DOCK_KNOCK);
+    } else if (id <= ACH_ORANGES_QUEST) {
+        desc.name = PackedText::at(kV22ChallengeNames,
+                                   id - ACH_LOST_AND_FLUDD);
+    } else if (id <= ACH_SHADOW_SLAYER) {
+        desc.name = PackedText::at(kV22MasteryNames,
+                                   id - ACH_PLAZA_BEGINNINGS);
+    } else if (id <= ACH_A_CERTAIN_SOMEONE) {
+        desc.name = PackedText::at(kV22StreakNames, id - ACH_ROOTED);
+    } else {
+        desc.name = PackedText::at(kV22SpecialNames,
+                                   id - ACH_NEW_KID_ON_THE_BLOCK);
     }
     desc.description = makeDescription(id, description);
     return &desc;
@@ -1590,13 +1940,18 @@ AchievementId categoryTierAchievement(Category category, Tier tier,
     const int rc2Table = rc2TierTable(category);
     const u8 rc1Count = rc1Table >= 0 ? kRCTierCounts[rc1Table][tier] : 0;
     const u8 rc2Count = rc2Table >= 0 ? kRC2TierCounts[rc2Table][tier] : 0;
-    const u8 launchCount = kTierCounts[category][tier] - rc1Count - rc2Count;
+    const u8 v22Count = kV22TierCounts[category][tier];
+    const u8 launchCount =
+        kTierCounts[category][tier] - rc1Count - rc2Count - v22Count;
     if (index < launchCount)
         return (AchievementId)(kLaunchTierFirst[category][tier] + index);
     index -= launchCount;
     if (index < rc1Count)
         return (AchievementId)(kRCTierFirst[rc1Table][tier] + index);
-    return (AchievementId)(kRC2TierFirst[rc2Table][tier] + index - rc1Count);
+    index -= rc1Count;
+    if (index < rc2Count)
+        return (AchievementId)(kRC2TierFirst[rc2Table][tier] + index);
+    return (AchievementId)(kV22TierFirst[category][tier] + index - rc2Count);
 }
 
 bool unlocked(AchievementId id) { return bitUnlocked(id); }
@@ -1635,6 +1990,7 @@ void resetProgress() {
     sStageEligible = false;
     sAttemptEntry = -1;
     sILAttemptAwaitingSerial = false;
+    sAttemptAssistReasons = 0;
     resetAttemptActions();
     resetRuntimeObservers();
     sDirty = true;

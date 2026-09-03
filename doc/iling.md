@@ -62,7 +62,9 @@ large Sunshine panel, Susamune leaves it untouched and keeps the full-level QFT
 visible in the compact display. Ricco 2 Full accepts either retail race result
 id from its parent-stage origin while the direct Race row keeps its own PB.
 Gelato 8 also accepts a Gelato 1 origin for Gelato Beach Skip, and Bianco 2
-accepts its Shine from a Bianco 1 origin. Pinna 6 Full
+accepts its Shine from a Bianco 1 origin. Bianco 2's segment route publishes
+the accepted `02:00` to `37:00` Windmill transition as its FMV checkpoint and
+carries that attempt into the Petey fight. Pinna 6 Full
 starts inside the park; the separate Pinna Park EYG row starts on the Episode 3
 beach and keeps its own PB.
 
@@ -79,14 +81,16 @@ Noki to flooded Plaza uses the game's own falling Corona-facing return.
 
 Some direct secret and Plaza entries need temporary progression flags. ILs
 records the values it changes and applies them after the old director has
-finished. Full and Secret keep the primary Shine clear through
-`setMario()` so it removes FLUDD; Reds keeps it set through the same point.
-Launching Full or Secret also selects the global No FLUDD mode; launching Reds
-selects All secrets, and the menu saves that choice normally.
-ILs then restores the flag before playable frames, reapplying it briefly when
-a Full attempt enters its child stage. This prevents a pause-menu or blue-coin
-card save from serialising practice-only progression. Restoration is
-conflict-aware: a real gameplay write that replaced a temporary value wins.
+finished. Full and Secret keep the primary Shine clear through `setMario()` so
+it removes FLUDD; Reds keeps it set through the same point. Full Reds keeps the
+main Shine set for the whole parent stage because retail chooses replay-secret
+mode only when Mario enters the portal. It restores the flag after the child
+secret has loaded. Launching Full or Secret also selects the global No FLUDD
+mode; launching Reds or Full Reds selects All secrets, and the menu saves that
+choice normally. Other temporary flags are restored before playable frames.
+This prevents a pause-menu or blue-coin card save from serialising
+practice-only progression. Restoration is conflict-aware: a real gameplay
+write that replaced a temporary value wins.
 
 Plaza scenarios also snapshot the four packed story bits that Force Plaza
 Events changes. Their route profile remains active only as long as the segment

@@ -30,7 +30,10 @@
 #include "susamune/ghost_storage.hxx"
 #include "susamune/qft_display.hxx"
 #include "susamune/records.hxx"
+#include "susamune/practice_visuals.hxx"
 #include "susamune/records_persistence.hxx"
+#include "susamune/ricco_fruit.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/split_events.hxx"
 #include "susamune/split_stats.hxx"
 #include "susamune/stage_loader.hxx"
@@ -47,7 +50,52 @@
 #include "SMS/Manager/PollutionManager.hxx"
 #include "susamune/nintendont_cfg.h"
 #include "susamune/wallkick_display.hxx"
+#include "susamune/movement_display.hxx"
 #include "susamune/gameplay_polish.hxx"
+
+namespace {
+// The mod reservation is fixed, so BSS storage costs no additional game heap.
+// Keep this persistent controller out of Sunshine's pressured system heap.
+alignas(SavestateManager) u8 sSavestateManagerStorage[sizeof(SavestateManager)];
+
+struct RetailPadInputSnapshot {
+    u32 input;
+    u32 frameInput;
+    u32 releaseInput;
+    u32 rapidInput;
+    u32 meaning;
+    u32 frameMeaning;
+    u32 releaseMeaning;
+};
+
+void suppressRetailPad(TMarioGamePad *pad, RetailPadInputSnapshot &saved) {
+    saved.input = pad->mButtons.mInput;
+    saved.frameInput = pad->mButtons.mFrameInput;
+    saved.releaseInput = pad->mButtons._8;
+    saved.rapidInput = pad->mButtons.mRapidInput;
+    saved.meaning = pad->mMeaning;
+    saved.frameMeaning = pad->mFrameMeaning;
+    saved.releaseMeaning = pad->_D8;
+    pad->mButtons.mInput = 0;
+    pad->mButtons.mFrameInput = 0;
+    pad->mButtons._8 = 0;
+    pad->mButtons.mRapidInput = 0;
+    pad->mMeaning = 0;
+    pad->mFrameMeaning = 0;
+    pad->_D8 = 0;
+}
+
+void restoreRetailPad(TMarioGamePad *pad,
+                      const RetailPadInputSnapshot &saved) {
+    pad->mButtons.mInput = saved.input;
+    pad->mButtons.mFrameInput = saved.frameInput;
+    pad->mButtons._8 = saved.releaseInput;
+    pad->mButtons.mRapidInput = saved.rapidInput;
+    pad->mMeaning = saved.meaning;
+    pad->mFrameMeaning = saved.frameMeaning;
+    pad->_D8 = saved.releaseMeaning;
+}
+}
 
 SavestateManager* gSavestateMgr = nullptr;
 
@@ -74,6 +122,8 @@ extern "C" void onAppInit(TApplication* app) {
     app->initialize();
     CrashReport::init();
     gSettings.init();
+    rngControlInit();
+    riccoFruitControlInit();
     gQFTTimer.init();
     Ghost::init();
     GhostModel::init();
@@ -123,7 +173,7 @@ extern "C" u8 onUpdateGameMode(TMarDirector* director) {
     // swallow the transition into the pause state on the frame it fires.
     if (director->mCurState != state &&
         state == TMarDirector::STATE_PAUSE_MENU &&
-        (gBinds.wasPressed(BIND_MENU_TOGGLE) ||
+        (gBinds.wasPressedRaw(BIND_MENU_TOGGLE) ||
          gSettings.getBool(SETTING_DISABLE_RETAIL_PAUSE) ||
          Ghost::observerActive())) {
         state = director->mCurState;
@@ -179,6 +229,8 @@ extern "C" void onSetup(TMarDirector* director) {
     if (Ghost::observerCleanupPending())
         ILing::resetAfterObserver();
     ILing::beforeStageSetup();
+    rngControlBeforeStageSetup();
+    riccoFruitControlBeforeStageSetup();
     director->setupObjects();
     CrashReport::note(SUSAMUNE_CRASH_EVENT_SETUP_RETURN,
                       static_cast<u32>(director->mAreaID) << 8 |
@@ -213,6 +265,7 @@ extern "C" void onSetup(TMarDirector* director) {
     if (observerStage)
         Records::invalidateAttempt();
     WallkickDisplay::onStageSetup();
+    MovementDisplay::onStageSetup();
     CrashReport::note(SUSAMUNE_CRASH_EVENT_STAGE_READY,
                       static_cast<u32>(director->mAreaID) << 8 |
                           director->mEpisodeID,
@@ -227,7 +280,7 @@ extern "C" void onSetup(TMarDirector* director) {
 
     JKRHeap *oldHeap = JKRHeap::sSystemHeap->becomeCurrentHeap();
     menuInit();
-    gSavestateMgr = new SavestateManager();
+    gSavestateMgr = new (sSavestateManagerStorage) SavestateManager();
     
     if (oldHeap) {
         oldHeap->becomeCurrentHeap();
@@ -273,6 +326,8 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     const bool sessionModalBeforeDirect = StageLoader::modal();
     const bool sessionResultBeforeDirect = StageLoader::resultOwnsInput();
     const bool menuOpenBeforeDirect = gMenu && gMenu->shown();
+    const bool menuOwnsRetailPad = menuOpenBeforeDirect ||
+        (gMenu && gBinds.wasPressedRaw(BIND_MENU_TOGGLE));
     const bool wheelOpenBeforeDirect = WarpWheel::shown();
     const bool wheelOwnsInputBeforeDirect =
         wheelOpenBeforeDirect || WarpWheel::promptPending();
@@ -305,6 +360,8 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
          wheelOpenBeforeDirect || WarpWheel::promptPending()))
         WarpWheel::update(gpApplication.mGamePads[0]);
     PatternSelector::update(!creationEditing && !sessionResultBeforeDirect);
+    PracticeVisuals::update();
+    rngControlApply();
 
     // Freeze the stage while an overlay is up. direct() runs the movement and
     // animation perform lists only outside the pause and stage-exit states, so
@@ -319,19 +376,27 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
                              gpMarDirector->mCurState == TMarDirector::STATE_NORMAL &&
                              !freeze;
     WallkickDisplay::beforeDirect(marioActive);
+    MovementDisplay::beforeDirect(marioActive);
     GameplayPolish::beforeDirect();
     if (freeze) {
         gpMarDirector->mCurState = TMarDirector::STATE_STAGE_EXIT_2;
     }
     Ghost::beforeDirect();
     SplitEvents::beginFrame();
+    TMarioGamePad *const retailPad = gpApplication.mGamePads[0];
+    RetailPadInputSnapshot retailInput;
+    if (menuOwnsRetailPad && retailPad)
+        suppressRetailPad(retailPad, retailInput);
     int state = director->direct();
+    if (menuOwnsRetailPad && retailPad)
+        restoreRetailPad(retailPad, retailInput);
     if (freeze) {
         gpMarDirector->mCurState = TMarDirector::STATE_NORMAL;
         state = 0;
     }
     Ghost::afterDirect(state);
     WallkickDisplay::afterDirect(marioActive);
+    MovementDisplay::afterDirect(marioActive);
     GameplayPolish::afterDirect();
     if (gSettings.getBool(SETTING_DISABLE_WARPS) &&
         !WarpWheel::retailExitPending()) {
@@ -429,8 +494,13 @@ extern "C" void afterDraw() {
         const bool sessionModal = StageLoader::modal();
         if (!sessionModal && (!gMenu || !gMenu->shown()))
             PatternSelector::draw(gMenu);
+        if (!sessionModal && (!gMenu || !gMenu->shown()) &&
+            !WarpWheel::shown())
+            PracticeVisuals::draw(gMenu);
         if (!sessionModal &&
             (!gSettings.getBool(SETTING_DISABLE_WARPS) || WarpWheel::shown()))
             WarpWheel::draw();
+        if (gMenu)
+            gMenu->drawInvalidIlWarning();
     }
 }

@@ -51,6 +51,10 @@
       "iso_offset": 1133232
     },
     {
+      "address": 2149607280,
+      "iso_offset": 2234032
+    },
+    {
       "address": 2148453948,
       "iso_offset": 1080700
     },
@@ -113,6 +117,38 @@
     {
       "address": 2149905116,
       "iso_offset": 2531868
+    },
+    {
+      "address": 2151038536,
+      "iso_offset": 3665288
+    },
+    {
+      "address": 2150436728,
+      "iso_offset": 3063480
+    },
+    {
+      "address": 2149211856,
+      "iso_offset": 1838608
+    },
+    {
+      "address": 2149212764,
+      "iso_offset": 1839516
+    },
+    {
+      "address": 2149208312,
+      "iso_offset": 1835064
+    },
+    {
+      "address": 2149208596,
+      "iso_offset": 1835348
+    },
+    {
+      "address": 2149208880,
+      "iso_offset": 1835632
+    },
+    {
+      "address": 2149209188,
+      "iso_offset": 1835940
     }
   ],
   "source_ranges": [
@@ -228,18 +264,63 @@
     },
     {
       "offset": 1774092,
-      "size": 150564,
-      "crc32": "6D9A59A1"
+      "size": 60972,
+      "crc32": "B98FBCD3"
+    },
+    {
+      "offset": 1835068,
+      "size": 280,
+      "crc32": "78EDCC01"
+    },
+    {
+      "offset": 1835352,
+      "size": 280,
+      "crc32": "D84560FB"
+    },
+    {
+      "offset": 1835636,
+      "size": 304,
+      "crc32": "125DBEF3"
+    },
+    {
+      "offset": 1835944,
+      "size": 2664,
+      "crc32": "FC817D06"
+    },
+    {
+      "offset": 1838612,
+      "size": 904,
+      "crc32": "33F5A959"
+    },
+    {
+      "offset": 1839520,
+      "size": 85136,
+      "crc32": "39C13F5E"
     },
     {
       "offset": 1924660,
-      "size": 607208,
-      "crc32": "2AC84915"
+      "size": 309372,
+      "crc32": "7FDCA3BE"
+    },
+    {
+      "offset": 2234036,
+      "size": 297832,
+      "crc32": "BF5798AA"
     },
     {
       "offset": 2531872,
-      "size": 1705632,
-      "crc32": "4B1208F1"
+      "size": 531608,
+      "crc32": "233B9F79"
+    },
+    {
+      "offset": 3063484,
+      "size": 601804,
+      "crc32": "2BC7BFD6"
+    },
+    {
+      "offset": 3665292,
+      "size": 572212,
+      "crc32": "89BB9C51"
     },
     {
       "offset": 4761792,

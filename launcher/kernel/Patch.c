@@ -4085,6 +4085,11 @@ void DoPatches( char *Buffer, u32 Length, u32 DiscOffset )
 // The staged mod_<region>.bin, if the loader found one for this disc. PatchGame
 // can consume this immutable prefix again after an in-session reset; the asset
 // vault begins at the staged-file ceiling after PatchSusamune copies the code.
+static u32 SusamuneModFileSize(const struct SusamuneModHeader *hdr)
+{
+	return SUSAMUNE_MOD_HEADER_SIZE + hdr->codeSize + hdr->writeCount * 8;
+}
+
 static const struct SusamuneModHeader *SusamuneModStaged(void)
 {
 	const struct SusamuneModHeader *hdr = SUSAMUNE_MOD_PHYS_PTR;
@@ -4098,21 +4103,20 @@ static const struct SusamuneModHeader *SusamuneModStaged(void)
 		return NULL;
 	if (hdr->baseAddr != SUSAMUNE_MOD_BASE_FOR_GAME_ID(GAME_ID)
 			|| hdr->arenaReserve != SUSAMUNE_ARENA_RESERVE_SIZE
-			|| hdr->codeSize > SUSAMUNE_MOD_BLOB_MAX_SIZE)
+			|| hdr->codeSize > hdr->memSize
+			|| hdr->memSize > SUSAMUNE_MOD_BLOB_MAX_SIZE)
 		return NULL;
 
 	// The file is untrusted input off an SD card: refuse anything whose parts
 	// do not add up, rather than memcpy'ing a bogus length into MEM1.
 	if (hdr->codeSize > SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE -
 			SUSAMUNE_MOD_HEADER_SIZE
-			|| (hdr->codeSize & 3))
+			|| (hdr->codeSize & 3) || (hdr->memSize & 3))
 		return NULL;
 	codeEnd = SUSAMUNE_MOD_HEADER_SIZE + hdr->codeSize;
 	if (hdr->writeCount > (SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE - codeEnd) / 8)
 		return NULL;
-	if (hdr->fileSize != codeEnd + hdr->writeCount * 8)
-		return NULL;
-	if (hdr->fileSize > SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE)
+	if (SusamuneModFileSize(hdr) > SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE)
 		return NULL;
 
 	return hdr;
@@ -4193,6 +4197,7 @@ static void SusamuneClearAssetHeader(void *asset)
 static void SusamunePreserveGhostModelAssets(
 	const struct SusamuneModHeader *hdr)
 {
+	u32 fileSize = SusamuneModFileSize(hdr);
 	struct SusamuneGhostShadowAsset *shadow =
 		(struct SusamuneGhostShadowAsset*)SUSAMUNE_GHOST_SHADOW_STAGING_PHYS_PTR;
 	struct SusamuneGhostPiantaAsset *pianta =
@@ -4201,10 +4206,10 @@ static void SusamunePreserveGhostModelAssets(
 	void *piantaMaster = (void*)SUSAMUNE_GHOST_PIANTA_MASTER_PHYS_PTR;
 
 	// A larger future mod may own these bytes and must remain repeat-patchable.
-	if (hdr->fileSize > SUSAMUNE_GHOST_ASSET_VAULT_OFFSET)
+	if (fileSize > SUSAMUNE_GHOST_ASSET_VAULT_OFFSET)
 	{
 		dbgprintf("Patch:Ghost model vault unavailable (mod file 0x%X)\r\n",
-			hdr->fileSize);
+			fileSize);
 		return;
 	}
 
@@ -4344,18 +4349,20 @@ void PatchSusamune(void)
 	const struct SusamuneModHeader *hdr = SusamuneModStaged();
 	const u8 *code;
 	const u32 *writes;
-	u32 base, i;
+	u32 base, fileSize, i;
 
 	if (hdr == NULL)
 		return;
 
 	code   = (const u8*)hdr + SUSAMUNE_MOD_HEADER_SIZE;
 	writes = (const u32*)(code + hdr->codeSize);
-	sync_before_read((void*)hdr, hdr->fileSize);
+	fileSize = SusamuneModFileSize(hdr);
+	sync_before_read((void*)hdr, fileSize);
 
 	base = hdr->baseAddr & 0x7FFFFFFF;
 	memcpy((void*)base, code, hdr->codeSize);
-	sync_after_write((void*)base, hdr->codeSize);
+	memset((void*)(base + hdr->codeSize), 0, hdr->memSize - hdr->codeSize);
+	sync_after_write((void*)base, hdr->memSize);
 
 	for (i = 0; i < hdr->writeCount; ++i)
 	{
@@ -4367,8 +4374,9 @@ void PatchSusamune(void)
 	// The complete mod file is consumed; its tail can now own pristine models.
 	SusamunePreserveGhostModelAssets(hdr);
 
-	dbgprintf("Patch:Injected susamune mod (%u bytes at 0x%08X, %u writes)\r\n",
-			hdr->codeSize, hdr->baseAddr, hdr->writeCount);
+	dbgprintf("Patch:Injected susamune mod (%u file bytes, %u MEM1 bytes at "
+		"0x%08X, %u writes)\r\n", hdr->codeSize, hdr->memSize,
+		hdr->baseAddr, hdr->writeCount);
 }
 
 void PatchInit()

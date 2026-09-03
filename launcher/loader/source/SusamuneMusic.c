@@ -1,25 +1,35 @@
 #include <asndlib.h>
-#include <malloc.h>
 #include <mp3player.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "ff_utf8.h"
 #include "exi.h"
 #include "global.h"
+#include "susamune/mem2_map.h"
 #include "SusamuneMp3Validate.h"
 #include "SusamuneMusic.h"
 
 #define MUSIC_PATH_MAX    512u
 #define MUSIC_WARNING_MAX 160u
+#define MUSIC_BUFFER      ((void *)SUSAMUNE_LAUNCHER_MUSIC_PPC_BASE)
 
-static void *sBuffer;
 static s32 sBufferSize;
 static bool sAudioReady;
 static bool sPlaying;
 static char sWarning[MUSIC_WARNING_MAX];
+
+#if SUSAMUNE_THEME_BGM_MAX_SIZE > SUSAMUNE_LAUNCHER_MUSIC_SIZE
+#error "Theme MP3 cap exceeds its transient MEM2 window"
+#endif
+
+static void ReleaseMusicBuffer(u32 span)
+{
+	if (span != 0)
+		DCInvalidateRange(MUSIC_BUFFER, span);
+	sBufferSize = 0;
+}
 
 static bool BuildMusicPath(char *out, size_t outSize, const char *device,
 	const char *launchDir)
@@ -55,7 +65,7 @@ static void LogHeap(const char *where)
 {
 	const struct mallinfo info = mallinfo();
 
-	gprintf("Susamune music heap %s: live=%u free=%u buffer=%u\n", where,
+	gprintf("Susamune music heap %s: live=%u free=%u mem2_buffer=%u\n", where,
 		(unsigned int)info.uordblks, (unsigned int)info.fordblks,
 		(unsigned int)(sBufferSize > 0 ? sBufferSize : 0));
 }
@@ -81,7 +91,7 @@ bool SusamuneMusicLoad(const char *launcherDevice, const char *launchDir)
 	u32 allocationSize;
 
 	sWarning[0] = '\0';
-	if (sBuffer != NULL)
+	if (sBufferSize > 0)
 		return true;
 	if (!BuildMusicPath(path, sizeof(path), launcherDevice, launchDir))
 	{
@@ -110,35 +120,27 @@ bool SusamuneMusicLoad(const char *launcherDevice, const char *launchDir)
 	}
 
 	allocationSize = ((u32)info.fsize + 31u) & ~31u;
-	sBuffer = memalign(32, allocationSize);
-	if (sBuffer == NULL)
-	{
-		snprintf(sWarning, sizeof(sWarning),
-			"Not enough memory for theme MP3.\nContinuing without music.");
-		return false;
-	}
-	memset(sBuffer, 0, allocationSize);
+	// FatFS may use CPU copies or DMA; start uncached and publish either path.
+	DCInvalidateRange(MUSIC_BUFFER, allocationSize);
 	result = f_open_char(&file, path, FA_READ | FA_OPEN_EXISTING);
 	if (result == FR_OK)
 	{
-		result = f_read(&file, sBuffer, (UINT)info.fsize, &got);
+		result = f_read(&file, MUSIC_BUFFER, (UINT)info.fsize, &got);
 		f_close(&file);
 	}
+	DCFlushRange(MUSIC_BUFFER, allocationSize);
 	if (result != FR_OK || got != (UINT)info.fsize)
 	{
-		free(sBuffer);
-		sBuffer = NULL;
+		ReleaseMusicBuffer(allocationSize);
 		snprintf(sWarning, sizeof(sWarning),
 			"Theme MP3 read failed (I/O %d).\nContinuing without music.",
 			(int)result);
 		return false;
 	}
 	sBufferSize = (s32)info.fsize;
-	if (!SusamuneMp3Validate((const u8 *)sBuffer, (u32)sBufferSize))
+	if (!SusamuneMp3Validate((const u8 *)MUSIC_BUFFER, (u32)sBufferSize))
 	{
-		free(sBuffer);
-		sBuffer = NULL;
-		sBufferSize = 0;
+		ReleaseMusicBuffer(allocationSize);
 		snprintf(sWarning, sizeof(sWarning),
 			"Theme BGM is not a valid MP3.\nContinuing without music.");
 		gprintf("Susamune music rejected %s: no consecutive MP3 frames\n", path);
@@ -154,12 +156,13 @@ bool SusamuneMusicStart(void)
 {
 	if (sPlaying)
 		return true;
-	if (sBuffer == NULL || sBufferSize <= 0)
+	if (sBufferSize <= 0)
 		return false;
 
 	// The IOS reload and Nintendont kernel setup can interrupt the decoder.
 	// The caller waits until both are stable, giving it one lifetime per launch.
-	if (!sAudioReady || MP3Player_PlayBuffer(sBuffer, sBufferSize, NULL) < 0)
+	if (!sAudioReady ||
+	    MP3Player_PlayBuffer(MUSIC_BUFFER, sBufferSize, NULL) < 0)
 	{
 		snprintf(sWarning, sizeof(sWarning),
 			"Theme MP3 could not start.\nContinuing without music.");
@@ -173,9 +176,9 @@ bool SusamuneMusicStart(void)
 
 void SusamuneMusicService(void)
 {
-	if (!sPlaying || sBuffer == NULL || MP3Player_IsPlaying())
+	if (!sPlaying || sBufferSize <= 0 || MP3Player_IsPlaying())
 		return;
-	if (MP3Player_PlayBuffer(sBuffer, sBufferSize, NULL) < 0)
+	if (MP3Player_PlayBuffer(MUSIC_BUFFER, sBufferSize, NULL) < 0)
 	{
 		sPlaying = false;
 		gprintf("Susamune music: loop restart failed\n");
@@ -201,11 +204,7 @@ void SusamuneMusicShutdown(void)
 		ASND_End();
 		sAudioReady = false;
 	}
-	if (sBuffer != NULL)
-	{
-		free(sBuffer);
-		sBuffer = NULL;
-		sBufferSize = 0;
-	}
+	if (sBufferSize > 0)
+		ReleaseMusicBuffer(((u32)sBufferSize + 31u) & ~31u);
 	LogHeap("shutdown");
 }

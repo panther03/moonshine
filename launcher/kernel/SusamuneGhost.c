@@ -116,9 +116,32 @@ struct GhostRequest
 	u32 flags;
 };
 
-static struct SlotCatalog Catalog[SUSAMUNE_GHOST_SLOT_COUNT];
-static struct ImportedSlot ImportedCatalog[SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES];
-static struct ImportedSlot ImportCandidate;
+struct ImportedCatalogWork
+{
+	struct ImportedSlot catalog[SUSAMUNE_GHOST_IMPORTED_MAX_ENTRIES];
+	struct ImportedSlot candidate;
+	DIR dir;
+	FILINFO entry;
+};
+
+// Requests are serialized; switching profiles invalidates the old view.
+union GhostCatalogStorage
+{
+	struct SlotCatalog personal[SUSAMUNE_GHOST_SLOT_COUNT];
+	struct ImportedCatalogWork imported;
+};
+
+typedef char ImportedCatalogWorkFitsPersonal[
+	sizeof(((union GhostCatalogStorage*)0)->imported) <=
+	        sizeof(((union GhostCatalogStorage*)0)->personal)
+		? 1 : -1];
+
+static union GhostCatalogStorage CatalogStorage;
+#define Catalog         CatalogStorage.personal
+#define ImportedCatalog CatalogStorage.imported.catalog
+#define ImportCandidate  CatalogStorage.imported.candidate
+#define ImportDir        CatalogStorage.imported.dir
+#define ImportEntry      CatalogStorage.imported.entry
 static struct GhostRequest Request;
 static struct SusamuneGhostStorageEnvelope IoEnvelope;
 static FIL IoFile;
@@ -143,8 +166,6 @@ static u32 IoOffset;
 static u32 IoChecksum;
 static u8 IoBank;
 static u8 LoadAttemptedBanks;
-static DIR ImportDir;
-static FILINFO ImportEntry;
 static bool ImportDirOpen;
 static u32 ImportCandidateSize;
 static u32 ImportPrefixSize;
@@ -1259,6 +1280,7 @@ static void FinishIoError(int result)
 
 static void BeginCatalogScan(u16 profile)
 {
+	ImportedCatalogReady = false;
 	memset(Catalog, 0, sizeof(Catalog));
 	CatalogReady = false;
 	CatalogUnsafe = false;
@@ -1410,6 +1432,7 @@ static void ScanActiveHeaderPass(void)
 
 static void BeginImportScan(void)
 {
+	CatalogReady = false;
 	memset(ImportedCatalog, 0, sizeof(ImportedCatalog));
 	memset(&ImportCandidate, 0, sizeof(ImportCandidate));
 	ImportedCatalogReady = false;
@@ -2176,7 +2199,7 @@ static void ImportScanFileOpenPass(void)
 		closeRet = f_close(&IoFile);
 		IoFileOpen = false;
 		if (closeRet != FR_OK)
-			FinishRequest(StorageStatusForResult(closeRet), 0, 0);
+			FinishIoError(closeRet);
 		else
 			Phase = OP_IMPORT_SCAN_NEXT;
 		return;
@@ -2212,7 +2235,7 @@ static void ImportScanFileClosePass(void)
 	IoFileOpen = false;
 	if (closeRet != FR_OK)
 	{
-		FinishRequest(StorageStatusForResult(closeRet), 0, 0);
+		FinishIoError(closeRet);
 		return;
 	}
 	validate = ValidateCanonicalHeader(bytes, ImportCandidateSize,

@@ -16,6 +16,10 @@ patches = [
      'sym': 'onPauseMenuNextState', 'type': PatchType.BL},
     # gameLoop__12TApplicationFv + 0x210: director->direct() call.
     {'jp': 0x800f9b64, 'us': 0x802a6160, 'pal': 0x8029e070, 'sym': 'onUpdate', 'type': PatchType.BL, 'nop_count': 3},
+    # TGCConsole2::perform: bracket the main HUD draw so the mod-owned retail
+    # timer clears Pinna 8's balloon counter without changing either animation.
+    {'jp': 0x80206770, 'us': 0x80143f50, 'pal': 0x80138b8c,
+     'sym': 'susamuneDrawHudScreen', 'type': PatchType.BL},
     # direct__12TMarDirectorFv + 0x80: setupObjects() call.
     {'jp': 0x800ece3c, 'us': 0x802998b8, 'pal': 0x80291750, 'sym': 'onSetup', 'type': PatchType.BL},
     # TMario::winDemo + 0x88: preserve fireGetStar while publishing one
@@ -76,6 +80,31 @@ patches = [
     # Chomplet / Chain Chomp graph node when Pattern Selector is enabled.
     {'jp': 0x8024f2dc, 'us': 0x8003b6ac, 'pal': 0x8003b4fc,
      'sym': 'susamuneGoToRandomNextGraphNode', 'type': PatchType.B},
+    # Gelato 6 red-coin fish: retain the one retail route roll, then select
+    # the initial direction of kaiyu16/kaiyu17. Both rails are loops after it.
+    {'jp': 0x80363e48, 'us': 0x80005ddc, 'pal': 0x80005ddc,
+     'sym': 'susamuneGelatoFishRandomNext', 'type': PatchType.BL},
+    # King Boo: preserve forceStopSlot(), then optionally arm this reel's
+    # targeted fruit stop. This is the unique SlotStart semantic call.
+    {'jp': 0x802d0f78, 'us': 0x800be8e8, 'pal': 0x800b7f88,
+     'sym': 'susamuneForceKingBooFruit', 'type': PatchType.BL},
+    # Ricco cranes: retail rand still runs once; the shims forward the live
+    # actor from each caller's nonvolatile register so its roll can be retained.
+    {'jp': 0x801a5ed0, 'us': 0x801ce318, 'pal': 0x801c61d0,
+     'sym': 'gCraneUpDownRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a625c, 'us': 0x801ce6a4, 'pal': 0x801c655c,
+     'sym': 'gCraneRotYRandShim', 'type': PatchType.BL},
+    # Ricco fruit launcher: one shared shim identifies the three selection
+    # calls and first velocity call by LR. Every reached site still calls
+    # retail rand exactly once; the velocity result is never substituted.
+    {'jp': 0x801a50f8, 'us': 0x801cd540, 'pal': 0x801c53f8,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5214, 'us': 0x801cd65c, 'pal': 0x801c5514,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5330, 'us': 0x801cd778, 'pal': 0x801c5630,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
+    {'jp': 0x801a5464, 'us': 0x801cd8ac, 'pal': 0x801c5764,
+     'sym': 'gRiccoFruitRandShim', 'type': PatchType.BL},
 ]
 
 # The mod is linked into a region carved from the BOTTOM of the game's heap
@@ -101,8 +130,8 @@ mod_scratch_size = 0x40
 
 # The raw blob ends where the fixed MEM1 attachment heap begins. The packed
 # header/code/write list can use the complete MEM2 prefix before the asset vault.
-mod_mem1_working_cap_size = 0x50000
-mod_attachment_heap_offset = 0x50000
+mod_mem1_working_cap_size = 0x58000
+mod_attachment_heap_offset = 0x58000
 mod_attachment_heap_size = 0x20000
 mod_file_max_size = 0x5F000
 mod_write_count = sum(1 + patch.get('nop_count', 0) for patch in patches)

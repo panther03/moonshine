@@ -86,8 +86,8 @@ public:
     // configured storage.
     void save();
 
-    // Advance an in-flight save. Call once per frame; returns the current
-    // state, transitioning PENDING -> OK / ERROR / TIMEOUT.
+    // Advance an in-flight save. Confirmed backend errors stay dirty and are
+    // retried after a quiet delay; the first error is still returned for UI.
     SettingsSaveState pollSave();
 
     SettingsSaveState saveState() const { return (SettingsSaveState)mSaveState; }
@@ -106,8 +106,8 @@ public:
     // steps a choice. Used by the menu for both A-press and left/right.
     void cycle(SettingId id, int dir);
 
-    // The Starred tab covers the visible generic settings that predate the
-    // hidden packed storage at SETTING_FAVORITES_0.
+    // Shined settings use packed hidden bytes without changing their values.
+    static bool favoriteable(SettingId id);
     bool favorite(SettingId id) const;
     void toggleFavorite(SettingId id);
 
@@ -117,6 +117,16 @@ public:
     static const char     *name(SettingId id);
     static SettingCategory category(SettingId id);
 
+    // PB Safety is driven from this table so the summary page and the feature
+    // code agree on which saved values affect an IL result.
+    static int ilPbSettingCount();
+    static SettingId ilPbSettingAt(int index);
+    static u8 ilPbSafeValue(SettingId id);
+    static bool affectsIlPb(SettingId id);
+    static bool invalidatesIlAttempt(SettingId id);
+    bool blocksIlPb(SettingId id) const;
+    int ilPbBlockerCount() const;
+
 private:
     void adopt(const volatile SusamuneCfg *cfg);
     void stageInto(volatile SusamuneCfg *cfg);
@@ -124,12 +134,15 @@ private:
     u8   mValues[SETTING_COUNT];
     bool mDirty;
     u8   mSaveState;
+    u16  mSaveWaitFrames;
     u32  mLastError;
     u32  mSaveSeq;      // the sequence number we are waiting on
-    u32  mSaveWaitFrames;
 };
 
-static_assert(sizeof(Settings) == ((SETTING_COUNT + 5) & ~3) + 12,
+// The save timers only reach 600. Keeping the counter before the words
+// consumes the alignment hole instead of enlarging the fixed MEM2 slot.
+static_assert(sizeof(Settings) ==
+                  (((((SETTING_COUNT + 3) & ~1) + 5) & ~3) + 8),
               "Settings live state layout changed");
 
 extern Settings &gSettings;

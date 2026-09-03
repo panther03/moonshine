@@ -9,7 +9,6 @@
 #include "exi.h"
 #include "global.h"
 #include "SusamuneTheme.h"
-#include "background_png.h"
 
 #define THEME_BACKGROUND_WIDTH  1024u
 #define THEME_BACKGROUND_HEIGHT 480u
@@ -31,8 +30,7 @@ static float sPanOffset;
 static float sPanDirection = -1.0f;
 static size_t sHeapPeak;
 static char sWarning[THEME_WARNING_MAX];
-static u8 sPngRow[THEME_PNG_ROW_BYTES] ATTRIBUTE_ALIGN(32);
-static bool sSolidFallback;
+static bool sSolidFallback = true;
 static ThemePngReader sPngReader;
 
 static void SampleHeap(void)
@@ -241,6 +239,7 @@ static bool DecodePng(FIL *file, u8 *texture, char *error, size_t errorSize)
 	int passes;
 	int pass;
 	u32 y;
+	u8 pngRow[THEME_PNG_ROW_BYTES] ATTRIBUTE_ALIGN(32);
 
 	memset(reader, 0, sizeof(*reader));
 	reader->file = file;
@@ -306,11 +305,11 @@ static bool DecodePng(FIL *file, u8 *texture, char *error, size_t errorSize)
 		for (y = 0; y < THEME_BACKGROUND_HEIGHT; y++)
 		{
 			if (pass > 0)
-				UnpackRow(texture, y, sPngRow);
+				UnpackRow(texture, y, pngRow);
 			else
-				memset(sPngRow, 0, sizeof(sPngRow));
-			png_read_row(png, sPngRow, NULL);
-			PackRow(texture, y, sPngRow);
+				memset(pngRow, 0, sizeof(pngRow));
+			png_read_row(png, pngRow, NULL);
+			PackRow(texture, y, pngRow);
 			if (pass == 0 && y == 0)
 				SampleHeap();
 		}
@@ -321,28 +320,14 @@ static bool DecodePng(FIL *file, u8 *texture, char *error, size_t errorSize)
 	return true;
 }
 
-static bool RestoreStockBackground(GRRLIB_texImg **backgroundPtr)
-{
-	GRRLIB_texImg *stock = GRRLIB_LoadTexturePNG(background_png);
-
-	if (stock == NULL || stock->data == NULL)
-	{
-		if (stock != NULL)
-			GRRLIB_FreeTexture(stock);
-		return false;
-	}
-	free(*backgroundPtr);
-	*backgroundPtr = stock;
-	sSolidFallback = false;
-	return true;
-}
-
 static void ActivateSolidFallback(GRRLIB_texImg **backgroundPtr)
 {
 	if (backgroundPtr != NULL && *backgroundPtr != NULL)
 	{
-		free((*backgroundPtr)->data);
-		(*backgroundPtr)->data = NULL;
+		if (*backgroundPtr == sCustomBackground)
+			sCustomBackground = NULL;
+		GRRLIB_FreeTexture(*backgroundPtr);
+		*backgroundPtr = NULL;
 	}
 	sSolidFallback = true;
 }
@@ -355,6 +340,7 @@ static bool LoadBackground(const char *path, GRRLIB_texImg **backgroundPtr)
 	u8 header[33];
 	UINT got = 0;
 	FRESULT result;
+	bool validHeader;
 	char decodeError[80];
 
 	result = f_stat_char(path, &fileInfo);
@@ -378,13 +364,22 @@ static bool LoadBackground(const char *path, GRRLIB_texImg **backgroundPtr)
 	}
 
 	result = f_open_char(&file, path, FA_READ | FA_OPEN_EXISTING);
-	if (result == FR_OK)
-		result = f_read(&file, header, sizeof(header), &got);
-	if (result != FR_OK || got != sizeof(header) ||
-	    !ValidatePngHeader(header, sizeof(header)) || f_lseek(&file, 0) != FR_OK)
+	if (result != FR_OK)
 	{
-		if (result == FR_OK)
-			f_close(&file);
+		snprintf(sWarning, sizeof(sWarning),
+			"Theme PNG unreadable (I/O %d).\nUsing the stock background.",
+			(int)result);
+		gprintf("Susamune theme could not open %s (%d)\n", path, (int)result);
+		return false;
+	}
+	result = f_read(&file, header, sizeof(header), &got);
+	validHeader = result == FR_OK && got == sizeof(header) &&
+		ValidatePngHeader(header, sizeof(header));
+	if (validHeader)
+		result = f_lseek(&file, 0);
+	if (!validHeader || result != FR_OK)
+	{
+		f_close(&file);
 		snprintf(sWarning, sizeof(sWarning),
 			"Theme PNG must be a valid 1024x480 PNG.\nUsing the stock background.");
 		gprintf("Susamune theme rejected %s: header or I/O error %d\n",
@@ -393,49 +388,42 @@ static bool LoadBackground(const char *path, GRRLIB_texImg **backgroundPtr)
 	}
 
 	texture = *backgroundPtr;
+	if (texture == NULL)
+	{
+		texture = calloc(1, sizeof(*texture));
+		if (texture == NULL)
+		{
+			f_close(&file);
+			ActivateSolidFallback(backgroundPtr);
+			snprintf(sWarning, sizeof(sWarning),
+				"Theme texture setup failed.\nUsing the stock background.");
+			return false;
+		}
+		*backgroundPtr = texture;
+	}
+	if (texture == sCustomBackground)
+		sCustomBackground = NULL;
 	free(texture->data);
 	texture->data = NULL;
-	LogHeap("stock-released");
+	LogHeap("before-texture");
 	texture->data = memalign(32, THEME_BACKGROUND_BYTES);
 	if (texture->data == NULL)
 	{
-		bool restored;
-
 		f_close(&file);
-		restored = RestoreStockBackground(backgroundPtr);
-		if (!restored)
-		{
-			gprintf("Susamune theme: stock background restore failed\n");
-			ActivateSolidFallback(backgroundPtr);
-		}
-		snprintf(sWarning, sizeof(sWarning), restored ?
-			"Theme PNG needs 1.9 MiB free.\nUsing the stock background." :
-			"Theme PNG needs 1.9 MiB free.\nUsing a plain safe background.");
+		ActivateSolidFallback(backgroundPtr);
+		snprintf(sWarning, sizeof(sWarning),
+			"Theme PNG needs 1.9 MiB free.\nUsing the stock background.");
 		return false;
 	}
 
 	decodeError[0] = '\0';
 	if (!DecodePng(&file, texture->data, decodeError, sizeof(decodeError)))
 	{
-		bool restored;
-
 		f_close(&file);
-		free(texture->data);
-		texture->data = NULL;
-		restored = RestoreStockBackground(backgroundPtr);
-		if (!restored)
-		{
-			gprintf("Susamune theme: stock background restore failed\n");
-			ActivateSolidFallback(backgroundPtr);
-		}
-		if (restored)
-			snprintf(sWarning, sizeof(sWarning),
-				"Theme PNG decode failed:\n%.48s\nUsing the stock background.",
-				decodeError);
-		else
-			snprintf(sWarning, sizeof(sWarning),
-				"Theme PNG decode failed:\n%.48s\nUsing a plain safe background.",
-				decodeError);
+		ActivateSolidFallback(backgroundPtr);
+		snprintf(sWarning, sizeof(sWarning),
+			"Theme PNG decode failed:\n%.48s\nUsing the stock background.",
+			decodeError);
 		gprintf("Susamune theme could not decode %s: %s\n", path, decodeError);
 		return false;
 	}
@@ -464,16 +452,15 @@ bool SusamuneThemeLoad(const char *launcherDevice, const char *launchDir,
 	bool loaded = false;
 
 	sWarning[0] = '\0';
-	sSolidFallback = false;
-	directoryReady = EnsureThemeDirectory(launcherDevice, launchDir);
-	if (backgroundPtr == NULL || *backgroundPtr == NULL ||
-	    (*backgroundPtr)->data == NULL)
+	if (backgroundPtr == NULL)
 	{
-		ActivateSolidFallback(backgroundPtr);
+		sSolidFallback = true;
 		snprintf(sWarning, sizeof(sWarning),
-			"Launcher background unavailable.\nUsing a plain safe background.");
+			"Theme target unavailable.\nUsing the stock background.");
 		return false;
 	}
+	ActivateSolidFallback(backgroundPtr);
+	directoryReady = EnsureThemeDirectory(launcherDevice, launchDir);
 	LogHeap("before-load");
 	if (BuildThemePath(path, sizeof(path), launcherDevice, launchDir,
 		"background.png"))
@@ -482,7 +469,7 @@ bool SusamuneThemeLoad(const char *launcherDevice, const char *launchDir,
 		snprintf(sWarning, sizeof(sWarning),
 			"Theme PNG path is too long.\nUsing the stock background.");
 	if (!loaded)
-		gprintf("Susamune theme: using embedded background\n");
+		gprintf("Susamune theme: using procedural stock background\n");
 	return loaded;
 }
 
@@ -498,13 +485,27 @@ bool SusamuneThemeDrawBackground(u8 alpha, f32 xScale, int xPos)
 	float minPan;
 	float maxPan;
 	float x;
+	int stockWidth;
+	int stockRight;
 	u8 nearAlpha;
 	u8 diagonalAlpha;
 
-	if (sSolidFallback && alpha != 0)
+	if (sSolidFallback)
 	{
-		GRRLIB_Rectangle(0, 0, rmode->fbWidth, rmode->efbHeight,
-			RGBA(222, 223, 224, alpha), true);
+		if (alpha != 0)
+		{
+			stockWidth = (int)(640.0f * xScale);
+			stockRight = xPos + stockWidth;
+			if (xPos > 0)
+				GRRLIB_Rectangle(0, 0, xPos, 480,
+					RGBA(222, 223, 224, alpha), true);
+			if (stockRight < (int)rmode->fbWidth)
+				GRRLIB_Rectangle(stockRight, 0,
+					rmode->fbWidth - stockRight, 480,
+					RGBA(222, 223, 224, alpha), true);
+			GRRLIB_Rectangle(xPos, 0, stockWidth, 480,
+				RGBA(255, 255, 255, alpha), true);
+		}
 		return true;
 	}
 	if (sCustomBackground == NULL || alpha == 0 || imageWidth <= 0.0f)

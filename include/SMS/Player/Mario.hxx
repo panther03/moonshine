@@ -1421,9 +1421,9 @@ public:
 extern TMario *gpMarioOriginal;
 extern TMario *gpMarioAddress;
 extern TVec3f *gpMarioPos;
-extern f32 *gpMarioAngleX;
-extern f32 *gpMarioAngleY;
-extern f32 *gpMarioAngleZ;
+extern s16 *gpMarioAngleX;
+extern s16 *gpMarioAngleY;
+extern s16 *gpMarioAngleZ;
 extern f32 *gpMarioSpeedX;
 extern f32 *gpMarioSpeedY;
 extern f32 *gpMarioSpeedZ;

@@ -9,6 +9,7 @@
 #include "susamune/glyphs.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/packed_text.hxx"
+#include "susamune/rng_control.hxx"
 #include "susamune/settings.hxx"
 
 const char gCreationLettersLower[33] = "abcdefghijklmnopqrstuvwxyz.,!?-_";
@@ -72,6 +73,11 @@ const u32 kPreviewRootTags[] = {
     '\0t_0', '\0c_0', '\0r_0', '\0d_0', '\0m_0', '\0s_0',
 };
 
+u8 sHudBeforeWarning[CreationExtras::HUD_PANE_COUNT][2][3];
+u8 sWaterBeforeWarning[2][3];
+bool sHudWarningApplied;
+bool sHudWarningSnapshotValid;
+
 constexpr int packedEntries(const char *pool, u32 bytes) {
     int count = 1;
     for (u32 i = 0; i + 1 < bytes; i++)
@@ -87,6 +93,7 @@ static_assert(packedEntries(kTimerNames, sizeof(kTimerNames)) ==
 
 const char kWallkickNames[] =
     "1st\0" "2nd\0" "3rd\0" "4th\0" "5th\0" "6th\0" "Late";
+const char kRolloutNames[] = "1f\0" "2f\0" "3f\0" "4f\0" "5f";
 
 inline int clampi(int value, int lo, int hi) {
     if (value < lo) return lo;
@@ -96,6 +103,42 @@ inline int clampi(int value, int lo, int hi) {
 
 void copyRgb(u8 dst[3], const u8 src[3]) {
     for (int c = 0; c < 3; c++) dst[c] = src[c];
+}
+
+void saveRgb(u8 dst[3], const Color &src) {
+    dst[0] = src.r;
+    dst[1] = src.g;
+    dst[2] = src.b;
+}
+
+void loadRgb(Color &dst, const u8 src[3]) {
+    dst.r = src[0];
+    dst.g = src[1];
+    dst.b = src[2];
+}
+
+void makeRed(Color &dst) {
+    dst.r = 255;
+    dst.g = 0;
+    dst.b = 0;
+}
+
+bool isRed(const Color &color) {
+    return color.r == 255 && color.g == 0 && color.b == 0;
+}
+
+void snapshotWarningColors(J2DPicture *const *pictures) {
+    for (u32 i = 0; i < CreationExtras::HUD_PANE_COUNT; i++) {
+        J2DPicture *picture = pictures[i];
+        if (!picture) continue;
+        saveRgb(sHudBeforeWarning[i][0], picture->mColorMask);
+        saveRgb(sHudBeforeWarning[i][1], picture->mColorOverlay);
+    }
+    if (!gpMarDirector || !gpMarDirector->mGCConsole) return;
+    saveRgb(sWaterBeforeWarning[0],
+            gpMarDirector->mGCConsole->mWaterLeftPanelColor);
+    saveRgb(sWaterBeforeWarning[1],
+            gpMarDirector->mGCConsole->mWaterRightPanelColor);
 }
 
 bool sameRgb(const u8 a[3], const u8 b[3]) {
@@ -118,6 +161,20 @@ void loadStyle(CreationStyle &style, const volatile void *source) {
 
 void storeStyle(volatile void *destination, const CreationStyle &style) {
     memcpy(const_cast<void *>(destination), &style, sizeof(style));
+}
+
+void loadMovementOverlay(
+    CreationStyle &style, u8 (*rgb)[3], int colors,
+    const volatile SusamuneMovementOverlayStyleCfg *source) {
+    loadStyle(style, &source->x);
+    memcpy(rgb, (const void *)source->rgb, colors * 3);
+}
+
+void storeMovementOverlay(
+    volatile SusamuneMovementOverlayStyleCfg *destination,
+    const CreationStyle &style, const u8 (*rgb)[3], int colors) {
+    storeStyle(&destination->x, style);
+    memcpy((void *)destination->rgb, rgb, colors * 3);
 }
 
 }  // namespace
@@ -275,6 +332,10 @@ void CreationExtras::resetDefaults() {
     Creation::fillWhite(mSavestateFeedbackRgb, 1);
     mWallkickStyle = defaultWallkickStyle();
     Creation::fillWhite(mWallkickRgb, SUSAMUNE_WALLKICK_STYLE_COLOR_COUNT);
+    mRolloutStyle = defaultWallkickStyle();
+    Creation::fillWhite(mRolloutRgb, SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+    mDustStyle = defaultWallkickStyle();
+    Creation::fillWhite(mDustRgb, SUSAMUNE_DUST_STYLE_COLOR_COUNT);
     mAchievementBannerStyle = defaultAchievementBannerStyle();
     mToastStyle = defaultToastStyle();
     mPbBannerStyle = defaultPbBannerStyle();
@@ -458,7 +519,31 @@ void CreationExtras::stageWallkickInto(
     memset((void *)dst->reserved1, 0, sizeof(dst->reserved1));
 }
 
+void CreationExtras::adoptMovement(
+    const volatile SusamuneMovementStyleCfg *src) {
+    if (!src || src->magic != SUSAMUNE_MOVEMENT_STYLE_MAGIC ||
+        src->version == 0 || src->version > SUSAMUNE_MOVEMENT_STYLE_VERSION)
+        return;
+    loadMovementOverlay(mRolloutStyle, mRolloutRgb,
+                        SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT, &src->rollout);
+    loadMovementOverlay(mDustStyle, mDustRgb,
+                        SUSAMUNE_DUST_STYLE_COLOR_COUNT, &src->dust);
+}
+
+void CreationExtras::stageMovementInto(
+    volatile SusamuneMovementStyleCfg *dst) const {
+    memset((void *)dst, 0, sizeof(*dst));
+    dst->magic = SUSAMUNE_MOVEMENT_STYLE_MAGIC;
+    dst->version = SUSAMUNE_MOVEMENT_STYLE_VERSION;
+    storeMovementOverlay(&dst->rollout, mRolloutStyle, mRolloutRgb,
+                         SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+    storeMovementOverlay(&dst->dust, mDustStyle, mDustRgb,
+                         SUSAMUNE_DUST_STYLE_COLOR_COUNT);
+}
+
 void CreationExtras::onStageSetup() {
+    sHudWarningApplied = false;
+    sHudWarningSnapshotValid = false;
     memset(mHudPictures, 0, sizeof(mHudPictures));
     mHudScreen = nullptr;
     if (!gpMarDirector || !gpMarDirector->mGCConsole ||
@@ -503,10 +588,75 @@ void CreationExtras::onStageSetup() {
                 mWaterFillDefault[0]);
     }
 
+    // A same-scenario savestate may outlive a restart of this stage heap.
+    snapshotWarningColors(mHudPictures);
+    sHudWarningSnapshotValid = true;
+    applyHud();
+}
+
+void CreationExtras::onSavestateLoaded() {
+    if (!gpMarDirector || !gpMarDirector->mGCConsole ||
+        gpMarDirector->mGCConsole->mMainScreen != mHudScreen) return;
     applyHud();
 }
 
 void CreationExtras::applyHud() {
+    const bool warning = rngControlInvalidatesIl();
+    if (warning) {
+        if (!sHudWarningApplied) {
+            snapshotWarningColors(mHudPictures);
+            sHudWarningApplied = true;
+            sHudWarningSnapshotValid = true;
+        }
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture) continue;
+            makeRed(picture->mColorMask);
+            makeRed(picture->mColorOverlay);
+        }
+        if (!mTimerLabelVisible && mHudPictures[HUD_PANE_COUNT - 1])
+            mHudPictures[HUD_PANE_COUNT - 1]->mIsVisible = false;
+        if (gpMarDirector && gpMarDirector->mGCConsole) {
+            makeRed(gpMarDirector->mGCConsole->mWaterLeftPanelColor);
+            makeRed(gpMarDirector->mGCConsole->mWaterRightPanelColor);
+        }
+        return;
+    }
+
+    if (sHudWarningApplied) {
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture) continue;
+            loadRgb(picture->mColorMask, sHudBeforeWarning[i][0]);
+            loadRgb(picture->mColorOverlay, sHudBeforeWarning[i][1]);
+        }
+        if (gpMarDirector && gpMarDirector->mGCConsole) {
+            loadRgb(gpMarDirector->mGCConsole->mWaterLeftPanelColor,
+                    sWaterBeforeWarning[0]);
+            loadRgb(gpMarDirector->mGCConsole->mWaterRightPanelColor,
+                    sWaterBeforeWarning[1]);
+        }
+        sHudWarningApplied = false;
+    } else if (sHudWarningSnapshotValid) {
+        // A savestate made while assisted can restore red stage-heap panes
+        // after the setting itself has been turned off.
+        for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
+            J2DPicture *picture = mHudPictures[i];
+            if (!picture || !isRed(picture->mColorMask) ||
+                !isRed(picture->mColorOverlay)) continue;
+            loadRgb(picture->mColorMask, sHudBeforeWarning[i][0]);
+            loadRgb(picture->mColorOverlay, sHudBeforeWarning[i][1]);
+        }
+        if (gpMarDirector && gpMarDirector->mGCConsole &&
+            isRed(gpMarDirector->mGCConsole->mWaterLeftPanelColor) &&
+            isRed(gpMarDirector->mGCConsole->mWaterRightPanelColor)) {
+            loadRgb(gpMarDirector->mGCConsole->mWaterLeftPanelColor,
+                    sWaterBeforeWarning[0]);
+            loadRgb(gpMarDirector->mGCConsole->mWaterRightPanelColor,
+                    sWaterBeforeWarning[1]);
+        }
+    }
+
     for (u32 i = 0; i < HUD_PANE_COUNT; i++) {
         J2DPicture *picture = mHudPictures[i];
         if (!picture) continue;
@@ -688,6 +838,32 @@ void CreationExtras::beginWallkickEditor() {
                   CreationEditor::CAP_ALL);
 }
 
+void CreationExtras::beginRolloutEditor() {
+    if (editing()) return;
+    mDirtyBeforeEdit = mDirty;
+    mEditMode = EDIT_ROLLOUT;
+    mEditFirst = 0;
+    mEditCount = SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT;
+    mEditTitle = Settings::name(SETTING_ROLLOUT_DISPLAY);
+    mEditor.begin(&mRolloutStyle, mRolloutRgb, mRolloutBackup,
+                  SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT,
+                  SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT, kRolloutNames,
+                  CreationEditor::CAP_ALL);
+}
+
+void CreationExtras::beginDustEditor() {
+    if (editing()) return;
+    mDirtyBeforeEdit = mDirty;
+    mEditMode = EDIT_DUST;
+    mEditFirst = 0;
+    mEditCount = SUSAMUNE_DUST_STYLE_COLOR_COUNT;
+    mEditTitle = Settings::name(SETTING_DUST_DISPLAY);
+    mEditor.begin(&mDustStyle, mDustRgb, mDustBackup,
+                  SUSAMUNE_DUST_STYLE_COLOR_COUNT,
+                  SUSAMUNE_DUST_STYLE_COLOR_COUNT, kWallkickNames,
+                  CreationEditor::CAP_ALL);
+}
+
 void CreationExtras::beginAchievementBannerEditor() {
     if (editing()) return;
     mDirtyBeforeEdit = mDirty;
@@ -748,6 +924,21 @@ void CreationExtras::drawWallkickDisplay(Menu *menu, const char *message,
     color = clampi(color, 0, SUSAMUNE_WALLKICK_STYLE_COLOR_COUNT - 1);
     Creation::drawTextBox(menu, mWallkickStyle, mWallkickRgb + color, 1,
                           message);
+}
+
+void CreationExtras::drawRolloutDisplay(Menu *menu, const char *message,
+                                        int color) const {
+    if (!menu || !message) return;
+    color = clampi(color, 0, SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT - 1);
+    Creation::drawTextBox(menu, mRolloutStyle, mRolloutRgb + color, 1,
+                          message);
+}
+
+void CreationExtras::drawDustDisplay(Menu *menu, const char *message,
+                                     int color) const {
+    if (!menu || !message) return;
+    color = clampi(color, 0, SUSAMUNE_DUST_STYLE_COLOR_COUNT - 1);
+    Creation::drawTextBox(menu, mDustStyle, mDustRgb + color, 1, message);
 }
 
 void CreationExtras::drawToast(Menu *menu, const char *message) const {
@@ -877,6 +1068,8 @@ void CreationExtras::updateEditor(TMarioGamePad *pad) {
     const bool overlayStyle = mEditMode == EDIT_RECENT_ILS ||
                               mEditMode == EDIT_SAVESTATE_FEEDBACK ||
                               mEditMode == EDIT_WALLKICK ||
+                              mEditMode == EDIT_ROLLOUT ||
+                              mEditMode == EDIT_DUST ||
                               mEditMode == EDIT_ACHIEVEMENT_BANNER ||
                               mEditMode == EDIT_TOAST ||
                               mEditMode == EDIT_PB_BANNER ||
@@ -890,6 +1083,8 @@ void CreationExtras::updateEditor(TMarioGamePad *pad) {
         : mEditMode == EDIT_SAVESTATE_FEEDBACK
               ? defaultSavestateFeedbackStyle()
         : mEditMode == EDIT_WALLKICK ? defaultWallkickStyle()
+        : mEditMode == EDIT_ROLLOUT ? defaultWallkickStyle()
+        : mEditMode == EDIT_DUST ? defaultWallkickStyle()
         : mEditMode == EDIT_ACHIEVEMENT_BANNER
               ? defaultAchievementBannerStyle()
         : mEditMode == EDIT_TOAST ? defaultToastStyle()
@@ -1024,6 +1219,22 @@ void CreationExtras::drawEditor(Menu *menu) const {
         const int color = target ? target - 1 : 0;
         const char *preview = wallkickDisplayLabel(color);
         drawWallkickDisplay(menu, preview, color);
+        mEditor.draw(menu, mEditTitle, preview);
+        return;
+    }
+    if (mEditMode == EDIT_ROLLOUT) {
+        const u16 target = mEditor.target();
+        const int color = target ? target - 1 : 0;
+        const char *preview = PackedText::at(kRolloutNames, color);
+        drawRolloutDisplay(menu, preview, color);
+        mEditor.draw(menu, mEditTitle, preview);
+        return;
+    }
+    if (mEditMode == EDIT_DUST) {
+        const u16 target = mEditor.target();
+        const int color = target ? target - 1 : 0;
+        const char *preview = wallkickDisplayLabel(color);
+        drawDustDisplay(menu, preview, color);
         mEditor.draw(menu, mEditTitle, preview);
         return;
     }

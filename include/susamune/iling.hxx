@@ -3,6 +3,8 @@
 
 #include <Dolphin/types.h>
 
+#include "susamune/assist.hxx"
+
 class Menu;
 namespace LevelWarp {
 struct Dest;
@@ -17,6 +19,10 @@ void onPersistenceReady();
 int count();
 const char *label(int entry);
 const char *shortLabel(int entry);
+// All IL catalogue entries, including bonus and 100-coin Shines, may streak.
+bool streakEntrySelectable(int entry);
+// A Streaking finish may be any Shine collected from the selected start scene.
+bool sameEpisodeShine(int selectedEntry, int completedEntry);
 s32 pbQf(int entry);
 // Stable across catalogue reorderings; shared by PBs and per-level targets.
 int persistentSlot(int entry);
@@ -32,6 +38,12 @@ void setPbProfileName(int profile, const char *name);
 int jumpGroup(int entry, int direction);
 bool beginsGroup(int entry);
 const char *groupName(int entry);
+// Menus project appended routes into their courses without changing saved ids.
+int menuEntryAt(int position);
+int menuPositionOf(int entry);
+int jumpMenuGroup(int position, int direction);
+bool beginsMenuGroup(int position);
+const char *menuGroupName(int position);
 // Parent episode retained by the active IL attempt, or -1 when it does not
 // describe `parentArea`. Direct internal starts use this for full restart.
 int activeParentEpisode(u8 parentArea);
@@ -64,7 +76,7 @@ void onStageSetup();
 void onSavestateSaved();
 void onSavestateLoaded();
 // Revoke PB, Records and challenge credit without changing the QFT clock.
-void invalidateForAssist();
+void invalidateForAssist(u8 reasons = Assist::OTHER);
 bool achievementChimeBlocked();
 
 // PB result banner, drawn through Menu's shared no-allocation renderer.

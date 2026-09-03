@@ -15,6 +15,8 @@ SETTINGS = ROOT / "include" / "susamune" / "settings_list.h"
 DESCS = ROOT / "src" / "settings_descs.inc"
 QFT_HEADER = ROOT / "include" / "susamune" / "qft_timer.hxx"
 QFT_SOURCE = ROOT / "src" / "qft_timer.cpp"
+ILING_HEADER = ROOT / "include" / "susamune" / "iling.hxx"
+MENU = ROOT / "src" / "menu.cpp"
 
 
 def array_values(source: str, name: str) -> tuple[int, ...]:
@@ -33,16 +35,18 @@ class GelatoGbsContracts(unittest.TestCase):
     def test_catalog_alias_is_append_only_and_distinct(self) -> None:
         entries = ENTRIES.read_text(encoding="utf-8").rstrip()
         iling = ILING.read_text(encoding="utf-8")
-        self.assertTrue(
-            entries.endswith(
-                'SHINE_ROUTE("Gelato GBS", 4, 0, 0, 27, '
-                "GROUP_ANY_PERCENT, 125)"
-            )
+        self.assertIn(
+            'SHINE_ROUTE("Gelato GBS", 4, 0, 0, 27, '
+            "GROUP_ANY_PERCENT, 125)",
+            entries,
         )
         self.assertEqual(iling.count("#define SHINE_ROUTE"), 4)
         self.assertEqual(iling.count("#undef SHINE_ROUTE"), 4)
         self.assertIn("const int kEntryGelatoGbs = 121;", iling)
-        self.assertIn("const int kPbSlotCount = 126;", iling)
+        self.assertIn(
+            "const int kPbSlotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;",
+            iling,
+        )
         self.assertIn('"SE\\0NE\\0CE\\0GGBS"', iling)
         self.assertIn("if (i == kEntryGelatoGbs) continue;", iling)
         self.assertRegex(
@@ -68,6 +72,36 @@ class GelatoGbsContracts(unittest.TestCase):
         )
         theory = array_values(iling, "kAnyPercentTheorySlots")
         self.assertEqual(theory[:8], (1, 2, 3, 4, 5, 6, 125, 26))
+
+    def test_ils_tab_projects_gbs_into_the_gelato_section(self) -> None:
+        iling = ILING.read_text(encoding="utf-8")
+        header = ILING_HEADER.read_text(encoding="utf-8")
+        menu = MENU.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            iling,
+            r"kMenuGroupFirst\[GROUP_COUNT\]\s*=\s*\{\s*"
+            r"0, 15, 28, 43, 59, 74, 88, 101, 103, 105, 121\s*\}",
+        )
+        self.assertIn("121, 126, 127, 128, 129, 130, 131", iling)
+        for declaration in (
+            "int menuEntryAt(int position);",
+            "int menuPositionOf(int entry);",
+            "int jumpMenuGroup(int position, int direction);",
+            "bool beginsMenuGroup(int position);",
+            "const char *menuGroupName(int position);",
+        ):
+            self.assertIn(declaration, header)
+        ils_tab = menu[
+            menu.index("class ILingTab") : menu.index("class GhostsTab")
+        ]
+        self.assertIn("ILing::menuEntryAt(position)", ils_tab)
+        self.assertIn("ILing::beginsMenuGroup(position)", ils_tab)
+        self.assertIn("ILing::menuGroupName(position)", ils_tab)
+        self.assertIn("ILing::jumpMenuGroup(position, direction)", ils_tab)
+        loader_tab = menu[menu.index("class StageLoaderTab") :]
+        self.assertIn("ILing::menuEntryAt(position)", loader_tab)
+        self.assertIn("ILing::beginsMenuGroup(position)", loader_tab)
 
     def test_fast_any_uses_route_but_legacy_action_survives(self) -> None:
         source = STAGE_LOADER.read_text(encoding="utf-8")
@@ -107,16 +141,21 @@ class GelatoGbsContracts(unittest.TestCase):
             r"X\((SETTING_[A-Z0-9_]+),\s*\"[^\"]+\"\)",
             SETTINGS.read_text(encoding="utf-8"),
         )
+        first = setting_rows.index("SETTING_TIMER_FREEZE_MOVING_PLATFORM")
         self.assertEqual(
-            setting_rows[-3:],
+            setting_rows[first : first + 3],
             [
                 "SETTING_TIMER_FREEZE_MOVING_PLATFORM",
                 "SETTING_LEVEL_SPLITS",
                 "SETTING_STREAK_AUTO_RESET",
             ],
         )
+        desc_lines = DESCS.read_text(encoding="utf-8").strip().splitlines()
+        first_desc = desc_lines.index(
+            'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)'
+        )
         self.assertEqual(
-            DESCS.read_text(encoding="utf-8").strip().splitlines()[-3:],
+            desc_lines[first_desc : first_desc + 3],
             [
                 'SBOOL("Freeze: moving platform", 1, SETTING_CAT_TIMER)',
                 'SBOOL("Level splits", 1, SETTING_CAT_TIMER)',

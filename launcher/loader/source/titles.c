@@ -92,21 +92,24 @@ int LoadTitles(void)
 	// If loaded from network, launch_dir[] is empty,
 	// so use /apps/Nintendont/ as a fallback.
 	char filepath[MAXPATHLEN];
-	snprintf(filepath, sizeof(filepath), "%stitles.txt",
-		 launch_dir[0] != 0 ? launch_dir : "/apps/Nintendont/");
+	int written = snprintf(filepath, sizeof(filepath), "%stitles.txt",
+		launch_dir[0] != 0 ? launch_dir : "/apps/Nintendont/");
+	loaded = false;
+	title_count = 0;
+	if ((unsigned int)written >= sizeof(filepath))
+		return 0;
 
 	FIL titles_txt;
 	if (f_open_char(&titles_txt, filepath, FA_READ|FA_OPEN_EXISTING) != FR_OK)
 		return 0;
 
-	char *cur_title = &__title_list[0][0];
-	title_count = 0;
 	loaded = true;
 
 	// FIXME: Optimize title loading by reading chunks at a time
 	// instead of single bytes.
 	char c;
 	int pos = 0;
+	bool discard = false;
 	UINT read;
 	do {
 		if (f_read(&titles_txt, &c, 1, &read) != FR_OK || read == 0)
@@ -115,22 +118,30 @@ int LoadTitles(void)
 			continue;
 		}
 
-		if (c == '\n' || c == 0 || pos == (LINE_LENGTH - 1))
+		if (c == '\n' || c == 0)
 		{
 			// End of the line.
-			if (pos > 5) {
+			if (!discard && pos > 5) {
 				// Valid title.
-				*cur_title = 0;
+				__title_list[title_count][pos] = 0;
 				title_count++;
-				cur_title = &__title_list[title_count][0];
-				pos = 0;
 			}
+			pos = 0;
+			discard = false;
+			if (title_count == MAX_TITLES)
+				break;
 		}
-		else
+		else if (!discard)
 		{
-			// Append the character.
-			*cur_title++ = c;
-			pos++;
+			if (pos == (LINE_LENGTH - 1))
+			{
+				// Reject the whole overlong line; do not split it into titles.
+				discard = true;
+			}
+			else
+			{
+				__title_list[title_count][pos++] = c;
+			}
 		}
 	} while (!f_eof(&titles_txt) && c != 0);
 	f_close(&titles_txt);

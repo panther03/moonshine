@@ -20,6 +20,25 @@ struct PlaybackInfo {
     bool pinned;
 };
 
+enum RaceSource : u8 {
+    RACE_SOURCE_NONE,
+    RACE_SOURCE_PERSONAL,
+    RACE_SOURCE_IMPORTED,
+};
+
+struct RaceContext {
+    u32 attemptSerial;
+    u32 targetQf;
+    s32 startingPbQf;
+    s32 routeVariant;
+    s16 ilEntry;
+    u8 area;
+    u8 episode;
+    u8 routeParentArea;
+    u8 routeFlags;
+    RaceSource source;
+};
+
 struct VisualState {
     f32 x;
     f32 y;
@@ -46,7 +65,10 @@ void onSavestateLoaded();
 bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
                   const char *profileName, u32 *outSize,
                   u32 *outRecordToken);
-bool importPlayback(const void *data, u32 size);
+bool importPlayback(const void *data, u32 size, bool imported);
+// Frozen when a pinned library opponent begins a matching QFT attempt.
+bool raceContext(RaceContext *out);
+bool bindRaceContext(s16 ilEntry, s32 startingPbQf);
 // Observer loads reuse the playback and record-slot payloads. The secondary
 // track has independent metadata; recording stays disabled until Watch ends.
 bool beginObserverPreparation(bool twoGhosts);

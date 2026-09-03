@@ -85,7 +85,6 @@ extern NIN_CFG *ncfg;
 extern FILE *cfg;
 extern GRRLIB_ttfFont *myFont;
 extern GRRLIB_texImg *background;
-extern GRRLIB_texImg *screen_buffer;
 
 enum
 {
@@ -159,8 +158,11 @@ const char* const GetRootDevice();
 void RAMInit(void);
 void Initialise(void);
 void RevealBackground(bool autoboot);
-void unzip_data(const void *input, const unsigned int input_size, 
+void FreeLauncherFont(void);
+bool unzip_data(const void *input, const unsigned int input_size,
 	void **output, unsigned int *output_size);
+bool unzip_data_into(const void *input, const unsigned int input_size,
+	void *output, unsigned int output_capacity, unsigned int *output_size);
 
 /**
  * Load the configuration file from the root device.
@@ -182,7 +184,6 @@ void LoaderShutdown() NORETURN;
 void ClearScreen();
 void CloseDevices();
 void hexdump(void *d, int len);
-void DrawBuffer(void);
 void UpdateScreen(void);
 void Screenshot(void);
 raw_irq_handler_t BeforeIOSReload();

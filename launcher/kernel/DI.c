@@ -42,7 +42,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "usbstorage.h"
 
 #include "ff_utf8.h"
-static u8 DummyBuffer[0x1000] __attribute__((aligned(32)));
 extern u32 s_cnt;
 
 #ifndef DEBUG_DI
@@ -247,8 +246,9 @@ void DIinit( bool FirstTime )
 		NetworkCMDBuffer = (u8*)malloc( 512 );
 		memset32( NetworkCMDBuffer, 0, 512 );
 
-		//This normally contains default rankings but we just clear it
-		memset32( DIMMMemory, 0, NIN_MEM2_DIMM_SIZE );
+		// A normal IPL may already occupy DIMM; Triforce still needs it clear.
+		if(!ConfigGetConfig(NIN_CFG_GCN_IPL_STAGED))
+			memset32( DIMMMemory, 0, NIN_MEM2_DIMM_SIZE );
 
 		memset32( (void*)DI_BASE, 0, 0x30 );
 		sync_after_write( (void*)DI_BASE, 0x40 );
@@ -870,7 +870,9 @@ u32 DIReadThread(void *arg)
 			case IOS_IOCTL:
 				if(di_msg->ioctl.command == 2)
 				{
-					USBStorage_ReadSectors(read32(HW_TIMER) % s_cnt, 1, DummyBuffer);
+					// This synchronous keepalive returns before any disc read can
+					// reuse the DI scratch window.
+					USBStorage_ReadSectors(read32(HW_TIMER) % s_cnt, 1, DI_READ_BUFFER);
 					mqueue_ack( di_msg, 0 );
 					break;
 				}

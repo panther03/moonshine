@@ -41,7 +41,9 @@
     X(BIND_ATTEMPT_DEC,          "attempt_decrease")                         \
     X(BIND_ATTEMPT_INC,          "attempt_increase")                         \
     X(BIND_SUCCESS_DEC,          "success_decrease")                         \
-    X(BIND_SUCCESS_INC,          "success_increase")
+    X(BIND_SUCCESS_INC,          "success_increase")                         \
+    X(BIND_POSITION_SAVE,        "position_save")                            \
+    X(BIND_POSITION_LOAD,        "position_load")
 
 // The bindable buttons, as (GameCube button bit, ini token, menu glyph). The
 // mod defines the regional glyph macros in glyphs.hxx; the launcher ignores

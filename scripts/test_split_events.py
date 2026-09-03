@@ -118,6 +118,7 @@ CARRY_ROWS = (
     ("ROUTE_RICCO_1", 3, 0, 0x3B, 0),
     ("ROUTE_RICCO_2", 3, 1, 0x1E, 0),
     ("ROUTE_RICCO_4", 3, 3, 0x30, 0),
+    ("ROUTE_BIANCO_2", 2, 0, 0x37, 0),
     ("ROUTE_BIANCO_3_FULL", 2, 2, 0x2F, 0),
     ("ROUTE_BIANCO_6_FULL", 2, 5, 0x2E, 0),
     ("ROUTE_PIANTA_5_FULL", 8, 4, 0x2A, 0),
@@ -154,7 +155,7 @@ class SplitEventContractTests(unittest.TestCase):
             tuple(map(int, match))
             for match in re.findall(r"\{(\d+),\s*(\d+),\s*(\d+)\}", table)
         ]
-        self.assertEqual(len(rows), 122)
+        self.assertEqual(len(rows), 132)
         self.assertEqual(tuple(row[2] for row in rows), ROUTE_COUNTS)
         self.assertEqual(
             tuple(row[1] for row in rows), checkpoint_schema.ROUTE_ENTRIES
@@ -163,13 +164,13 @@ class SplitEventContractTests(unittest.TestCase):
             tuple(map(len, checkpoint_schema.CHECKPOINTS)), ROUTE_COUNTS
         )
         self.assertEqual(sum(ROUTE_COUNTS), 153)
-        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 275)
+        self.assertEqual(sum(count + 1 for count in ROUTE_COUNTS), 285)
         self.assertEqual(
             checkpoint_schema.schema_hash(),
             checkpoint_schema.EXPECTED_SCHEMA_HASH,
         )
         cursor = 0
-        for first, _, count in rows:
+        for route, (first, _, count) in enumerate(rows):
             self.assertEqual(first, cursor)
             cursor += count + 1
 
@@ -259,26 +260,24 @@ class SplitEventContractTests(unittest.TestCase):
         )
         self.assertNotIn("JDrama::TActor *, u16 demoFlag", text)
         wrapper = text.rsplit('extern "C" void susamuneSplitStartDemo', 1)[1]
-        wrapper = wrapper.split('extern "C" void susamuneSplitOpenTalk', 1)[0]
+        wrapper = wrapper.split(
+            'extern "C" void susamuneSplitOpenTalk', 1
+        )[0]
         self.assertIn("+ 0x24C", wrapper)
         self.assertIn("if (after == before) return;", wrapper)
         self.assertLess(wrapper.index("if (after == before) return;"),
                         wrapper.index("gQFTTimer.freezeEvent();"))
-        self.assertIn("captureDemoEvent(", wrapper)
-        self.assertIn(
-            "SplitStats::onRouteEvent(candidateRoute, candidateEvent, candidateQf)",
-            wrapper,
-        )
+        self.assertNotIn("ROUTE_BIANCO_2", wrapper)
         self.assertNotIn("publishEvent", wrapper)
-        capture = text.split("bool captureDemoEvent", 1)[1].split(
-            "void updateTransitions", 1
+
+        petey = text.split("void notePetey(", 1)[1].split(
+            "void noteBossGesso", 1
         )[0]
-        self.assertIn(
-            "SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2)", capture
-        )
-        self.assertIn("director->mAreaID != 2", capture)
-        self.assertIn("director->mEpisodeID != 0", capture)
-        self.assertIn("*event = 1;", capture)
+        self.assertIn("kPeteyBreakSleepVtable", petey)
+        self.assertNotIn("ROUTE_BIANCO_2", petey)
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", petey)
+        self.assertIn("publishEvent(sActiveRoute, 0)", petey)
+        self.assertNotIn("captureDemoEvent", text)
         self.assertNotIn("DIRECT(SETTING_TIMER_FREEZE_DEMO", source_text(QFT))
         setup = text[text.index("void beforeStageSetup()") :]
         setup = setup[:setup.index("void onStageSetup(")]
@@ -288,6 +287,59 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn(
             "const TGameSequence &current = gpApplication.mCurrentScene;", setup
         )
+
+    def test_bianco_two_petey_damage_has_exact_hook_and_poll_fallback(self) -> None:
+        text = source_text()
+        self.assertNotIn("susamuneSplitStreamingMovie", text)
+        self.assertNotIn("sStreamingMovieTrampoline", text)
+        self.assertNotIn("kStreamingMovie", text)
+        petey = text.split("void notePeteyDamage", 1)[1].split(
+            "void notePetey(", 1
+        )[0]
+        self.assertIn("publishEvent(sActiveRoute, sPeteyHits + 1)", petey)
+        hip_drop = text.rsplit(
+            'extern "C" void susamuneSplitPeteyHipDrop', 1
+        )[1].split(
+            'extern "C" void susamuneSplitGessoTentacleDamage', 1
+        )[0]
+        self.assertIn(
+            "routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0)", hip_drop
+        )
+        self.assertIn("routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4)", hip_drop)
+        self.assertEqual(hip_drop.count("notePeteyDamage("), 1)
+        self.assertLess(hip_drop.index("sPeteyHipDropTrampoline"),
+                        hip_drop.index("notePeteyDamage("))
+        self.assertIn("sPeteyHealth = after;", hip_drop)
+
+        polling = text.split("void updatePetey()", 1)[1].split(
+            "void updateManta", 1
+        )[0]
+        self.assertIn("kPeteyManagerVtable, kPeteyVtable", polling)
+        self.assertIn("notePeteyDamage(sPeteyHealth, health);", polling)
+        self.assertIn("sPeteyHealthValid = true;", polling)
+        update = text.split("void update()", 1)[1].split(
+            "void onYoshiMounted", 1
+        )[0]
+        self.assertIn("updatePetey();", update)
+
+        spine_routes = text.split("bool routeUsesSpine", 1)[1].split(
+            "bool spineActorRelevant", 1
+        )[0]
+        self.assertNotIn("SplitStats::ROUTE_BIANCO_2", spine_routes)
+        relevant = text.split("bool spineActorRelevant", 1)[1].split(
+            "void noteSpineUpdate", 1
+        )[0]
+        self.assertNotIn("SplitStats::ROUTE_BIANCO_2", relevant)
+        self.assertRegex(relevant, r"case SplitStats::ROUTE_BIANCO_5:\s*"
+                                   r"return vtable == kPeteyVtable;")
+        health = text.split("bool healthActor", 1)[1].split(
+            "bool routeUsesSpine", 1
+        )[0]
+        self.assertNotIn("vtable == kPeteyVtable", health)
+        spine_note = text.split("void noteSpineUpdate", 1)[1].split(
+            "bool isChainTail", 1
+        )[0]
+        self.assertNotIn("notePeteyDamage", spine_note)
 
     def test_carry_table_is_exact_and_known_transitions_arm_it(self) -> None:
         text = source_text()
@@ -351,6 +403,10 @@ class SplitEventContractTests(unittest.TestCase):
             "sArmedCarryRoute == SplitStats::ROUTE_PINNA_1", text
         )
         self.assertIn(
+            "sArmedCarryRoute == SplitStats::ROUTE_BIANCO_2", text
+        )
+        self.assertIn("sceneMatches(current, 0x37, 0)", text)
+        self.assertIn(
             "routeScene(sActiveRoute, 0x0D, 6)", text
         )
         self.assertIn(
@@ -359,6 +415,11 @@ class SplitEventContractTests(unittest.TestCase):
         transitions = text.split("void updateTransitions()", 1)[1].split(
             "bool crossedAbove", 1
         )[0]
+        bianco = transitions.split(
+            "case SplitStats::ROUTE_BIANCO_2:", 1
+        )[1].split("break;", 1)[0]
+        self.assertIn("routeScene(sActiveRoute, 2, 0)", bianco)
+        self.assertIn("publishTransition(sActiveRoute, 1, 0x37)", bianco)
         corona = transitions.split("case SplitStats::ROUTE_CORONA:", 1)[1]
         corona = corona.split("break;", 1)[0]
         self.assertIn("publishTransition(sActiveRoute, 2, 0x3C)", corona)
@@ -429,6 +490,8 @@ class SplitEventContractTests(unittest.TestCase):
         self.assertIn("status == kMarioRolloutStatus", b2)
         self.assertIn("mario->mTranslation.y >= 3200.0f", b2)
         self.assertIn("publishEvent(sActiveRoute, 0)", b2)
+        self.assertIn("routeScene(sActiveRoute, 2, 0)", b2)
+        self.assertNotIn("routeScene(sActiveRoute, 2, 1)", b2)
         entries = ILING_ENTRIES.read_text(encoding="utf-8")
         self.assertIn(
             'SHINE("Bianco 1", 2, 0, 0, 0, GROUP_BIANCO)', entries

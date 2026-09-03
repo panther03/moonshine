@@ -168,7 +168,31 @@
     X(SETTING_TIMER_FREEZE_MOVING_PLATFORM, "timer_freeze_moving_platform")   \
     /* -- V2.1.1 presentation/session controls (append-only persisted ids) -- */ \
     X(SETTING_LEVEL_SPLITS,                 "level_splits")                   \
-    X(SETTING_STREAK_AUTO_RESET,            "streak_auto_reset")
+    X(SETTING_STREAK_AUTO_RESET,            "streak_auto_reset")             \
+    /* -- V2.2 RNG controls (append-only persisted ids) -- */                  \
+    X(SETTING_KING_BOO_ALWAYS_FRUIT,        "king_boo_always_fruit")          \
+    X(SETTING_PETEY_NO_TORNADO,             "petey_no_tornado")               \
+    X(SETTING_PETEY_ROUTE,                  "petey_route")                    \
+    X(SETTING_RICCO_CRANE_SPEED,            "ricco_crane_speed")             \
+    X(SETTING_RICCO_FRUIT_MACHINE,          "ricco_fruit_machine")           \
+    /* -- V2.2 PR2 controls (append-only persisted ids) -- */                  \
+    /* Retired Skeeter slot: keep its id and ini key reserved. */              \
+    X(SETTING_BIANCO_SKEETER_ROUTE,         "bianco_skeeter_route")          \
+    X(SETTING_ROLLOUT_DISPLAY,              "rollout_display")               \
+    X(SETTING_DUST_DISPLAY,                 "dust_display")                  \
+    X(SETTING_TIMER_FREEZE_AIRGRAB,         "timer_freeze_airgrab")          \
+    /* -- Course patterns (append-only persisted ids) -- */                  \
+    X(SETTING_GELATO_RED_COIN_FISH_PATTERN, "gelato_red_coin_fish_pattern")  \
+    X(SETTING_GELATO_BLUE_BIRD_PATTERN,     "gelato_blue_bird_pattern")     \
+    /* -- Practice visuals (append-only persisted ids) -- */                 \
+    X(SETTING_PINNA_HIDDEN_ITEMS,            "pinna_hidden_items")           \
+    X(SETTING_ENEMY_HURTBOXES,               "enemy_hurtboxes")              \
+    /* -- Post-V2.1 Shined storage (append-only persisted id) -- */          \
+    X(SETTING_RNG_FAVORITES,                 "rng_favorites")              \
+    /* -- V2.2 PR6 practice visuals (append-only persisted ids) -- */        \
+    X(SETTING_HIDDEN_ITEM_LABELS,            "hidden_item_labels")         \
+    X(SETTING_HURTBOX_TARGET,                "hurtbox_target")             \
+    X(SETTING_RICCO_RACE_CHECKPOINTS,        "ricco_race_checkpoints")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

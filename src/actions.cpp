@@ -20,6 +20,7 @@
 #include "susamune/iling.hxx"
 
 #include "Dolphin/OS.h"  // DCFlushRange, ICInvalidateRange
+#include "SMS/Camera/PolarSubCamera.hxx"
 #include "SMS/MapObj/MapObjBase.hxx"
 #include "SMS/MoveBG/EggYoshi.hxx"
 #include "SMS/Player/Mario.hxx"
@@ -86,6 +87,7 @@ void regrabLastHeldObject() {
         return;
     }
 
+    ILing::invalidateForAssist();
     mario->mGrabTarget = gLastHeldObject;
     mario->mState      = kMarioStatusTake;
     if (gLastHeldObject->receiveMessage(mario, kHitMessageTake)) {
@@ -127,7 +129,7 @@ void regrabLastHeldObject() {
 // spawned and counted down at the end of actionsApply(): TEggYoshi::control
 // runs inside director->direct(), i.e. *before* the next actionsApply(), so the
 // arm has to survive one full frame.
-int gEggKillFrames = 0;
+u8 gEggKillFrames = 0;
 
 // TEggYoshi::control+0x1C, replacing `lhz r0, 0xFC(r31)`. The site sits on the
 // instruction after `bl TMapObjBase::control()`, so every volatile register
@@ -224,6 +226,7 @@ void spawnYoshi(u8 color) {
     mario->changePlayerStatus(kMarioStatusWait, 0, false);
 
     gEggKillFrames = 2;  // survives this frame's countdown, see gEggKillFrames
+    ILing::invalidateForAssist();
 }
 
 void spawnYoshiFromBinds() {
@@ -238,6 +241,57 @@ void spawnYoshiFromBinds() {
         spawnYoshi(TYoshi::PURPLE);
     } else if (gBinds.wasPressed(BIND_SPAWN_YOSHI_PINK)) {
         spawnYoshi(TYoshi::PINK);
+    }
+}
+
+// =====================================================================
+// Save / Load Position  (DPad Functions, Dan Salvato)
+// =====================================================================
+
+struct PositionSnapshot {
+    TVec3f position;
+    s16    marioAngleY;
+    s16    cameraHorizontalAngle;
+    f32    cameraInterpolateDistance;
+};
+
+PositionSnapshot gPositionSnapshot;
+bool             gPositionSnapshotValid;
+
+bool positionActorsReady() {
+    return stageActive() && gpMarioPos && gpMarioAngleY && gpCamera;
+}
+
+void savePosition() {
+    if (!positionActorsReady()) {
+        return;
+    }
+
+    gPositionSnapshot.position                  = *gpMarioPos;
+    gPositionSnapshot.marioAngleY               = *gpMarioAngleY;
+    gPositionSnapshot.cameraHorizontalAngle     = gpCamera->mHorizontalAngle;
+    gPositionSnapshot.cameraInterpolateDistance = gpCamera->mInterpolateDistance;
+    gPositionSnapshotValid                      = true;
+}
+
+void loadPosition() {
+    if (!gPositionSnapshotValid || !positionActorsReady()) {
+        return;
+    }
+
+    *gpMarioPos = gPositionSnapshot.position;
+    *gpMarioAngleY = gPositionSnapshot.marioAngleY;
+    gpCamera->mHorizontalAngle = gPositionSnapshot.cameraHorizontalAngle;
+    gpCamera->mInterpolateDistance = gPositionSnapshot.cameraInterpolateDistance;
+    ILing::invalidateForAssist();
+}
+
+void positionFromBinds() {
+    if (gBinds.isHeld(BIND_POSITION_SAVE)) {
+        savePosition();
+    }
+    if (gBinds.isHeld(BIND_POSITION_LOAD)) {
+        loadPosition();
     }
 }
 
@@ -318,6 +372,7 @@ void actionsApply(bool allowBinds) {
     if (allowBinds) {
         regrabLastHeldObject();
         spawnYoshiFromBinds();
+        positionFromBinds();
     }
 
     applyEggHook(gEggKillFrames != 0);

@@ -4,6 +4,7 @@
 #include "Dolphin/MTX.h"
 #include "Dolphin/OS.h"
 #include "Dolphin/mem.h"
+#include "JSystem/J3D/J3DDrawBuffer.hxx"
 #include "JSystem/J3D/J3DModel.hxx"
 #include "JSystem/J3D/J3DModelLoaderDataBase.hxx"
 #include "JSystem/J3D/J3DShape.hxx"
@@ -18,6 +19,7 @@
 #include "SMS/Strategic/Strategy.hxx"
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/addresses.hxx"
+#include "susamune/checksum.hxx"
 #include "susamune/ghost.hxx"
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ghost_storage.h"
@@ -110,6 +112,10 @@ const u32 kDisplayListObjectSize = 0x10u;
 const u32 kVertexBufferSize = 0x3Cu;
 const u32 kShapePacketUserAreaOffset = 0x0Cu;
 const u32 kShapePacketCallbackOffset = 0x10u;
+const u32 kShapePacketShapeOffset = 0x14u;
+const u32 kShapePacketDrawMtxOffset = 0x18u;
+const u32 kShapePacketNrmMtxOffset = 0x1Cu;
+const u32 kShapePacketViewNoOffset = 0x20u;
 const u32 kExpectedJointCount = 29u;
 const u16 kYoshiMaxJointCount = 38u;
 const u16 kYoshiMaxEnvelopeCount = 52u;
@@ -180,25 +186,16 @@ bool sSubmitted[2];
 Ghost::VisualState sVisualStates[2];
 bool sHaveVisualState[2];
 GXColor sGhostColor = {255, 255, 255, 160};
+TMarDirector *volatile sPendingDirector;
+volatile u32 sPendingGeneration;
+u32 sQuiescedGeneration;
+u32 sLoadedGeneration;
 
 u32 readBig32(const u8 *bytes) {
     return (static_cast<u32>(bytes[0]) << 24) |
            (static_cast<u32>(bytes[1]) << 16) |
            (static_cast<u32>(bytes[2]) << 8) |
            static_cast<u32>(bytes[3]);
-}
-
-u32 crc32(const void *data, u32 size) {
-    const u8 *bytes = static_cast<const u8 *>(data);
-    u32 crc = SUSAMUNE_GHOST_CRC32_INIT;
-    for (u32 i = 0; i < size; ++i) {
-        crc ^= bytes[i];
-        for (u32 bit = 0; bit < 8; ++bit) {
-            const u32 mask = 0u - (crc & 1u);
-            crc = (crc >> 1) ^ (SUSAMUNE_GHOST_CRC32_POLY & mask);
-        }
-    }
-    return crc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT;
 }
 
 bool validBmdHeader(const void *resource, u32 size) {
@@ -209,7 +206,7 @@ bool validBmdHeader(const void *resource, u32 size) {
 
 bool validBmd(const void *resource, u32 size, u32 checksum) {
     return validBmdHeader(resource, size) &&
-           crc32(resource, size) == checksum;
+           Checksum::crc32(resource, size) == checksum;
 }
 
 #if !defined(IS_EMULATOR) || !IS_EMULATOR
@@ -229,7 +226,7 @@ const u8 *validateMaster(void *raw, u32 bufferSize, u32 magic,
         return nullptr;
     }
     const u8 *payload = static_cast<const u8 *>(raw) + bmdOffset;
-    return crc32(payload, totalSize - bmdOffset) == payloadChecksum
+    return Checksum::crc32(payload, totalSize - bmdOffset) == payloadChecksum
         ? payload
         : nullptr;
 }
@@ -261,7 +258,7 @@ const void *stageLocalBmd(const char *path, u32 size, u32 checksum,
                           bool allowTextureMutation) {
     const void *resource = JKRFileLoader::getGlbResource(path);
     if (!validBmdHeader(resource, size)) return nullptr;
-    return allowTextureMutation || crc32(resource, size) == checksum
+    return allowTextureMutation || Checksum::crc32(resource, size) == checksum
         ? resource
         : nullptr;
 }
@@ -634,6 +631,18 @@ void clearLiveModel(ModelSlot &slot) {
     slot.colorCallbacksInstalled = false;
 }
 
+bool modelStorageReady(const ModelSlot &slot) {
+    return slot.data && slot.model &&
+           slot.model->mModelData == slot.data &&
+           slot.data->mMaterials && slot.data->mShapes &&
+           slot.data->getMaterialNum() != 0 && slot.data->mShapeNum != 0 &&
+           slot.model->mJointArray &&
+           slot.model->mDrawMtxBuf[0] && slot.model->mDrawMtxBuf[1] &&
+           slot.model->mNrmMtxBuf[0] && slot.model->mNrmMtxBuf[1] &&
+           slot.model->mMatPackets && slot.model->mShapePackets &&
+           slot.model->mVtxBuffer;
+}
+
 bool loadModel(Appearance appearance) {
     ModelSlot &slot = sSlots[appearance];
     clearLiveModel(slot);
@@ -658,6 +667,7 @@ bool loadModel(Appearance appearance) {
         void *storage = slot.heap->alloc(sizeof(J3DModel), 32);
         if (storage) slot.model = new (storage) J3DModel(slot.data, 0, 1);
     }
+    if (slot.model && !modelStorageReady(slot)) slot.model = nullptr;
     if (slot.model) {
         const u16 initialId = gpMarioOriginal &&
                                       gpMarioOriginal->mAnimationID <=
@@ -737,6 +747,29 @@ bool prepareRunner(int runner, const Ghost::VisualState &state) {
     slot.model->J3DModel::calc();
     *rootCalc = savedCalc;
     *frame = savedFrame;
+    return true;
+}
+
+bool modelPacketsReady(const ModelSlot &slot) {
+    if (!modelStorageReady(slot)) return false;
+    for (u16 i = 0; i < slot.data->mShapeNum; ++i) {
+        const u8 *packet =
+            reinterpret_cast<const u8 *>(slot.model->mShapePackets) +
+            static_cast<u32>(i) * kShapePacketStride;
+        if (*reinterpret_cast<J3DShape *const *>(
+                packet + kShapePacketShapeOffset) != slot.data->mShapes[i] ||
+            *reinterpret_cast<Mtx *const *const *>(
+                packet + kShapePacketDrawMtxOffset) !=
+                slot.model->mDrawMtxBuf[1] ||
+            *reinterpret_cast<Mtx33 *const *const *>(
+                packet + kShapePacketNrmMtxOffset) !=
+                slot.model->mNrmMtxBuf[1] ||
+            *reinterpret_cast<u32 *const *>(
+                packet + kShapePacketViewNoOffset) !=
+                &slot.model->mCurrentViewNo) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -840,6 +873,7 @@ public:
     GhostView() : JDrama::TViewObj("Moonshine Ghost Models") {}
 
     virtual void perform(u32 cue, JDrama::TGraphics *) override {
+        if (!sRegistered) return;
         if ((cue & (kCueCalcView | kCueEntry)) == 0) return;
         if (cue & kCueCalcView) {
             Ghost::prepareVisual();
@@ -863,7 +897,10 @@ public:
                 sPrepared[runner] = sHaveVisualState[runner] &&
                     prepareRunner(runner, sVisualStates[runner]);
                 if (!sPrepared[runner]) continue;
-                runnerSlot(runner).model->J3DModel::viewCalc();
+                ModelSlot &slot = runnerSlot(runner);
+                slot.model->J3DModel::viewCalc();
+                sPrepared[runner] = modelPacketsReady(slot);
+                if (!sPrepared[runner]) continue;
                 requests[runner] = desiredAttachment(sVisualStates[runner]);
             }
             rebuildAttachments(requests);
@@ -876,8 +913,9 @@ public:
         }
         if (cue & kCueEntry) {
             for (int runner = 0; runner < 2; ++runner) {
-                if (!sPrepared[runner]) continue;
-                runnerSlot(runner).model->J3DModel::entry();
+                ModelSlot &slot = runnerSlot(runner);
+                if (!sPrepared[runner] || !modelPacketsReady(slot)) continue;
+                slot.model->J3DModel::entry();
                 AttachmentModel *attachment = sPreparedAttachments[runner];
                 if (attachment && attachment->model)
                     entryAttachment(*attachment);
@@ -910,6 +948,60 @@ bool registerView(TMarDirector *director) {
     return group->mViewObjList.size() == oldSize + 1;
 }
 
+bool retirePlayerDrawBuffers() {
+    if (!gpMarioOriginal || !gpMarioOriginal->mDrawBufferA ||
+        !gpMarioOriginal->mDrawBufferB) {
+        return false;
+    }
+    gpMarioOriginal->mDrawBufferA->frameInit();
+    gpMarioOriginal->mDrawBufferB->frameInit();
+    return true;
+}
+
+void loadPendingStage() {
+    const u32 generation = sPendingGeneration;
+    if (generation == sLoadedGeneration) return;
+    if (generation != sQuiescedGeneration) {
+        // Let Mario retire the previous stage's queued packets first.
+        sRegistered = false;
+        sQuiescedGeneration = generation;
+        return;
+    }
+
+    TMarDirector *director = sPendingDirector;
+    if (!director || director != gpMarDirector || !director->mViewObjRoot ||
+        director->_260 == 0 || generation != sPendingGeneration) {
+        return;
+    }
+
+    if (!gpMarioOriginal || !gpMarioOriginal->mDrawBufferA ||
+        !gpMarioOriginal->mDrawBufferB) {
+        return;
+    }
+    GXDrawDone();
+    if (!retirePlayerDrawBuffers()) return;
+    sSubmitted[0] = sSubmitted[1] = false;
+    sPrepared[0] = sPrepared[1] = false;
+    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
+    if (sAttachmentHeap) sAttachmentHeap->freeAll();
+    clearLiveModel(sSlots[APPEARANCE_SHADOW]);
+    clearLiveModel(sSlots[APPEARANCE_PIANTA]);
+    const bool shadow = loadModel(APPEARANCE_SHADOW);
+    const bool pianta = loadModel(APPEARANCE_PIANTA);
+    const bool registered =
+        (shadow || pianta) && registerView(director) &&
+        generation == sPendingGeneration;
+    if (!registered) {
+        clearLiveModel(sSlots[APPEARANCE_SHADOW]);
+        clearLiveModel(sSlots[APPEARANCE_PIANTA]);
+    }
+    if (generation == sPendingGeneration) {
+        sRegistered = registered;
+        sLoadedGeneration = generation;
+    }
+}
+
 }  // namespace
 
 void init() {
@@ -919,6 +1011,10 @@ void init() {
     sRegistered = false;
     sPrepared[0] = sPrepared[1] = false;
     sSubmitted[0] = sSubmitted[1] = false;
+    sPendingDirector = nullptr;
+    sPendingGeneration = 0;
+    sQuiescedGeneration = 0;
+    sLoadedGeneration = 0;
     sView = new (sViewStorage) GhostView();
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     sSlots[APPEARANCE_SHADOW].heap = JKRExpHeap::create(
@@ -937,6 +1033,7 @@ void beginFrame() {
     sSubmitted[0] = sSubmitted[1] = false;
     sPrepared[0] = sPrepared[1] = false;
     memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    loadPendingStage();
 }
 
 void beforeStageSetup() {
@@ -945,23 +1042,11 @@ void beforeStageSetup() {
 }
 
 void onStageSetup(TMarDirector *director) {
-    sRegistered = false;
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
-    memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
-    if (sAttachmentHeap) sAttachmentHeap->freeAll();
-    clearLiveModel(sSlots[APPEARANCE_SHADOW]);
-    clearLiveModel(sSlots[APPEARANCE_PIANTA]);
-    if (!director || !director->mViewObjRoot) return;
-    const bool shadow = loadModel(APPEARANCE_SHADOW);
-    const bool pianta = loadModel(APPEARANCE_PIANTA);
-    if ((!shadow && !pianta) || !registerView(director)) {
-        clearLiveModel(sSlots[APPEARANCE_SHADOW]);
-        clearLiveModel(sSlots[APPEARANCE_PIANTA]);
-        return;
-    }
-    sRegistered = true;
+    // setupObjects runs off-thread. The render thread retires old packets.
+    sPendingDirector = director;
+    u32 generation = sPendingGeneration + 1u;
+    if (generation == 0) generation = 1;
+    sPendingGeneration = generation;
 }
 
 bool available() {

@@ -21,17 +21,14 @@ class QftTimerHudContracts(unittest.TestCase):
         self.assertIn("hudPane(console, '\\0b_0')", source)
         self.assertIn("hudPane(console, '\\0r_0')", source)
         self.assertIn("hudPane(console, '\\0t_0')", source)
-        self.assertNotIn("paneOnScreen", source)
 
     def test_only_the_mod_owned_timer_is_raised(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")
         detector = source.split("bool missionCounterOnScreen", 1)[1].split(
             "J2DPane *bigTimerPane", 1
         )[0]
-        self.assertIn("hudPane(console, '\\0b_0')", detector)
-        self.assertIn("hudPane(console, '\\0r_0')", detector)
-        self.assertEqual(detector.count("mIsVisible"), 2)
-        self.assertNotIn("mRect", detector)
+        self.assertIn("paneOnScreen(hudPane(console, '\\0b_0'))", detector)
+        self.assertIn("paneOnScreen(hudPane(console, '\\0r_0'))", detector)
 
         position = source.split("void raiseBigTimer", 1)[1].split(
             "void hideBigTimer", 1

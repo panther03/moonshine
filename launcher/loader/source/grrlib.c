@@ -25,7 +25,6 @@ THE SOFTWARE.
 #include <string.h>
 #include <ogc/conf.h>
 //#include <fat.h>
-#include <wchar.h>
 #include <ft2build.h>
 #include <pngu.h>
 #include <stdio.h>
@@ -314,7 +313,12 @@ void GRRLIB_ExitTTF (void) {
 GRRLIB_ttfFont* GRRLIB_LoadTTF (const u8* file_base, s32 file_size) {
 	FT_Face Face;
 	GRRLIB_ttfFont* myFont = (GRRLIB_ttfFont*)malloc(sizeof(GRRLIB_ttfFont));
-	FT_New_Memory_Face(ftLibrary, file_base, file_size, 0, &Face);
+	if(myFont == NULL)
+		return NULL;
+	if(FT_New_Memory_Face(ftLibrary, file_base, file_size, 0, &Face)) {
+		free(myFont);
+		return NULL;
+	}
 	myFont->kerning = FT_HAS_KERNING(Face);
 /*
 	if (FT_Set_Pixel_Sizes(Face, 0, fontSize)) {
@@ -337,6 +341,69 @@ void  GRRLIB_FreeTTF (GRRLIB_ttfFont *myFont) {
 	}
 }
 
+static bool Utf8Valid(const char *string)
+{
+	const char *cursor = string;
+	u32 codepoint;
+
+	while (*cursor != '\0')
+	{
+		if (!ff_utf8_decode_next(&cursor, &codepoint))
+			return false;
+	}
+	return true;
+}
+
+static unsigned int ProcessUtf8(int x, int y, GRRLIB_ttfFont *myFont,
+	const char *string, unsigned int fontSize, u32 color, bool draw)
+{
+	const char *cursor;
+	FT_Face Face;
+	FT_GlyphSlot slot;
+	FT_UInt glyphIndex;
+	FT_UInt previousGlyph = 0;
+	int penX = 0;
+	int penY = fontSize;
+	u8 cR = R(color);
+	u8 cG = G(color);
+	u8 cB = B(color);
+
+	if (*string == '\0' || !Utf8Valid(string))
+		return 0;
+	cursor = string;
+	Face = (FT_Face)myFont->face;
+	slot = Face->glyph;
+	if (FT_Set_Pixel_Sizes(Face, 0, fontSize))
+		FT_Set_Pixel_Sizes(Face, 0, 12);
+
+	while (*cursor != '\0')
+	{
+		u32 codepoint;
+
+		if (!ff_utf8_decode_next(&cursor, &codepoint))
+			return 0;
+		glyphIndex = FT_Get_Char_Index(Face, codepoint);
+		if (myFont->kerning && previousGlyph && glyphIndex)
+		{
+			FT_Vector delta;
+
+			FT_Get_Kerning(Face, previousGlyph, glyphIndex,
+				FT_KERNING_DEFAULT, &delta);
+			penX += delta.x >> 6;
+		}
+		if (FT_Load_Glyph(Face, glyphIndex, FT_LOAD_RENDER))
+			continue;
+		if (draw)
+		{
+			DrawBitmap(&slot->bitmap, penX + slot->bitmap_left + x,
+				penY - slot->bitmap_top + y, cR, cG, cB);
+		}
+		penX += slot->advance.x >> 6;
+		previousGlyph = glyphIndex;
+	}
+	return (unsigned int)penX;
+}
+
 /**
  * Print function for TTF font.
  * @param x Specifies the x-coordinate of the upper-left corner of the text.
@@ -349,66 +416,7 @@ void  GRRLIB_FreeTTF (GRRLIB_ttfFont *myFont) {
 void GRRLIB_PrintfTTF(int x, int y, GRRLIB_ttfFont *myFont, const char *string, unsigned int fontSize, const u32 color) {
 	if(myFont == NULL || string == NULL)
 		return;
-
-	size_t length = strlen(string) + 1;
-	wchar_t *utf32 = (wchar_t*)malloc(length * sizeof(wchar_t));
-	if(utf32) {
-		length = mbstowcs(utf32, string, length);
-		if(length > 0) {
-			utf32[length] = L'\0';
-			GRRLIB_PrintfTTFW(x, y, myFont, utf32, fontSize, color);
-		}
-		free(utf32);
-	}
-}
-
-/**
- * Print function for TTF font.
- * @author wplaat and DrTwox
- * @param x Specifies the x-coordinate of the upper-left corner of the text.
- * @param y Specifies the y-coordinate of the upper-left corner of the text.
- * @param myFont A TTF.
- * @param utf32 Text to draw.
- * @param fontSize Size of the font.
- * @param color Text color in RGBA format.
- */
-void GRRLIB_PrintfTTFW(int x, int y, GRRLIB_ttfFont *myFont, const wchar_t *utf32, unsigned int fontSize, const u32 color) {
-	if(myFont == NULL || utf32 == NULL)
-		return;
-
-	FT_Face Face = (FT_Face)myFont->face;
-	int penX = 0;
-	int penY = fontSize;
-	FT_GlyphSlot slot = Face->glyph;
-	FT_UInt glyphIndex = 0;
-	FT_UInt previousGlyph = 0;
-	u8 cR = R(color), cG = G(color), cB = B(color);
-
-	if (FT_Set_Pixel_Sizes(Face, 0, fontSize)) {
-		FT_Set_Pixel_Sizes(Face, 0, 12);
-	}
-
-	/* Loop over each character, until the
-	 * end of the string is reached, or until the pixel width is too wide */
-	while(*utf32) {
-		glyphIndex = FT_Get_Char_Index(myFont->face, *utf32++);
-
-		if (myFont->kerning && previousGlyph && glyphIndex) {
-			FT_Vector delta;
-			FT_Get_Kerning(myFont->face, previousGlyph, glyphIndex, FT_KERNING_DEFAULT, &delta);
-			penX += delta.x >> 6;
-		}
-		if (FT_Load_Glyph(myFont->face, glyphIndex, FT_LOAD_RENDER)) {
-			continue;
-		}
-
-		DrawBitmap(&slot->bitmap,
-				   penX + slot->bitmap_left + x,
-				   penY - slot->bitmap_top + y,
-				   cR, cG, cB);
-		penX += slot->advance.x >> 6;
-		previousGlyph = glyphIndex;
-	}
+	ProcessUtf8(x, y, myFont, string, fontSize, color, true);
 }
 
 /**
@@ -444,73 +452,9 @@ static void DrawBitmap(FT_Bitmap *bitmap, int offset, int top, const u8 cR, cons
  * @return The width of a text in pixel.
  */
 unsigned int GRRLIB_WidthTTF(GRRLIB_ttfFont *myFont, const char *string, unsigned int fontSize) {
-	if(myFont == NULL || string == NULL) {
+	if(myFont == NULL || string == NULL)
 		return 0;
-	}
-	unsigned int penX = 0;
-	int length = strlen(string) + 1;
-	wchar_t *utf32 = (wchar_t*)malloc(length * sizeof(wchar_t)+1);
-	if (!utf32) return 0;
-		length = mbstowcs(utf32, string, length);
-	if (length > 0)
-	{
-		utf32[length] = L'\0';
-		penX = GRRLIB_WidthTTFW(myFont, utf32, fontSize);
-	}
-	free(utf32);
-	return penX;
-
-/*	unsigned int penX;
-	size_t length = strlen(string) + 1;
-	wchar_t *utf32 = (wchar_t*)malloc(length * sizeof(wchar_t));
-	length = mbstowcs(utf32, string, length);
-	utf32[length] = L'\0';
-
-	penX = GRRLIB_WidthTTFW(myFont, utf32, fontSize);
-
-	free(utf32);
-
-	return penX;*/
-}
-
-/**
- * Get the width of a text in pixel.
- * @param myFont A TTF.
- * @param utf32 The text to check.
- * @param fontSize The size of the font.
- * @return The width of a text in pixel.
- */
-unsigned int GRRLIB_WidthTTFW(GRRLIB_ttfFont *myFont, const wchar_t *utf32, unsigned int fontSize) {
-	if(myFont == NULL || utf32 == NULL) {
-		return 0;
-	}
-
-	FT_Face Face = (FT_Face)myFont->face;
-	unsigned int penX = 0;
-	FT_UInt glyphIndex;
-	FT_UInt previousGlyph = 0;
-
-	if(FT_Set_Pixel_Sizes(myFont->face, 0, fontSize)) {
-		 FT_Set_Pixel_Sizes(myFont->face, 0, 12);
-	}
-
-	while(*utf32) {
-		glyphIndex = FT_Get_Char_Index(myFont->face, *utf32++);
-
-		if(myFont->kerning && previousGlyph && glyphIndex) {
-			FT_Vector delta;
-			FT_Get_Kerning(Face, previousGlyph, glyphIndex, FT_KERNING_DEFAULT, &delta);
-			penX += delta.x >> 6;
-		}
-		if(FT_Load_Glyph(Face, glyphIndex, FT_LOAD_RENDER)) {
-			continue;
-		}
-
-		penX += Face->glyph->advance.x >> 6;
-		previousGlyph = glyphIndex;
-	}
-
-	return penX;
+	return ProcessUtf8(0, 0, myFont, string, fontSize, 0, false);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -895,8 +839,8 @@ GRRLIB_texImg*  GRRLIB_LoadTextureJPGEx (const u8 *my_jpg, const int my_size) {
  * @param tex A pointer to a texture representing the screen or NULL if an error occurs.
  * @param clear When this flag is set to true, the screen is cleared after copy.
  */
-void  GRRLIB_Screen2Texture (int posx, int posy, GRRLIB_texImg *tex, bool clear) {
-	if(tex->data != NULL) {
+void GRRLIB_Screen2Texture(int posx, int posy, GRRLIB_texImg *tex, bool clear) {
+	if(tex != NULL && tex->data != NULL) {
 		GX_SetTexCopySrc(posx, posy, tex->w, tex->h);
 		GX_SetTexCopyDst(tex->w, tex->h, GX_TF_RGBA8, GX_FALSE);
 		GX_CopyTex(tex->data, GX_FALSE);
@@ -950,7 +894,8 @@ static  guVector  axis = {0, 0, 1};
  * @param scaleY Specifies the y-coordinate scale. -1 could be used for flipping the texture vertically.
  * @param color Color in RGBA format.
  */
-void  GRRLIB_DrawImg (const f32 xpos, const f32 ypos, const GRRLIB_texImg *tex, const f32 degrees, const f32 scaleX, const f32 scaleY, const u32 color) {
+void GRRLIB_DrawImg(const f32 xpos, const f32 ypos, const GRRLIB_texImg *tex,
+	const f32 degrees, const f32 scaleX, const f32 scaleY, const u32 color) {
 	GXTexObj  texObj;
 	u16       width, height;
 	Mtx       m, m1, m2, mv;
@@ -1316,7 +1261,7 @@ void  GRRLIB_DrawTileQuad (const guVector pos[4], GRRLIB_texImg *tex, const u32 
 /**
  * Call this function after drawing.
  */
-void  GRRLIB_Render (void) {
+static void GRRLIB_RenderMode(bool clear) {
 	GX_DrawDone();          // Tell the GX engine we are done drawing
 	GX_InvalidateTexAll();
 
@@ -1324,7 +1269,7 @@ void  GRRLIB_Render (void) {
 
 	GX_SetZMode      (GX_TRUE, GX_LEQUAL, GX_TRUE);
 	GX_SetColorUpdate(GX_TRUE);
-	GX_CopyDisp      (xfb[fb], GX_TRUE);
+	GX_CopyDisp      (xfb[fb], clear ? GX_TRUE : GX_FALSE);
 
 	VIDEO_SetNextFramebuffer(xfb[fb]);  // Select External Frame Buffer
 	VIDEO_Flush();                      // Flush video buffer to screen
@@ -1338,6 +1283,14 @@ void  GRRLIB_Render (void) {
 	VIDEO_WaitVSync();                  // Wait for screen to update
 	// Interlaced screens require two frames to update
 	if (rmode->viTVMode &VI_NON_INTERLACE)  VIDEO_WaitVSync();
+}
+
+void GRRLIB_Render(void) {
+	GRRLIB_RenderMode(true);
+}
+
+void GRRLIB_RenderPreserve(void) {
+	GRRLIB_RenderMode(false);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

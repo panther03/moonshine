@@ -491,6 +491,11 @@ extern unzFile ZEXPORT unzOpen2 (path, pzlib_filefunc_def)
 
 
     s=(unz_s*)ALLOC(sizeof(unz_s));
+    if (s==NULL)
+    {
+        ZCLOSE(us.z_filefunc, us.filestream);
+        return NULL;
+    }
     *s=us;
     unzGoToFirstFile((unzFile)s);
     return (unzFile)s;
@@ -1122,7 +1127,11 @@ extern int ZEXPORT unzOpenCurrentFile3 (file, method, level, raw, password)
 
     if ((s->cur_file_info.compression_method!=0) &&
         (s->cur_file_info.compression_method!=Z_DEFLATED))
-        err=UNZ_BADZIPFILE;
+    {
+        TRYFREE(pfile_in_zip_read_info->read_buffer);
+        TRYFREE(pfile_in_zip_read_info);
+        return UNZ_BADZIPFILE;
+    }
 
     pfile_in_zip_read_info->crc32_wait=s->cur_file_info.crc;
     pfile_in_zip_read_info->crc32=0;
@@ -1148,6 +1157,7 @@ extern int ZEXPORT unzOpenCurrentFile3 (file, method, level, raw, password)
         pfile_in_zip_read_info->stream_initialised=1;
       else
       {
+        TRYFREE(pfile_in_zip_read_info->read_buffer);
         TRYFREE(pfile_in_zip_read_info);
         return err;
       }

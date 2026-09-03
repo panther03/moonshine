@@ -11,7 +11,6 @@ extern u32 GAME_ID;
 extern int dbgprintf(const char *fmt, ...);
 
 static struct SusamuneCrashReport Snapshot;
-static struct SusamuneCrashReport FileReport;
 static char BinPaths[2][64];
 static char TextPaths[2][64];
 static char Line[256];
@@ -72,12 +71,18 @@ static bool ReadReport(const char *path, struct SusamuneCrashReport *report)
 		ValidReport(report);
 }
 
-static u32 ModFileCrc(const struct SusamuneModHeader *header)
+static u32 ModFileSize(const struct SusamuneModHeader *header)
+{
+	return SUSAMUNE_MOD_HEADER_SIZE + header->codeSize +
+		header->writeCount * 8;
+}
+
+static u32 ModFileCrc(const struct SusamuneModHeader *header, u32 fileSize)
 {
 	const u8 *bytes = (const u8*)header;
 	u32 crc = 0xFFFFFFFFu;
 	u32 i, bit;
-	for (i = 0; i < header->fileSize; ++i)
+	for (i = 0; i < fileSize; ++i)
 	{
 		crc ^= bytes[i];
 		for (bit = 0; bit < 8; ++bit)
@@ -94,18 +99,18 @@ static bool ValidStagedMod(const struct SusamuneModHeader *header)
 		header->version != SUSAMUNE_MOD_VERSION || header->gameId != GAME_ID ||
 		header->baseAddr != SUSAMUNE_MOD_BASE_FOR_GAME_ID(GAME_ID) ||
 		header->arenaReserve != SUSAMUNE_ARENA_RESERVE_SIZE ||
-		header->codeSize > SUSAMUNE_MOD_BLOB_MAX_SIZE ||
+		header->codeSize > header->memSize ||
+		header->memSize > SUSAMUNE_MOD_BLOB_MAX_SIZE ||
 		header->codeSize >
 			SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE -
 			SUSAMUNE_MOD_HEADER_SIZE ||
-		(header->codeSize & 3))
+		(header->codeSize & 3) || (header->memSize & 3))
 		return false;
 	codeEnd = SUSAMUNE_MOD_HEADER_SIZE + header->codeSize;
 	if (header->writeCount >
 		(SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE - codeEnd) / 8)
 		return false;
-	return header->fileSize == codeEnd + header->writeCount * 8 &&
-		header->fileSize <= SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE;
+	return ModFileSize(header) <= SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE;
 }
 
 void SusamuneCrashInit(void)
@@ -113,6 +118,7 @@ void SusamuneCrashInit(void)
 	struct SusamuneCrashReport *mailbox = SUSAMUNE_CRASH_PHYS_PTR;
 	const struct SusamuneModHeader *mod = SUSAMUNE_MOD_PHYS_PTR;
 	u32 generation = 0;
+	u32 modFileSize;
 	u32 i;
 
 	memset(mailbox, 0, sizeof(*mailbox));
@@ -131,9 +137,9 @@ void SusamuneCrashInit(void)
 	if (CrashEnabled)
 	{
 		for (i = 0; i < 2; ++i)
-			if (ReadReport(BinPaths[i], &FileReport) &&
-				GenerationNewer(FileReport.captureSeq, generation))
-				generation = FileReport.captureSeq;
+			if (ReadReport(BinPaths[i], &Snapshot) &&
+				GenerationNewer(Snapshot.captureSeq, generation))
+				generation = Snapshot.captureSeq;
 	}
 
 	mailbox->magic = SUSAMUNE_CRASH_MAGIC;
@@ -147,10 +153,11 @@ void SusamuneCrashInit(void)
 	mailbox->gameId = GAME_ID;
 	if (ValidStagedMod(mod))
 	{
-		sync_before_read((void*)mod, mod->fileSize);
-		mailbox->modFileCrc32 = ModFileCrc(mod);
-		mailbox->modFileSize = mod->fileSize;
-		mailbox->modCodeSize = mod->codeSize;
+		modFileSize = ModFileSize(mod);
+		sync_before_read((void*)mod, modFileSize);
+		mailbox->modFileCrc32 = ModFileCrc(mod, modFileSize);
+		mailbox->modFileSize = modFileSize;
+		mailbox->modCodeSize = mod->memSize;
 		mailbox->modWriteCount = mod->writeCount;
 		mailbox->arenaReserve = mod->arenaReserve;
 	}

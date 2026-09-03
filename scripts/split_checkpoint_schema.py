@@ -9,7 +9,7 @@ FNV_PRIME = 16777619
 EXPECTED_V5_SCHEMA_HASH = 0xA91743AA
 # Filled by the assertion at the bottom. Update only with an intentional
 # append-only route or checkpoint-schema revision.
-EXPECTED_SCHEMA_HASH = 0x4499A650
+EXPECTED_SCHEMA_HASH = 0x1AF7E430
 
 V5_ROUTE_ENTRIES = (
     5, 121, 85, 13, 14, 16, 17, 20, 21, 22,
@@ -32,6 +32,7 @@ ROUTE_ENTRIES = V5_ROUTE_ENTRIES + (
     95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
     105, 106, 107, 108, 109, 114, 116, 117, 118, 119,
     120,
+    122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
 )
 
 # One line per persistent route, in RouteId order. ``@@`` separates its
@@ -110,10 +111,15 @@ V5_CHECKPOINTS = tuple(
 _current = list(V5_CHECKPOINTS)
 _current[10] = ()
 _current[31] = ()
-# B2 may start in either physical episode; the rollout precedes the demo.
+# Bianco 2 starts in Bianco 1, then retail's accepted 0x37 transition owns the
+# Pakkun FMV and loads the Windmill boss scene.
 _current[13] = (
-    "scene=02:00|02:01;trigger=mario-status-enter;status=rollout;y>=3200",
-) + _current[13]
+    "scene=02:00;trigger=mario-status-enter;status=rollout;y>=3200",
+    "scene=02:00->37:00;trigger=scene-transition;target=37:00;meaning=pakkun-fmv",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=1",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=2",
+    "scene=37:00;trigger=actor-damage-ordinal;actor=petey;value=3",
+)
 _current.extend([()] * (len(ROUTE_ENTRIES) - len(V5_ROUTE_ENTRIES)))
 CHECKPOINTS = tuple(_current)
 
@@ -168,8 +174,8 @@ def v5_schema_hash() -> int:
 
 assert len(V5_ROUTE_ENTRIES) == len(V5_CHECKPOINTS) == 61
 assert v5_schema_hash() == EXPECTED_V5_SCHEMA_HASH
-assert len(ROUTE_ENTRIES) == len(CHECKPOINTS) == 122
-assert len(set(ROUTE_ENTRIES)) == 122
-assert set(ROUTE_ENTRIES) == set(range(122))
+assert len(ROUTE_ENTRIES) == len(CHECKPOINTS) == 132
+assert len(set(ROUTE_ENTRIES)) == 132
+assert set(ROUTE_ENTRIES) == set(range(132))
 assert sum(map(len, CHECKPOINTS)) == 153
 assert schema_hash() == EXPECTED_SCHEMA_HASH

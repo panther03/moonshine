@@ -118,6 +118,7 @@ static const char *const CreationColorKeys[SUSAMUNE_CREATION_COLOR_COUNT] =
 
 // Longest section name we build: "settings" + '_' + "pal" + NUL.
 #define SUSAMUNE_SECTION_NAME_MAX 24
+#define SUSAMUNE_INI_TRANSACTION_PATH_MAX 64
 
 static bool CfgReady = false;
 static u32  CfgAckSeq = 0;
@@ -158,6 +159,7 @@ static char SplitStatsPaths[SUSAMUNE_PB_FILE_COUNT][SUSAMUNE_PB_PATH_SIZE];
 static union
 {
 	struct SusamuneSplitStatsFile current;
+	struct SusamuneSplitStatsFileV7 v7;
 	struct SusamuneSplitStatsFileV6 v6;
 	struct SusamuneSplitStatsFileV5 v5;
 	struct SusamuneSplitStatsFileV4 v4;
@@ -196,6 +198,172 @@ static void BuildSectionName(char *out, const char *base, const char *region)
 	while (*region)
 		out[n++] = *region++;
 	out[n] = '\0';
+}
+
+static bool BuildIniSiblingPath(char *out, u32 capacity, const char *path,
+	const char *suffix)
+{
+	u32 pathLength = (u32)strlen(path);
+	u32 suffixLength = (u32)strlen(suffix);
+
+	if (pathLength + suffixLength + 1 > capacity)
+		return false;
+	memcpy(out, path, pathLength);
+	memcpy(out + pathLength, suffix, suffixLength + 1);
+	return true;
+}
+
+static int IniPathExists(const char *path, bool *exists)
+{
+	FILINFO info;
+	int ret = f_stat_char(path, &info);
+
+	if (ret == FR_OK)
+	{
+		*exists = true;
+		return FR_OK;
+	}
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		return FR_OK;
+	}
+	return ret;
+}
+
+static int IniPathCluster(const char *path, bool *exists, DWORD *cluster,
+	FSIZE_t *size)
+{
+	FIL f;
+	int ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		*exists = false;
+		*cluster = 0;
+		*size = 0;
+		return FR_OK;
+	}
+	if (ret != FR_OK)
+		return ret;
+	*exists = true;
+	*cluster = f.obj.sclust;
+	*size = f_size(&f);
+	return f_close(&f);
+}
+
+static int CheckIniAliases(const char *path, const char *tempPath,
+	const char *backupPath)
+{
+	bool mainExists;
+	bool tempExists;
+	bool backupExists;
+	DWORD mainCluster;
+	DWORD tempCluster;
+	DWORD backupCluster;
+	FSIZE_t mainSize;
+	FSIZE_t tempSize;
+	FSIZE_t backupSize;
+	int ret;
+
+	ret = IniPathCluster(path, &mainExists, &mainCluster, &mainSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(tempPath, &tempExists, &tempCluster, &tempSize);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathCluster(backupPath, &backupExists, &backupCluster,
+	                     &backupSize);
+	if (ret != FR_OK)
+		return ret;
+	if ((mainExists && mainSize != 0 && mainCluster == 0) ||
+	    (tempExists && tempSize != 0 && tempCluster == 0) ||
+	    (backupExists && backupSize != 0 && backupCluster == 0))
+		return FR_INT_ERR;
+
+	// FatFs rename registers the destination before removing the source. If
+	// power failed between them, mutating either alias could free live data.
+	if ((mainExists && tempExists && mainCluster != 0 &&
+	     mainCluster == tempCluster) ||
+	    (mainExists && backupExists && mainCluster != 0 &&
+	     mainCluster == backupCluster) ||
+	    (tempExists && backupExists && tempCluster != 0 &&
+	     tempCluster == backupCluster))
+		return FR_INT_ERR;
+	// An empty main beside a nonempty backup is an ambiguous interrupted
+	// install. Leave both intact instead of deleting the only useful copy.
+	if (mainExists && mainSize == 0 && backupExists && backupSize != 0)
+		return FR_INT_ERR;
+	return FR_OK;
+}
+
+static int RecoverIniFile(const char *path)
+{
+	char tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	char backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	bool exists;
+	int ret;
+
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
+		return FR_INVALID_NAME;
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+	ret = IniPathExists(path, &exists);
+	if (ret != FR_OK || exists)
+		return ret;
+
+	// A backup exists only after the old file was safely moved aside.
+	ret = IniPathExists(backupPath, &exists);
+	if (ret != FR_OK)
+		return ret;
+	if (exists)
+		return f_rename_char(backupPath, path);
+
+	// A temp without a backup may be an interrupted first write. It has no
+	// commit marker, so never promote it over clean compiled-in defaults.
+	ret = IniPathExists(tempPath, &exists);
+	return ret;
+}
+
+static int CommitIniFile(const char *path, const char *tempPath,
+	const char *backupPath, bool hadOriginal)
+{
+	int ret;
+	int restoreRet;
+
+	ret = CheckIniAliases(path, tempPath, backupPath);
+	if (ret != FR_OK)
+		return ret;
+
+	if (hadOriginal)
+	{
+		// FatFs rename does not replace an existing destination. The live
+		// file remains untouched unless stale-backup cleanup succeeds.
+		ret = f_unlink_char(backupPath);
+		if (ret != FR_OK && ret != FR_NO_FILE && ret != FR_NO_PATH)
+			return ret;
+		ret = f_rename_char(path, backupPath);
+		if (ret != FR_OK)
+			return ret;
+	}
+
+	ret = f_rename_char(tempPath, path);
+	if (ret != FR_OK)
+	{
+		if (hadOriginal)
+		{
+			restoreRet = f_rename_char(backupPath, path);
+			if (restoreRet != FR_OK)
+				return restoreRet;
+		}
+		return ret;
+	}
+
+	if (hadOriginal)
+		(void)f_unlink_char(backupPath);
+	return FR_OK;
 }
 
 static struct SusamuneCfg *CfgBlock(void)
@@ -240,7 +408,7 @@ static u32 PbChecksum(const struct SusamuneILingPbFile *file)
 	hash = PbHashWord(hash, ((u32)file->version << 16) | file->count);
 	hash = PbHashWord(hash, file->gameId);
 	hash = PbHashWord(hash, file->generation);
-	for (i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+	for (i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++)
 		hash = PbHashWord(hash, (u32)file->values[i]);
 	return hash;
 }
@@ -300,7 +468,8 @@ static enum PbReadResult ReadPbFile(const char *path,
 	}
 
 	if (file->magic != SUSAMUNE_ILING_PB_FILE_MAGIC ||
-	    file->count == 0 || file->count > SUSAMUNE_ILING_PB_MAX_SLOTS ||
+	    file->count == 0 ||
+	    file->count > SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS ||
 	    file->gameId != GAME_ID || file->checksum != PbChecksum(file))
 	{
 		dbgprintf("Susamune: ignored invalid PB file %s (header)\r\n", path);
@@ -339,6 +508,28 @@ static u32 PbProfilesChecksum(const struct SusamuneILingProfilesFile *file)
 	return hash;
 }
 
+static u32 PbProfilesChecksumV1(
+	const struct SusamuneILingProfilesFileV1 *file)
+{
+	u32 hash = 2166136261u;
+	u32 p;
+	u32 i;
+
+	hash = PbHashWord(hash, ((u32)file->version << 16) |
+	                         ((u32)file->profileCount << 8) |
+	                         file->activeProfile);
+	hash = PbHashWord(hash, ((u32)file->slotCount << 16) | file->nameSize);
+	hash = PbHashWord(hash, file->gameId);
+	hash = PbHashWord(hash, file->generation);
+	for (p = 0; p < SUSAMUNE_ILING_PROFILE_COUNT; p++)
+		for (i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++)
+			hash = PbHashWord(hash, (u32)file->values[p][i]);
+	for (p = 0; p < SUSAMUNE_ILING_CUSTOM_NAME_COUNT; p++)
+		for (i = 0; i < SUSAMUNE_ILING_PROFILE_NAME_SIZE; i++)
+			hash = (hash ^ (u8)file->customNames[p][i]) * 16777619u;
+	return hash;
+}
+
 static bool PbProfileNameIsValid(const char *name)
 {
 	u32 i;
@@ -354,29 +545,90 @@ static bool PbProfileNameIsValid(const char *name)
 }
 
 static enum PbReadResult ReadPbProfilesFile(
-	const char *path, struct SusamuneILingProfilesFile *file)
+	const char *path, struct SusamuneILingProfilesFile *file, bool *migrated)
 {
 	FIL f;
 	UINT read = 0;
+	u32 size;
 	u32 p;
 	u32 i;
 	int ret;
 	int closeRet;
+	*migrated = false;
 
 	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
 	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
 		return PB_READ_INVALID;
 	if (ret != FR_OK)
 		return PB_READ_UNSAFE;
-	if (f_size(&f) != sizeof(*file))
+	size = (u32)f_size(&f);
+	if (size != sizeof(*file) &&
+	    size != sizeof(struct SusamuneILingProfilesFileV1))
 	{
+		const u32 prefixSize = sizeof(file->magic) + sizeof(file->version);
+		memset(file, 0, sizeof(*file));
+		if (size >= prefixSize)
+			ret = f_read(&f, file, prefixSize, &read);
 		closeRet = f_close(&f);
-		return closeRet == FR_OK ? PB_READ_INVALID : PB_READ_UNSAFE;
+		if (ret != FR_OK || closeRet != FR_OK ||
+		    (size >= prefixSize && read != prefixSize))
+			return PB_READ_UNSAFE;
+		if (size >= prefixSize &&
+		    file->magic == SUSAMUNE_ILING_PROFILE_FILE_MAGIC &&
+		    file->version != SUSAMUNE_ILING_PROFILE_VERSION &&
+		    file->version != SUSAMUNE_ILING_PROFILE_VERSION_V1)
+			return PB_READ_UNSAFE;
+		return PB_READ_INVALID;
 	}
-	ret = f_read(&f, file, sizeof(*file), &read);
+	memset(file, 0, sizeof(*file));
+	ret = f_read(&f, file, size, &read);
 	closeRet = f_close(&f);
-	if (ret != FR_OK || read != sizeof(*file) || closeRet != FR_OK)
+	if (ret != FR_OK || read != size || closeRet != FR_OK)
 		return PB_READ_UNSAFE;
+
+	if (size == sizeof(struct SusamuneILingProfilesFileV1))
+	{
+		struct SusamuneILingProfilesFileV1 *v1 =
+			(struct SusamuneILingProfilesFileV1 *)file;
+		char names[SUSAMUNE_ILING_CUSTOM_NAME_COUNT]
+		          [SUSAMUNE_ILING_PROFILE_NAME_SIZE];
+		u16 slotCount;
+
+		if (v1->magic == SUSAMUNE_ILING_PROFILE_FILE_MAGIC &&
+		    v1->version != SUSAMUNE_ILING_PROFILE_VERSION_V1)
+			return PB_READ_UNSAFE;
+		if (v1->magic != SUSAMUNE_ILING_PROFILE_FILE_MAGIC ||
+		    v1->profileCount != SUSAMUNE_ILING_PROFILE_COUNT ||
+		    v1->activeProfile >= SUSAMUNE_ILING_PROFILE_COUNT ||
+		    v1->slotCount == 0 ||
+		    v1->slotCount > SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS ||
+		    v1->nameSize != SUSAMUNE_ILING_PROFILE_NAME_SIZE ||
+		    v1->gameId != GAME_ID ||
+		    v1->checksum != PbProfilesChecksumV1(v1))
+			return PB_READ_INVALID;
+		for (p = 0; p < SUSAMUNE_ILING_PROFILE_COUNT; p++)
+			for (i = 0; i < v1->slotCount; i++)
+				if (!PbValueIsValid(v1->values[p][i]))
+					return PB_READ_INVALID;
+		for (p = 0; p < SUSAMUNE_ILING_CUSTOM_NAME_COUNT; p++)
+			if (!PbProfileNameIsValid(v1->customNames[p]))
+				return PB_READ_INVALID;
+
+		slotCount = v1->slotCount;
+		memcpy(names, v1->customNames, sizeof(names));
+		for (p = SUSAMUNE_ILING_PROFILE_COUNT; p-- > 0;)
+		{
+			for (i = SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i-- > 0;)
+				file->values[p][i] = v1->values[p][i];
+			for (i = slotCount; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+				file->values[p][i] = SUSAMUNE_ILING_PB_UNSET;
+		}
+		memcpy(file->customNames, names, sizeof(names));
+		file->version = SUSAMUNE_ILING_PROFILE_VERSION;
+		file->slotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;
+		*migrated = true;
+		return PB_READ_VALID;
+	}
 
 	if (file->magic == SUSAMUNE_ILING_PROFILE_FILE_MAGIC &&
 	    file->version != SUSAMUNE_ILING_PROFILE_VERSION)
@@ -430,13 +682,14 @@ static bool InitPbFiles(struct SusamuneCfg *cfg, const char *region)
 	u32 fileIndex;
 	bool legacySafe = true;
 	bool safe = true;
+	bool selectedMigrated = false;
 	s32 legacyActive = -1;
 	u32 legacyGeneration = 0;
 
 	pbs->magic   = SUSAMUNE_ILING_PB_MAGIC;
 	pbs->version = SUSAMUNE_ILING_PB_VERSION;
-	pbs->count   = SUSAMUNE_ILING_PB_SLOT_COUNT;
-	for (i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+	pbs->count   = SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT;
+	for (i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++)
 		pbs->values[i] = SUSAMUNE_ILING_PB_UNSET;
 
 	_sprintf(PbPaths[0], "%s/susamune_pbs_v1_%s_a.bin",
@@ -458,12 +711,13 @@ static bool InitPbFiles(struct SusamuneCfg *cfg, const char *region)
 		    !PbGenerationIsNewer(legacyFile.generation, legacyGeneration))
 			continue;
 
-		for (i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+		for (i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++)
 			pbs->values[i] = SUSAMUNE_ILING_PB_UNSET;
 		for (i = 0; i < legacyFile.count; i++)
 			pbs->values[i] = legacyFile.values[i];
-		pbs->count = legacyFile.count > SUSAMUNE_ILING_PB_SLOT_COUNT
-		                 ? legacyFile.count : SUSAMUNE_ILING_PB_SLOT_COUNT;
+		pbs->count = legacyFile.count > SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT
+		                 ? legacyFile.count
+		                 : SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT;
 		legacyGeneration = legacyFile.generation;
 		legacyActive = (s32)fileIndex;
 	}
@@ -477,8 +731,9 @@ static bool InitPbFiles(struct SusamuneCfg *cfg, const char *region)
 	PbActiveFile = -1;
 	for (fileIndex = 0; fileIndex < SUSAMUNE_PB_FILE_COUNT; fileIndex++)
 	{
+		bool migrated;
 		enum PbReadResult readResult =
-			ReadPbProfilesFile(PbPaths[fileIndex], &file);
+			ReadPbProfilesFile(PbPaths[fileIndex], &file, &migrated);
 		if (readResult == PB_READ_UNSAFE)
 		{
 			safe = false;
@@ -494,13 +749,18 @@ static bool InitPbFiles(struct SusamuneCfg *cfg, const char *region)
 		profiles->slotCount = file.slotCount > SUSAMUNE_ILING_PB_SLOT_COUNT
 			? file.slotCount : SUSAMUNE_ILING_PB_SLOT_COUNT;
 		for (p = 0; p < SUSAMUNE_ILING_PROFILE_COUNT; p++)
+		{
 			for (i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+				profiles->values[p][i] = SUSAMUNE_ILING_PB_UNSET;
+			for (i = 0; i < file.slotCount; i++)
 				profiles->values[p][i] = file.values[p][i];
+		}
 		for (p = 0; p < SUSAMUNE_ILING_CUSTOM_NAME_COUNT; p++)
 			memcpy(profiles->customNames[p], file.customNames[p],
 			       SUSAMUNE_ILING_PROFILE_NAME_SIZE);
 		PbGeneration = file.generation;
 		PbActiveFile = (s32)fileIndex;
+		selectedMigrated = migrated;
 	}
 
 	if (PbActiveFile < 0)
@@ -509,10 +769,15 @@ static bool InitPbFiles(struct SusamuneCfg *cfg, const char *region)
 			safe = false;
 		else if (legacyActive >= 0)
 		{
-			for (i = 0; i < SUSAMUNE_ILING_PB_MAX_SLOTS; i++)
+			for (i = 0; i < SUSAMUNE_ILING_PB_LEGACY_MAX_SLOTS; i++)
 				profiles->values[0][i] = pbs->values[i];
 			profiles->saveSeq = 1;
 		}
+	}
+	else if (selectedMigrated)
+	{
+		// Publish V2 to the other journal without touching the valid V1 copy.
+		profiles->saveSeq = 1;
 	}
 
 	PbAckSeq = 0;
@@ -1301,8 +1566,22 @@ static u32 StageTargetChecksum(const struct SusamuneStageTargetsFile *file)
 	return hash;
 }
 
+static u32 StageTargetChecksumV1(
+	const struct SusamuneStageTargetsFileV1 *file)
+{
+	u32 hash = 2166136261u;
+	u32 slot;
+
+	hash = PbHashWord(hash, ((u32)file->version << 16) | file->slotCount);
+	hash = PbHashWord(hash, file->gameId);
+	hash = PbHashWord(hash, file->generation);
+	for (slot = 0; slot < SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1; slot++)
+		hash = PbHashWord(hash, (u32)file->targets[slot]);
+	return hash;
+}
+
 static enum PbReadResult ReadStageTargetFile(
-	const char *path, struct SusamuneStageTargetsFile *file)
+	const char *path, struct SusamuneStageTargetsFile *file, bool *migrated)
 {
 	FIL f;
 	UINT read = 0;
@@ -1311,6 +1590,7 @@ static enum PbReadResult ReadStageTargetFile(
 	u32 prefixSize = sizeof(file->magic) + sizeof(file->version);
 	int ret;
 	int closeRet;
+	*migrated = false;
 
 	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
 	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
@@ -1318,7 +1598,8 @@ static enum PbReadResult ReadStageTargetFile(
 	if (ret != FR_OK)
 		return PB_READ_UNSAFE;
 	size = (u32)f_size(&f);
-	if (size != sizeof(*file))
+	if (size != sizeof(*file) &&
+	    size != sizeof(struct SusamuneStageTargetsFileV1))
 	{
 		memset(file, 0, sizeof(*file));
 		if (size >= prefixSize)
@@ -1329,14 +1610,40 @@ static enum PbReadResult ReadStageTargetFile(
 			return PB_READ_UNSAFE;
 		if (size >= prefixSize &&
 		    file->magic == SUSAMUNE_STAGE_TARGET_FILE_MAGIC &&
-		    file->version != SUSAMUNE_STAGE_TARGET_VERSION)
+		    file->version != SUSAMUNE_STAGE_TARGET_VERSION &&
+		    file->version != SUSAMUNE_STAGE_TARGET_VERSION_V1)
 			return PB_READ_UNSAFE;
 		return PB_READ_INVALID;
 	}
-	ret = f_read(&f, file, sizeof(*file), &read);
+	memset(file, 0, sizeof(*file));
+	ret = f_read(&f, file, size, &read);
 	closeRet = f_close(&f);
-	if (ret != FR_OK || read != sizeof(*file) || closeRet != FR_OK)
+	if (ret != FR_OK || read != size || closeRet != FR_OK)
 		return PB_READ_UNSAFE;
+	if (size == sizeof(struct SusamuneStageTargetsFileV1))
+	{
+		struct SusamuneStageTargetsFileV1 *v1 =
+			(struct SusamuneStageTargetsFileV1 *)file;
+		if (v1->magic == SUSAMUNE_STAGE_TARGET_FILE_MAGIC &&
+		    v1->version != SUSAMUNE_STAGE_TARGET_VERSION_V1)
+			return PB_READ_UNSAFE;
+		if (v1->magic != SUSAMUNE_STAGE_TARGET_FILE_MAGIC ||
+		    v1->slotCount != SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1 ||
+		    v1->gameId != GAME_ID ||
+		    !StagePlaylistBytesZero(v1->reserved, sizeof(v1->reserved)) ||
+		    v1->checksum != StageTargetChecksumV1(v1))
+			return PB_READ_INVALID;
+		for (slot = 0; slot < SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1; slot++)
+			if (!StageTargetValueValid(v1->targets[slot]))
+				return PB_READ_INVALID;
+		file->version = SUSAMUNE_STAGE_TARGET_VERSION;
+		file->slotCount = SUSAMUNE_STAGE_TARGET_SLOT_COUNT;
+		for (slot = SUSAMUNE_STAGE_TARGET_SLOT_COUNT_V1;
+		     slot < SUSAMUNE_STAGE_TARGET_SLOT_COUNT; slot++)
+			file->targets[slot] = SUSAMUNE_STAGE_TARGET_UNSET;
+		*migrated = true;
+		return PB_READ_VALID;
+	}
 	if (file->magic == SUSAMUNE_STAGE_TARGET_FILE_MAGIC &&
 	    file->version != SUSAMUNE_STAGE_TARGET_VERSION)
 		return PB_READ_UNSAFE;
@@ -1370,6 +1677,7 @@ static void InitStageTargetFiles(struct SusamuneStageTargetsCfg *targets,
 	struct SusamuneStageTargetsFile file;
 	u32 fileIndex;
 	bool safe = true;
+	bool selectedMigrated = false;
 
 	InitStageTargetDefaults(targets);
 	_sprintf(StageTargetPaths[0], "%s/susamune_stage_targets_%s_a.bin",
@@ -1380,8 +1688,9 @@ static void InitStageTargetFiles(struct SusamuneStageTargetsCfg *targets,
 	StageTargetActiveFile = -1;
 	for (fileIndex = 0; fileIndex < SUSAMUNE_PB_FILE_COUNT; fileIndex++)
 	{
+		bool migrated;
 		enum PbReadResult readResult =
-			ReadStageTargetFile(StageTargetPaths[fileIndex], &file);
+			ReadStageTargetFile(StageTargetPaths[fileIndex], &file, &migrated);
 		if (readResult == PB_READ_UNSAFE)
 		{
 			safe = false;
@@ -1396,8 +1705,11 @@ static void InitStageTargetFiles(struct SusamuneStageTargetsCfg *targets,
 		memcpy(targets->targets, file.targets, sizeof(targets->targets));
 		StageTargetGeneration = file.generation;
 		StageTargetActiveFile = (s32)fileIndex;
+		selectedMigrated = migrated;
 	}
 
+	if (selectedMigrated)
+		targets->saveSeq = 1;
 	StageTargetAckSeq = 0;
 	StageTargetReady = safe;
 	if (safe)
@@ -1473,7 +1785,8 @@ static const u16 SplitRouteFirst[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT] =
 	243, 244, 245, 246, 247, 248, 249, 250, 251, 252,
 	253, 254, 255, 256, 257, 258, 259, 260, 261, 262,
 	263, 264, 265, 266, 267, 268, 269, 270, 271, 272,
-	273, 274
+	273, 274, 275, 276, 277, 278, 279, 280, 281, 282,
+	283, 284
 };
 
 static const u8 SplitRouteCount[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT] =
@@ -1491,7 +1804,8 @@ static const u8 SplitRouteCount[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT] =
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-	1
+	1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 
 static const u16 SplitV6RouteFirst[SUSAMUNE_SPLIT_STATS_V6_ROUTE_COUNT] =
@@ -1628,6 +1942,19 @@ static bool SplitStatsQfValid(u32 value)
 	       value <= (u32)SUSAMUNE_ILING_PB_MAX_QF;
 }
 
+static bool SplitStatsV7SchemaSupported(u32 schemaHash)
+{
+	return schemaHash == SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH ||
+	       schemaHash == SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH ||
+	       schemaHash == SUSAMUNE_SPLIT_STATS_LEGACY_BIANCO_SCHEMA_HASH;
+}
+
+static bool SplitStatsV8SchemaSupported(u32 schemaHash)
+{
+	return schemaHash == SUSAMUNE_SPLIT_STATS_SCHEMA_HASH ||
+	       schemaHash == SUSAMUNE_SPLIT_STATS_V8_PREVIOUS_SCHEMA_HASH;
+}
+
 static bool SplitStatsPayloadValid(
 	const struct SusamuneSplitStatsPayload *payload)
 {
@@ -1753,7 +2080,7 @@ static enum PbReadResult ReadSplitStatsFile(
 		if (size >= prefixSize &&
 		    file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
 		    (file->version != SUSAMUNE_SPLIT_STATS_VERSION ||
-		     file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH))
+		     !SplitStatsV8SchemaSupported(file->schemaHash)))
 			return PB_READ_UNSAFE;
 		return PB_READ_INVALID;
 	}
@@ -1766,7 +2093,7 @@ static enum PbReadResult ReadSplitStatsFile(
 		return PB_READ_UNSAFE;
 	if (file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
 	    file->version == SUSAMUNE_SPLIT_STATS_VERSION &&
-	    file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH)
+	    !SplitStatsV8SchemaSupported(file->schemaHash))
 		return PB_READ_UNSAFE;
 	if (file->magic != SUSAMUNE_SPLIT_STATS_FILE_MAGIC ||
 	    file->routeCount != SUSAMUNE_SPLIT_STATS_ROUTE_COUNT ||
@@ -1775,7 +2102,7 @@ static enum PbReadResult ReadSplitStatsFile(
 	    file->profileCount != SUSAMUNE_SPLIT_STATS_PROFILE_COUNT ||
 	    file->headerReserved != 0 ||
 	    file->payloadBytes != sizeof(file->payload) ||
-	    file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH ||
+	    !SplitStatsV8SchemaSupported(file->schemaHash) ||
 	    !SplitStatsBytesZero(file->reserved0, sizeof(file->reserved0)) ||
 	    !SplitStatsBytesZero(file->reserved1, sizeof(file->reserved1)) ||
 	    !SplitStatsBytesZero(file->tailPad, sizeof(file->tailPad)) ||
@@ -1783,6 +2110,182 @@ static enum PbReadResult ReadSplitStatsFile(
 	    !SplitStatsPayloadValid(&file->payload))
 		return PB_READ_INVALID;
 	return PB_READ_VALID;
+}
+
+static bool SplitStatsV7PayloadValid(
+	const struct SusamuneSplitStatsPayloadV7 *payload)
+{
+	u32 region;
+	u32 profile;
+	u32 route;
+	u32 segment;
+
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		for (route = 0; route < SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT; route++)
+			if (payload->routeStats[region][route].finishes >
+			    payload->routeStats[region][route].attempts)
+				return false;
+		for (segment = 0; segment < SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT;
+		     segment++)
+			if (!SplitStatsQfValid(payload->bestQf[region][segment]))
+				return false;
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			for (route = 0; route < SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT;
+			     route++)
+				if (!SplitStatsQfValid(
+				        payload->pbIdentityQf[region][profile][route]))
+					return false;
+			for (segment = 0;
+			     segment < SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT; segment++)
+				if (!SplitStatsQfValid(
+				        payload->pbQf[region][profile][segment]))
+					return false;
+		}
+	}
+	return true;
+}
+
+static u32 SplitStatsV7Checksum(
+	const struct SusamuneSplitStatsFileV7 *file)
+{
+	const struct SusamuneSplitStatsPayloadV7 *payload = &file->payload;
+	u32 hash = 2166136261u;
+	u32 region;
+	u32 profile;
+	u32 route;
+	u32 segment;
+
+	hash = PbHashWord(hash, ((u32)file->version << 16) |
+	                         ((u32)file->routeCount << 8) |
+	                         file->regionCount);
+	hash = PbHashWord(hash, ((u32)file->segmentCount << 16) |
+	                         ((u32)file->profileCount << 8) |
+	                         file->headerReserved);
+	hash = PbHashWord(hash, file->payloadBytes);
+	hash = PbHashWord(hash, file->schemaHash);
+	hash = PbHashWord(hash, file->generation);
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		for (route = 0; route < SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT; route++)
+		{
+			const struct SusamuneSplitRouteStats *stats =
+				&payload->routeStats[region][route];
+			hash = PbHashWord(hash, stats->attempts);
+			hash = PbHashWord(hash, stats->finishes);
+			hash = PbHashWord(hash, stats->golds);
+		}
+		for (route = 0; route < SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT; route++)
+			hash = PbHashWord(hash, payload->playedQf[region][route]);
+		for (segment = 0; segment < SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT;
+		     segment++)
+			hash = PbHashWord(hash, payload->bestQf[region][segment]);
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			for (route = 0; route < SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT;
+			     route++)
+				hash = PbHashWord(
+					hash,
+					payload->pbIdentityQf[region][profile][route]);
+			for (segment = 0;
+			     segment < SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT; segment++)
+				hash = PbHashWord(
+					hash, payload->pbQf[region][profile][segment]);
+		}
+	}
+	return hash;
+}
+
+static enum PbReadResult ReadSplitStatsV7File(
+	const char *path, struct SusamuneSplitStatsFileV7 *file)
+{
+	FIL f;
+	UINT read = 0;
+	u32 size;
+	u32 prefixSize = __builtin_offsetof(
+		struct SusamuneSplitStatsFileV7, generation);
+	int ret;
+	int closeRet;
+
+	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+		return PB_READ_INVALID;
+	if (ret != FR_OK)
+		return PB_READ_UNSAFE;
+	size = (u32)f_size(&f);
+	if (size != sizeof(*file))
+	{
+		memset(file, 0, sizeof(*file));
+		if (size >= prefixSize)
+			ret = f_read(&f, file, prefixSize, &read);
+		closeRet = f_close(&f);
+		if (ret != FR_OK || closeRet != FR_OK ||
+		    (size >= prefixSize && read != prefixSize))
+			return PB_READ_UNSAFE;
+		if (size >= prefixSize &&
+		    file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
+		    (file->version != SUSAMUNE_SPLIT_STATS_VERSION_V7 ||
+		     !SplitStatsV7SchemaSupported(file->schemaHash)))
+			return PB_READ_UNSAFE;
+		return PB_READ_INVALID;
+	}
+	ret = f_read(&f, file, sizeof(*file), &read);
+	closeRet = f_close(&f);
+	if (ret != FR_OK || read != sizeof(*file) || closeRet != FR_OK)
+		return PB_READ_UNSAFE;
+	if (file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
+	    file->version != SUSAMUNE_SPLIT_STATS_VERSION_V7)
+		return PB_READ_UNSAFE;
+	if (file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC &&
+	    file->version == SUSAMUNE_SPLIT_STATS_VERSION_V7 &&
+	    !SplitStatsV7SchemaSupported(file->schemaHash))
+		return PB_READ_UNSAFE;
+	if (file->magic != SUSAMUNE_SPLIT_STATS_FILE_MAGIC ||
+	    file->routeCount != SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT ||
+	    file->segmentCount != SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT ||
+	    file->regionCount != SUSAMUNE_SPLIT_STATS_REGION_COUNT ||
+	    file->profileCount != SUSAMUNE_SPLIT_STATS_PROFILE_COUNT ||
+	    file->headerReserved != 0 ||
+	    file->payloadBytes != sizeof(file->payload) ||
+	    !SplitStatsV7SchemaSupported(file->schemaHash) ||
+	    !SplitStatsBytesZero(file->reserved0, sizeof(file->reserved0)) ||
+	    !SplitStatsBytesZero(file->reserved1, sizeof(file->reserved1)) ||
+	    !SplitStatsBytesZero(file->tailPad, sizeof(file->tailPad)) ||
+	    file->checksum != SplitStatsV7Checksum(file) ||
+	    !SplitStatsV7PayloadValid(&file->payload))
+		return PB_READ_INVALID;
+	return PB_READ_VALID;
+}
+
+static void MigrateSplitStatsV7(
+	struct SusamuneSplitStatsPayload *dst,
+	const struct SusamuneSplitStatsPayloadV7 *src)
+{
+	u32 region;
+	u32 profile;
+
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		memcpy(dst->routeStats[region], src->routeStats[region],
+		       sizeof(src->routeStats[region]));
+		memcpy(dst->playedQf[region], src->playedQf[region],
+		       sizeof(src->playedQf[region]));
+		memcpy(dst->bestQf[region], src->bestQf[region],
+		       sizeof(src->bestQf[region]));
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			memcpy(dst->pbIdentityQf[region][profile],
+			       src->pbIdentityQf[region][profile],
+			       sizeof(src->pbIdentityQf[region][profile]));
+			memcpy(dst->pbQf[region][profile],
+			       src->pbQf[region][profile],
+			       sizeof(src->pbQf[region][profile]));
+		}
+	}
 }
 
 static bool SplitStatsV6PayloadValid(
@@ -1958,11 +2461,12 @@ static void MigrateSplitStatsV6(
 			dst->playedQf[region][route] = src->playedQf[region][route];
 			if (b2)
 				dst->routeStats[region][route].golds = 0;
-			for (local = b2 ? 1u : 0u;
-			     local < SplitV6RouteCount[route]; local++)
+			for (local = 0; local < SplitV6RouteCount[route]; local++)
 			{
-				const u32 newLocal = b2 ? local + 1 : local;
-				dst->bestQf[region][SplitRouteFirst[route] + newLocal] =
+				if (b2 && local == 0)
+					continue;
+				dst->bestQf[region][SplitRouteFirst[route] + local +
+				                         (b2 ? 1u : 0u)] =
 					src->bestQf[region]
 					           [SplitV6RouteFirst[route] + local];
 			}
@@ -1970,15 +2474,16 @@ static void MigrateSplitStatsV6(
 			for (profile = 0;
 			     profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT; profile++)
 			{
-				if (b2)
-					continue;
 				dst->pbIdentityQf[region][profile][route] =
 					src->pbIdentityQf[region][profile][route];
 				for (local = 0;
 				     local < SplitV6RouteCount[route]; local++)
 				{
+					if (b2 && local == 0)
+						continue;
 					dst->pbQf[region][profile]
-					         [SplitRouteFirst[route] + local] =
+					         [SplitRouteFirst[route] + local +
+					          (b2 ? 1u : 0u)] =
 						src->pbQf[region][profile]
 							         [SplitV6RouteFirst[route] + local];
 				}
@@ -2168,12 +2673,13 @@ static void MigrateSplitStatsV5(
 				dst->routeStats[region][route].golds =
 					src->routeStats[region][route].golds;
 			}
-			for (local = b2 ? 1u : 0u;
-			     !SplitStatsV5RouteBecameTerminal(route) &&
+			for (local = 0; !SplitStatsV5RouteBecameTerminal(route) &&
 			     local < SplitV5RouteCount[route]; local++)
 			{
-				const u32 newLocal = b2 ? local + 1 : local;
-				dst->bestQf[region][SplitRouteFirst[route] + newLocal] =
+				if (b2 && local == 0)
+					continue;
+				dst->bestQf[region][SplitRouteFirst[route] + local +
+				                         (b2 ? 1u : 0u)] =
 					src->bestQf[region]
 					           [SplitV5RouteFirst[route] + local];
 			}
@@ -2181,8 +2687,6 @@ static void MigrateSplitStatsV5(
 			for (profile = 0;
 			     profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT; profile++)
 			{
-				if (b2)
-					continue;
 				const u32 identity =
 					src->pbIdentityQf[region][profile][route];
 				dst->pbIdentityQf[region][profile][route] = identity;
@@ -2195,8 +2699,11 @@ static void MigrateSplitStatsV5(
 				for (local = 0;
 				     local < SplitV5RouteCount[route]; local++)
 				{
+					if (b2 && local == 0)
+						continue;
 					dst->pbQf[region][profile]
-					          [SplitRouteFirst[route] + local] =
+					          [SplitRouteFirst[route] + local +
+					           (b2 ? 1u : 0u)] =
 						src->pbQf[region][profile]
 						         [SplitV5RouteFirst[route] + local];
 				}
@@ -2396,6 +2903,7 @@ static void MigrateSplitStatsV4(
 		     route++)
 		{
 			u32 removed = 0;
+			const bool b2 = route == 13;
 			const bool changed =
 				SplitStatsV4RemovedCheckpoint(route, &removed);
 			const bool terminal = SplitStatsV5RouteBecameTerminal(route);
@@ -2403,9 +2911,11 @@ static void MigrateSplitStatsV4(
 				src->routeStats[region][route].attempts;
 			dst->routeStats[region][route].finishes =
 				src->routeStats[region][route].finishes;
-			if (!changed && !terminal)
+			if (!changed && !terminal && !b2)
 				dst->routeStats[region][route].golds =
 					src->routeStats[region][route].golds;
+			if (b2)
+				continue;
 
 			for (local = 0; !terminal &&
 			                local < SplitRouteCount[route]; local++)
@@ -3092,6 +3602,69 @@ static void ResetSplitStatsPayload(struct SusamuneSplitStatsPayload *payload)
 	           __builtin_offsetof(struct SusamuneSplitStatsPayload, bestQf));
 }
 
+static void MigrateSplitStatsV8PreviousSchema(
+	struct SusamuneSplitStatsPayload *payload)
+{
+	const u32 route = 13;
+	const u32 first = SplitRouteFirst[route];
+	u32 region;
+	u32 profile;
+
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		payload->routeStats[region][route].golds = 0;
+		payload->bestQf[region][first + 5] =
+			payload->bestQf[region][first + 4];
+		payload->bestQf[region][first + 4] =
+			payload->bestQf[region][first + 3];
+		payload->bestQf[region][first + 3] =
+			payload->bestQf[region][first + 2];
+		payload->bestQf[region][first + 1] =
+			SUSAMUNE_SPLIT_STATS_QF_UNSET;
+		payload->bestQf[region][first + 2] =
+			SUSAMUNE_SPLIT_STATS_QF_UNSET;
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			payload->pbQf[region][profile][first + 5] =
+				payload->pbQf[region][profile][first + 4];
+			payload->pbQf[region][profile][first + 4] =
+				payload->pbQf[region][profile][first + 3];
+			payload->pbQf[region][profile][first + 3] =
+				payload->pbQf[region][profile][first + 2];
+			payload->pbQf[region][profile][first + 1] =
+				SUSAMUNE_SPLIT_STATS_QF_UNSET;
+			payload->pbQf[region][profile][first + 2] =
+				SUSAMUNE_SPLIT_STATS_QF_UNSET;
+		}
+	}
+}
+
+static void MigrateSplitStatsPreviousSchema(
+	struct SusamuneSplitStatsPayload *payload)
+{
+	const u32 route = 13;
+	const u32 first = SplitRouteFirst[route];
+	const u32 count = SplitRouteCount[route];
+	u32 region;
+	u32 profile;
+
+	for (region = 0; region < SUSAMUNE_SPLIT_STATS_REGION_COUNT; region++)
+	{
+		payload->routeStats[region][route].golds = 0;
+		memset(&payload->bestQf[region][first], 0xff,
+		       count * sizeof(payload->bestQf[region][first]));
+		for (profile = 0; profile < SUSAMUNE_SPLIT_STATS_PROFILE_COUNT;
+		     profile++)
+		{
+			payload->pbIdentityQf[region][profile][route] =
+				SUSAMUNE_SPLIT_STATS_QF_UNSET;
+			memset(&payload->pbQf[region][profile][first], 0xff,
+			       count * sizeof(payload->pbQf[region][profile][first]));
+		}
+	}
+}
+
 static void ResetSplitStatsV4Payload(
 	struct SusamuneSplitStatsPayloadV4 *payload)
 {
@@ -3119,13 +3692,14 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 {
 	struct SusamuneSplitStatsFile *file = &SplitStatsFileScratch.current;
 	u32 fileIndex;
+	u32 selectedSchemaHash = SUSAMUNE_SPLIT_STATS_SCHEMA_HASH;
 	bool safe = true;
 	bool migrated = false;
 
 	InitSplitStatsDefaults(stats);
-	_sprintf(SplitStatsPaths[0], "%s/susamune_il_stats_v7_a.bin",
+	_sprintf(SplitStatsPaths[0], "%s/susamune_il_stats_v8_a.bin",
 	         SusamuneCfgStoragePrefix());
-	_sprintf(SplitStatsPaths[1], "%s/susamune_il_stats_v7_b.bin",
+	_sprintf(SplitStatsPaths[1], "%s/susamune_il_stats_v8_b.bin",
 	         SusamuneCfgStoragePrefix());
 	SplitStatsGeneration = 0;
 	SplitStatsActiveFile = -1;
@@ -3143,6 +3717,18 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 		if (SplitStatsActiveFile >= 0 &&
 		    file->generation == SplitStatsGeneration)
 		{
+			if (file->schemaHash != selectedSchemaHash)
+			{
+				if (file->schemaHash ==
+				        SUSAMUNE_SPLIT_STATS_SCHEMA_HASH)
+				{
+					memcpy(&stats->payload, &file->payload,
+					       sizeof(stats->payload));
+					selectedSchemaHash = file->schemaHash;
+					SplitStatsActiveFile = (s32)fileIndex;
+				}
+				continue;
+			}
 			if (memcmp(&file->payload, &stats->payload,
 			           sizeof(file->payload)) != 0)
 				safe = false;
@@ -3155,9 +3741,77 @@ static bool InitSplitStatsFiles(struct SusamuneSplitStatsCfg *stats)
 		memcpy(&stats->payload, &file->payload, sizeof(stats->payload));
 		SplitStatsGeneration = file->generation;
 		SplitStatsActiveFile = (s32)fileIndex;
+		selectedSchemaHash = file->schemaHash;
+	}
+
+	if (safe && SplitStatsActiveFile >= 0 &&
+	    selectedSchemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH)
+	{
+		MigrateSplitStatsV8PreviousSchema(&stats->payload);
+		migrated = true;
 	}
 
 	if (safe && SplitStatsActiveFile < 0)
+	{
+		char v7Paths[SUSAMUNE_PB_FILE_COUNT][SUSAMUNE_PB_PATH_SIZE];
+		struct SusamuneSplitStatsFileV7 *v7 = &SplitStatsFileScratch.v7;
+		u32 selectedGeneration = 0;
+		u32 selectedChecksum = 0;
+		s32 selectedFile = -1;
+
+		_sprintf(v7Paths[0], "%s/susamune_il_stats_v7_a.bin",
+		         SusamuneCfgStoragePrefix());
+		_sprintf(v7Paths[1], "%s/susamune_il_stats_v7_b.bin",
+		         SusamuneCfgStoragePrefix());
+		for (fileIndex = 0; fileIndex < SUSAMUNE_PB_FILE_COUNT; fileIndex++)
+		{
+			enum PbReadResult readResult =
+				ReadSplitStatsV7File(v7Paths[fileIndex], v7);
+			if (readResult == PB_READ_UNSAFE)
+			{
+				safe = false;
+				continue;
+			}
+			if (readResult != PB_READ_VALID)
+				continue;
+			if (selectedFile >= 0 && v7->generation == selectedGeneration)
+			{
+				if (v7->checksum != selectedChecksum)
+					safe = false;
+				continue;
+			}
+			if (selectedFile >= 0 &&
+			    !PbGenerationIsNewer(v7->generation, selectedGeneration))
+				continue;
+			selectedGeneration = v7->generation;
+			selectedChecksum = v7->checksum;
+			selectedFile = (s32)fileIndex;
+		}
+		if (safe && selectedFile >= 0)
+		{
+			enum PbReadResult readResult =
+				ReadSplitStatsV7File(v7Paths[selectedFile], v7);
+			if (readResult != PB_READ_VALID ||
+			    v7->generation != selectedGeneration ||
+			    v7->checksum != selectedChecksum)
+			{
+				safe = false;
+			}
+			else
+			{
+				ResetSplitStatsPayload(&stats->payload);
+				MigrateSplitStatsV7(&stats->payload, &v7->payload);
+				if (v7->schemaHash == SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH)
+					MigrateSplitStatsV8PreviousSchema(&stats->payload);
+				else
+					MigrateSplitStatsPreviousSchema(&stats->payload);
+				SplitStatsGeneration = selectedGeneration;
+				migrated = true;
+			}
+		}
+	}
+
+	if (safe && SplitStatsActiveFile < 0 && !migrated)
 	{
 		char v6Paths[SUSAMUNE_PB_FILE_COUNT][SUSAMUNE_PB_PATH_SIZE];
 		struct SusamuneSplitStatsFileV6 *v6 = &SplitStatsFileScratch.v6;
@@ -4400,6 +5054,62 @@ static void ApplyWallkickStyleKey(struct SusamuneWallkickStyleCfg *cfg,
 	}
 }
 
+static void ApplyMovementOverlayStyleKey(
+	struct SusamuneMovementOverlayStyleCfg *cfg, const char *prefix,
+	const char *key, const char *text, u32 colors)
+{
+	u8 rgb[3];
+	u8 v8;
+	u16 v16;
+	u32 i;
+	char expected[16];
+	const u32 prefixLen = (u32)strlen(prefix);
+	const char *field;
+
+	if (strncmp(key, prefix, prefixLen) != 0 || key[prefixLen] != '_')
+		return;
+	field = key + prefixLen + 1;
+	if (strcmp(field, "x") == 0 && ParseU16(text, &v16)) cfg->x = v16;
+	else if (strcmp(field, "y") == 0 && ParseU16(text, &v16)) cfg->y = v16;
+	else if (strcmp(field, "scale") == 0 && ParseQftU8(text, &v8))
+		cfg->scale = v8;
+	else if (strcmp(field, "text_alpha") == 0 && ParseQftU8(text, &v8))
+		cfg->textA = v8;
+	else if (strcmp(field, "background_rgb") == 0 && ParseQftRgb(text, rgb))
+	{
+		cfg->bgR = rgb[0]; cfg->bgG = rgb[1]; cfg->bgB = rgb[2];
+	}
+	else if (strcmp(field, "background_alpha") == 0 && ParseQftU8(text, &v8))
+		cfg->bgA = v8;
+	else if (strcmp(field, "text_brightness") == 0 && ParseQftU8(text, &v8))
+		cfg->textBrightness = v8;
+	else if (strcmp(field, "padding") == 0 && ParseQftU8(text, &v8))
+		cfg->padding = v8;
+	else
+	{
+		for (i = 0; i < colors; i++)
+		{
+			_sprintf(expected, "%u_rgb", i + 1);
+			if (strcmp(field, expected) == 0 && ParseQftRgb(text, rgb))
+			{
+				cfg->rgb[i][0] = rgb[0];
+				cfg->rgb[i][1] = rgb[1];
+				cfg->rgb[i][2] = rgb[2];
+				return;
+			}
+		}
+	}
+}
+
+static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
+	                              const char *key, const char *text)
+{
+	ApplyMovementOverlayStyleKey(&cfg->rollout, "rollout", key, text,
+	                             SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+	ApplyMovementOverlayStyleKey(&cfg->dust, "dust", key, text,
+	                             SUSAMUNE_DUST_STYLE_COLOR_COUNT);
+}
+
 // Whether the file already carries settings for this game version. When it does
 // not, the mod is asked to author them (SUSAMUNE_CFG_FLAG_NO_CONFIG).
 static bool SawSettingsSection = false;
@@ -4488,6 +5198,7 @@ static void ParseIni(char *text, struct SusamuneCfg *cfg)
 		{
 			ApplyCreationKey(&cfg->creation, Trim(line), Trim(eq + 1));
 			ApplyWallkickStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
+			ApplyMovementStyleKey(&cfg->movementStyle, Trim(line), Trim(eq + 1));
 		}
 
 		line = next;
@@ -4785,6 +5496,36 @@ static void EmitQftDisplaySection(FIL *f, int *err, const struct SusamuneCfg *cf
 	          SUSAMUNE_QFT_DISPLAY_LEADING_ZERO);
 }
 
+static void EmitMovementOverlayStyle(
+	FIL *f, int *err, const char *prefix,
+	const struct SusamuneMovementOverlayStyleCfg *style, u32 colors)
+{
+	char line[160];
+	u32 i;
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_x = %u\r\n", prefix, style->x));
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_y = %u\r\n", prefix, style->y));
+	Emit(f, err, line,
+	     (u32)_sprintf(line, "%s_scale = %u\r\n", prefix, style->scale));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_text_alpha = %u\r\n", prefix, style->textA));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_background_rgb = %u,%u,%u\r\n", prefix,
+		style->bgR, style->bgG, style->bgB));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_background_alpha = %u\r\n", prefix, style->bgA));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_text_brightness = %u\r\n", prefix,
+		style->textBrightness));
+	Emit(f, err, line, (u32)_sprintf(
+		line, "%s_padding = %u\r\n", prefix, style->padding));
+	for (i = 0; i < colors; i++)
+		Emit(f, err, line, (u32)_sprintf(
+			line, "%s_%u_rgb = %u,%u,%u\r\n", prefix, i + 1,
+			style->rgb[i][0], style->rgb[i][1], style->rgb[i][2]));
+}
+
 static void EmitCreationSection(FIL *f, int *err,
 	                            const struct SusamuneCfg *cfg)
 {
@@ -4918,6 +5659,12 @@ static void EmitCreationSection(FIL *f, int *err,
 		Emit(f, err, line, (u32)_sprintf(
 			line, "il_pb_popup_scale = %u\r\n", w->pbPopupScale));
 	}
+	EmitMovementOverlayStyle(
+		f, err, "rollout", &cfg->movementStyle.rollout,
+		SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
+	EmitMovementOverlayStyle(
+		f, err, "dust", &cfg->movementStyle.dust,
+		SUSAMUNE_DUST_STYLE_COLOR_COUNT);
 	for (word = 0; word < SUSAMUNE_CREATION_WORD_COUNT; word++)
 	{
 		const struct SusamuneCreationWordCfg *w = &d->words[word];
@@ -4978,10 +5725,15 @@ static const char kIniBanner[] =
 static int WriteIniFile(const struct SusamuneCfg *cfg)
 {
 	FIL   f;
+	const char *path = SusamuneCfgIniPath();
+	char  tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
+	char  backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
 	char *buf;
 	char *line;
 	UINT  read = 0;
+	FSIZE_t fileSize = 0;
 	int   ret;
+	int   closeRet;
 	int   err = FR_OK;
 	bool  skipping = false;
 	bool  wroteSettings = false;
@@ -4990,30 +5742,63 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	bool  wroteMetadataDisplay = false;
 	bool  wroteQftDisplay = false;
 	bool  wroteCreation = false;
+	bool  hadOriginal = false;
 
 	buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
 	if (buf == NULL)
 		return FR_NOT_ENOUGH_CORE;
 	buf[0] = '\0';
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_READ | FA_OPEN_EXISTING);
-	if (ret == FR_OK)
+	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
+	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
 	{
-		// Refuse rather than truncate: a partial copy-through would silently
-		// delete another version's settings.
-		if (f_size(&f) >= SUSAMUNE_INI_BUF_SIZE)
-		{
-			f_close(&f);
-			free(buf);
-			return FR_NOT_ENOUGH_CORE;
-		}
-		if (f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read) != FR_OK)
-			read = 0;
-		buf[read] = '\0';
-		f_close(&f);
+		free(buf);
+		return FR_INVALID_NAME;
+	}
+	ret = RecoverIniFile(path);
+	if (ret != FR_OK)
+	{
+		free(buf);
+		return ret;
 	}
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_WRITE | FA_CREATE_ALWAYS);
+	ret = f_open_char(&f, path, FA_READ | FA_OPEN_EXISTING);
+	if (ret == FR_OK)
+	{
+		hadOriginal = true;
+		if (f.obj.attr & AM_RDO)
+		{
+			closeRet = f_close(&f);
+			free(buf);
+			return closeRet == FR_OK ? FR_DENIED : closeRet;
+		}
+		fileSize = f_size(&f);
+		// Refuse rather than truncate: a partial copy-through would silently
+		// delete another version's settings.
+		if (fileSize >= SUSAMUNE_INI_BUF_SIZE)
+		{
+			closeRet = f_close(&f);
+			free(buf);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read);
+		closeRet = f_close(&f);
+		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
+		{
+			free(buf);
+			if (ret != FR_OK)
+				return ret;
+			return closeRet != FR_OK ? closeRet : FR_DISK_ERR;
+		}
+		buf[read] = '\0';
+	}
+	else if (ret != FR_NO_FILE && ret != FR_NO_PATH)
+	{
+		free(buf);
+		return ret;
+	}
+
+	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);
 	if (ret != FR_OK)
 	{
 		free(buf);
@@ -5130,9 +5915,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 		EmitCreationSection(&f, &err, cfg);
 	}
 
+	if (err == FR_OK && f_size(&f) >= SUSAMUNE_INI_BUF_SIZE)
+		err = FR_NOT_ENOUGH_CORE;
 	ret = f_close(&f);
 	if (err == FR_OK && ret != FR_OK)
 		err = ret;
+	if (err == FR_OK)
+		err = CommitIniFile(path, tempPath, backupPath, hadOriginal);
 	free(buf);
 	return err;
 }
@@ -5245,6 +6034,30 @@ static void InitWallkickStyleDefaults(struct SusamuneWallkickStyleCfg *cfg)
 		cfg->rgb[i][0] = cfg->rgb[i][1] = cfg->rgb[i][2] = 255;
 }
 
+static void InitMovementOverlayStyleDefaults(
+	struct SusamuneMovementOverlayStyleCfg *cfg)
+{
+	u32 i;
+	cfg->x = 300;
+	cfg->y = 106;
+	cfg->scale = 90;
+	cfg->textA = 255;
+	cfg->bgA = 185;
+	cfg->textBrightness = 100;
+	cfg->padding = 5;
+	for (i = 0; i < SUSAMUNE_MOVEMENT_STYLE_COLOR_COUNT; i++)
+		cfg->rgb[i][0] = cfg->rgb[i][1] = cfg->rgb[i][2] = 255;
+}
+
+static void InitMovementStyleDefaults(struct SusamuneMovementStyleCfg *cfg)
+{
+	memset(cfg, 0, sizeof(*cfg));
+	cfg->magic = SUSAMUNE_MOVEMENT_STYLE_MAGIC;
+	cfg->version = SUSAMUNE_MOVEMENT_STYLE_VERSION;
+	InitMovementOverlayStyleDefaults(&cfg->rollout);
+	InitMovementOverlayStyleDefaults(&cfg->dust);
+}
+
 void SusamuneCfgInit(void)
 {
 	struct SusamuneCfg *cfg = CfgBlock();
@@ -5256,8 +6069,12 @@ void SusamuneCfgInit(void)
 	FIL   f;
 	char *buf;
 	UINT  read;
+	FSIZE_t fileSize;
 	u32   i;
 	int   ret;
+	int   closeRet;
+	bool  settingsReadSafe;
+	bool  noConfig;
 
 	// Zero the block unconditionally: it survives across app launches, and a
 	// stale one left by an earlier boot would be adopted wholesale by a mod
@@ -5349,6 +6166,7 @@ void SusamuneCfgInit(void)
 	cfg->inputStyle.present = 0;
 	InitCreationDefaults(&cfg->creation);
 	InitWallkickStyleDefaults(&cfg->wallkickStyle);
+	InitMovementStyleDefaults(&cfg->movementStyle);
 
 	cfg->magic     = SUSAMUNE_CFG_MAGIC;
 	cfg->version   = SUSAMUNE_CFG_VERSION;
@@ -5360,7 +6178,8 @@ void SusamuneCfgInit(void)
 	                 SUSAMUNE_CFG_FLAG_METADATA_STYLE |
 	                 SUSAMUNE_CFG_FLAG_INPUT_STYLE |
 	                 SUSAMUNE_CFG_FLAG_CREATION |
-	                 SUSAMUNE_CFG_FLAG_WALLKICK_STYLE;
+	                 SUSAMUNE_CFG_FLAG_WALLKICK_STYLE |
+	                 SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE;
 	if (InitPbFiles(cfg, region))
 		cfg->flags |= SUSAMUNE_CFG_FLAG_ILING_PBS |
 		              SUSAMUNE_CFG_FLAG_ILING_PROFILES;
@@ -5375,33 +6194,77 @@ void SusamuneCfgInit(void)
 	// future/unreadable journal from a launcher with no backend.
 	cfg->flags |= SUSAMUNE_CFG_FLAG_SPLIT_STATS;
 
-	ret = f_open_char(&f, SusamuneCfgIniPath(), FA_READ | FA_OPEN_EXISTING);
+	settingsReadSafe = false;
+	noConfig = false;
+	ret = RecoverIniFile(SusamuneCfgIniPath());
+	if (ret == FR_OK)
+		ret = f_open_char(&f, SusamuneCfgIniPath(),
+		                  FA_READ | FA_OPEN_EXISTING);
 	if (ret == FR_OK)
 	{
-		buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
-		if (buf != NULL)
+		fileSize = f_size(&f);
+		if (fileSize >= SUSAMUNE_INI_BUF_SIZE)
 		{
-			read = 0;
-			if (f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read) != FR_OK)
+			closeRet = f_close(&f);
+			ret = closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		else
+		{
+			buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
+			if (buf == NULL)
+			{
+				closeRet = f_close(&f);
+				ret = closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+			}
+			else
+			{
 				read = 0;
-			buf[read] = '\0';
-			ParseIni(buf, cfg);
-			free(buf);
+				ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1,
+				             &read);
+				closeRet = f_close(&f);
+				if (ret == FR_OK && read == fileSize && closeRet == FR_OK)
+				{
+					buf[read] = '\0';
+					ParseIni(buf, cfg);
+					settingsReadSafe = true;
+					noConfig = !SawSettingsSection;
+				}
+				else if (ret == FR_OK)
+				{
+					ret = closeRet != FR_OK ? closeRet : FR_DISK_ERR;
+				}
+				free(buf);
+			}
 		}
-		f_close(&f);
-		if (!SawSettingsSection)
+	}
+	else if (ret == FR_NO_FILE || ret == FR_NO_PATH)
+	{
+		settingsReadSafe = true;
+		noConfig = true;
+	}
+
+	if (settingsReadSafe)
+	{
+		if (noConfig)
 		{
-			// The file exists but has never been written by this game version.
+			// Only a confirmed missing section may author defaults.
 			cfg->flags |= SUSAMUNE_CFG_FLAG_NO_CONFIG;
+			dbgprintf("Susamune: no " SUSAMUNE_INI_PATH
+			          " section [%s], using defaults\r\n", SettingsSection);
 		}
-		dbgprintf("Susamune: loaded " SUSAMUNE_INI_PATH " [%s]\r\n", SettingsSection);
+		else
+		{
+			dbgprintf("Susamune: loaded " SUSAMUNE_INI_PATH " [%s]\r\n",
+			          SettingsSection);
+		}
 	}
 	else
 	{
-		// Every value stays UNSET, so the mod keeps its compiled-in defaults
-		// and -- seeing this flag -- writes the file out for us.
-		cfg->flags |= SUSAMUNE_CFG_FLAG_NO_CONFIG;
-		dbgprintf("Susamune: no " SUSAMUNE_INI_PATH " (%d), using defaults\r\n", ret);
+		// Keep independent journals available, but make settings read-only for
+		// this boot so defaults cannot replace a file we failed to read.
+		cfg->flags |= SUSAMUNE_CFG_FLAG_SETTINGS_READ_ERROR;
+		dbgprintf("Susamune: unsafe " SUSAMUNE_INI_PATH
+		          " read (%d), settings disabled\r\n", ret);
 	}
 
 	sync_after_write(cfg, sizeof(struct SusamuneCfg));
@@ -5411,7 +6274,7 @@ void SusamuneCfgInit(void)
 	sync_after_write(splitStats, sizeof(struct SusamuneSplitStatsCfg));
 
 	CfgAckSeq = 0;
-	CfgReady  = true;
+	CfgReady  = settingsReadSafe;
 }
 
 bool SusamuneCfgPending(void)
@@ -5442,6 +6305,7 @@ void SusamuneCfgService(void)
 	                 sizeof(cfg->qftDisplay) + sizeof(cfg->metadataStyle) +
 	                 sizeof(cfg->inputStyle) + sizeof(cfg->creation) +
 	                 sizeof(cfg->wallkickStyle));
+	sync_before_read(&cfg->movementStyle, sizeof(cfg->movementStyle));
 	seq = cfg->saveSeq;
 
 	ret = WriteIniFile(cfg);

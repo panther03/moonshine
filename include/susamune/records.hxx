@@ -3,6 +3,8 @@
 
 #include <Dolphin/types.h>
 
+#include "susamune/assist.hxx"
+
 namespace Records {
 
 enum {
@@ -95,6 +97,12 @@ enum Category : u8 {
     CATEGORY_STREAKS,
     CATEGORY_SPECIAL,
     CATEGORY_COUNT,
+};
+
+enum GhostRaceSource : u8 {
+    GHOST_RACE_NONE,
+    GHOST_RACE_PERSONAL,
+    GHOST_RACE_IMPORTED,
 };
 
 // IDs 0-13 belonged to the Pre-Release 1/2 test catalog. They are retired
@@ -225,7 +233,8 @@ enum AchievementId : u16 {
     ACH_THEY_SEE_ME_ROLLIN_OUT,
     ACH_GHOSTLY_REDS,
     ACH_WHERE_THERE_IS_A_WILL,
-    ACH_CHUCKSTER_CHANGE,
+    // Retired in V2.2: Dootsters? has the exact same requirement.
+    ACH_RETIRED_CHUCKSTER_CHANGE,
 
     ACH_RUN_KILLER_CONQUERED,
     ACH_FREQUENT_FLYER,
@@ -241,9 +250,11 @@ enum AchievementId : u16 {
     // RC2 Times. IDs remain tier-grouped so the Records browser can preserve
     // its stable category/tier order without moving the RC1 catalog.
     ACH_WIGGLER_WRESTLING,
-    ACH_NO_KIDDING,
+    // Retired in V2.2: Scrooge has the exact same requirement.
+    ACH_RETIRED_NO_KIDDING,
 
-    ACH_TOWER_TITAN,
+    // Retired in V2.2: Red Tide has the exact same requirement.
+    ACH_RETIRED_TOWER_TITAN,
     ACH_JUST_FISHIN,
     ACH_VILLAGE_LIFE,
     ACH_THERE_IT_IS,
@@ -279,13 +290,82 @@ enum AchievementId : u16 {
     ACH_WRAITHLIKE,
     ACH_PHANTASMAL,
 
+    // V2.2 Times. Each category is tier-grouped for the Records browser.
+    ACH_DOCK_KNOCK,
+    ACH_CHAIN_REACTION,
+    ACH_SQUID_PRO_QUO,
+    ACH_LEAF_ME_HERE,
+    ACH_PRAISE_THE_SUN,
+    ACH_UNCORKED,
+    ACH_GOOPY_BUSINESS,
+    ACH_STOP_THIEF,
+    ACH_HILLSIDE_HEIST,
+    ACH_TRIPLE_TERROR,
+    ACH_I_HAVE_THE_HIGH_GROUND,
+    ACH_STOP_RIGHT_THERE_CRIMINAL_SCUM,
+    ACH_SECURITY,
+    ACH_BY_ORDER_OF_THE_ELDER,
+    ACH_THE_HOUSE_ALWAYS_WINS,
+    ACH_MANTASTIC,
+    ACH_BOMBASTIC_BALLOONS,
+    ACH_SKIPPED_SUMI,
+    ACH_PERFECT_PETER,
+    ACH_THE_CULMINATION,
+
+    // V2.2 Challenges.
+    ACH_LOST_AND_FLUDD,
+    ACH_A_NEW_LEAF,
+    ACH_REEF_RUNNER,
+    ACH_RUINS_RAMPAGE,
+    ACH_NO_SAFETY_NET,
+    ACH_ORANGES_QUEST,
+
+    // V2.2 Course Mastery.
+    ACH_PLAZA_BEGINNINGS,
+    ACH_PLAZA_SPECIALIST,
+    ACH_PLAZA_GRADUATE,
+    ACH_PLAZA_MASTER,
+    ACH_SHADOW_SLAYER,
+
+    // V2.2 Streaks.
+    ACH_ROOTED,
+    ACH_NO_REFUNDS,
+    ACH_SCOOBY_DOOBY_DOO,
+    ACH_PIECES_ROUGES_DE_LA_GROTTE,
+    ACH_SURFS_UP,
+    ACH_ROBBING_THE_VILLAGE,
+    ACH_HOTEL_LOYALTY,
+    ACH_BRUSH_YOUR_TEETH,
+    ACH_ROUND_AND_ROUND,
+    ACH_CLEAN_SWEEP,
+    ACH_HE_LOVES_SQUIDS,
+    ACH_MOTION_SICKNESS,
+    ACH_BAYWATCH,
+    ACH_THANKS_FOR_MY_GUN,
+    ACH_A_CERTAIN_SOMEONE,
+
+    // V2.2 Special.
+    ACH_NEW_KID_ON_THE_BLOCK,
+    ACH_BY_A_NOSE,
+    ACH_MIRROR_MATCH,
+    ACH_UPSTART,
+    ACH_SERIOUS_BUSINESS,
+    ACH_MAGNATE,
+    ACH_INDUSTRIALIST,
+    ACH_STRANGER_DANGER,
+    ACH_DEAD_HEAT,
+    ACH_ROBBER_BARON,
+    ACH_MOGUL,
+    ACH_TYCOON,
+    ACH_EMPEROR,
+
     ACHIEVEMENT_ID_END,
     ACHIEVEMENT_INVALID = 0xffff,
 };
 
 enum {
     ACHIEVEMENT_FIRST        = ACH_HERO_OF_THE_VILLAGE,
-    ACHIEVEMENT_ACTIVE_COUNT = ACHIEVEMENT_ID_END - ACHIEVEMENT_FIRST - 1,
+    ACHIEVEMENT_ACTIVE_COUNT = ACHIEVEMENT_ID_END - ACHIEVEMENT_FIRST - 4,
 };
 
 struct AchievementDesc {
@@ -318,8 +398,9 @@ void onStageExit();
 void onILAttemptStarted(int entry);
 void onILAttemptEnded();
 void onILResult(int entry, u8 pbSlot, s32 qf, s32 igtCentis,
-                bool challengeEligible);
-void onPBAccepted(int entry, u8 profile);
+                bool challengeEligible, GhostRaceSource ghostSource = GHOST_RACE_NONE,
+                s32 ghostQf = -1, s32 priorPbQf = -1);
+void onPBAccepted(int entry, u8 profile, s32 previousQf, s32 newQf);
 // Called only after storage acknowledges the canonical file commit.
 void onGhostSaved(u32 durationQf);
 
@@ -334,7 +415,7 @@ void onYoshiMounted();
 void onHotTubSwimming();
 void onMarioHeight(float y);
 void onCataquacksCleared();
-void invalidateAttempt();
+void invalidateAttempt(u8 assistReasons = Assist::OTHER);
 void onSavestateLoaded();
 
 u32 stat(StatId id);

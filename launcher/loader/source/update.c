@@ -145,7 +145,6 @@ static inline bool LatestVersion(int *major, int *minor, int *current_line) {
 		line++;
 		UpdateScreen();
 		while(true) {
-			DrawBuffer();
 			FPAD_Update();
 			if (FPAD_Cancel(0)) {
 				gprintf("Cancelling download\n");
@@ -156,7 +155,7 @@ static inline bool LatestVersion(int *major, int *minor, int *current_line) {
 				gprintf("okay\n");
 				break;
 			}
-			GRRLIB_Render();
+			GRRLIB_RenderPreserve();
 		}
 		if(!still_download) {
 			*current_line = line;
@@ -183,7 +182,9 @@ static s32 Download(DOWNLOADS download_number)  {
 	ClearScreen();
 	PrintInfo();
 
-	snprintf(filepath, sizeof(filepath), "%s%s", dir, Downloads[download_number].filename);
+	if ((unsigned int)snprintf(filepath, sizeof(filepath), "%s%s", dir,
+		Downloads[download_number].filename) >= sizeof(filepath))
+		return -4;
 	PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*line, Downloads[download_number].text);
 	UpdateScreen();
 
@@ -278,7 +279,8 @@ static s32 Download(DOWNLOADS download_number)  {
 		FRESULT res = f_open_char(&file, filepath, FA_WRITE|FA_CREATE_ALWAYS);
 		if (res != FR_OK) {
 			gprintf("File Error\r\n");
-			snprintf(errmsg, sizeof(errmsg), "Error opening '%s': %u", filepath, res);
+			snprintf(errmsg, sizeof(errmsg), "Error opening '%.19s': %u",
+				filepath, res);
 			ret = -4;
 			goto end;
 		} else {

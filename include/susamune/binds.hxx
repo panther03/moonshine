@@ -77,6 +77,12 @@ public:
     // Is this bind's exact combo held / did it become held this frame?
     bool isHeld(BindId id) const;
     bool wasPressed(BindId id) const;
+    // The menu must still recognise its own close combo after a page silences
+    // conflicting actions. Call only after the page's modal input grab.
+    bool wasPressedRaw(BindId id) const {
+        const u16 m = mMask[id];
+        return m != 0 && mHeld == m && mPrevHeld != m;
+    }
 
     // Same, but tolerating other buttons: true whenever the bind's buttons are
     // all down.

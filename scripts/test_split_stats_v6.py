@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused host contracts for the all-IL V7 split-statistics journal."""
+"""Focused host contracts for the all-IL V8 split-statistics journal."""
 
 from __future__ import annotations
 
@@ -26,16 +26,16 @@ assert schema_spec and schema_spec.loader
 schema = importlib.util.module_from_spec(schema_spec)
 schema_spec.loader.exec_module(schema)
 
-VERSION = 7
-ROUTES = 122
+VERSION = 8
+ROUTES = 132
 CHECKPOINTS = 153
-SEGMENTS = 275
+SEGMENTS = 285
 REGIONS = 3
 PROFILES = 4
-SCHEMA_HASH = 0x4499A650
-PAYLOAD_SIZE = 0x6E34
-CFG_SIZE = 0x7000
-CFG_OFFSET = 0x8800
+SCHEMA_HASH = 0x1AF7E430
+PAYLOAD_SIZE = 0x744C
+CFG_SIZE = 0x7500
+CFG_OFFSET = 0x8280
 UNSET = 0xFFFFFFFF
 
 V5_ROUTES = 61
@@ -44,6 +44,9 @@ V5_SCHEMA_HASH = 0xA91743AA
 V6_ROUTES = 122
 V6_SEGMENTS = 274
 V6_SCHEMA_HASH = 0xF7EAA0C4
+V7_ROUTES = 122
+V7_SEGMENTS = 275
+V7_SCHEMA_HASH = 0x8ADD6B7D
 TERMINAL_ONLY_CHANGED = (10, 31)
 B2_ROUTE = 13
 
@@ -51,12 +54,13 @@ ROUTE_ENTRIES = tuple(schema.ROUTE_ENTRIES)
 V5_ROUTE_ENTRIES = tuple(schema.V5_ROUTE_ENTRIES)
 ROUTE_COUNTS = tuple(len(points) + 1 for points in schema.CHECKPOINTS)
 V5_ROUTE_COUNTS = tuple(len(points) + 1 for points in schema.V5_CHECKPOINTS)
-ROUTE_FIRST = (0,) + tuple(accumulate(ROUTE_COUNTS[:-1]))
-V5_ROUTE_FIRST = (0,) + tuple(accumulate(V5_ROUTE_COUNTS[:-1]))
-V6_ROUTE_COUNTS = tuple(
-    count - 1 if route == B2_ROUTE else count
-    for route, count in enumerate(ROUTE_COUNTS)
+ROUTE_FIRST = tuple(
+    (0,) + tuple(accumulate(ROUTE_COUNTS[:-1]))
 )
+V5_ROUTE_FIRST = (0,) + tuple(accumulate(V5_ROUTE_COUNTS[:-1]))
+_v6_route_counts = list(ROUTE_COUNTS[:V6_ROUTES])
+_v6_route_counts[B2_ROUTE] = 5
+V6_ROUTE_COUNTS = tuple(_v6_route_counts)
 V6_ROUTE_FIRST = (0,) + tuple(accumulate(V6_ROUTE_COUNTS[:-1]))
 
 
@@ -170,10 +174,12 @@ def migrate_v5(old: dict[str, list]) -> dict[str, list]:
                 )
             for profile in range(PROFILES):
                 identity = old["identity"][region][profile][route]
-                if route == B2_ROUTE:
-                    continue
                 new["identity"][region][profile][route] = identity
-                if route in TERMINAL_ONLY_CHANGED:
+                if route == B2_ROUTE:
+                    new["pb"][region][profile][new_first + 2:new_first + 6] = (
+                        old["pb"][region][profile][old_first + 1:old_first + 5]
+                    )
+                elif route in TERMINAL_ONLY_CHANGED:
                     new["pb"][region][profile][new_first] = identity
                 else:
                     count = ROUTE_COUNTS[route]
@@ -188,7 +194,7 @@ def migrate_v6(old: dict[str, list]) -> dict[str, list]:
     """Executable model of the V6-to-V7 B2 checkpoint migration."""
     new = blank_payload(ROUTES, SEGMENTS, played=True)
     for region in range(REGIONS):
-        for route in range(ROUTES):
+        for route in range(V6_ROUTES):
             attempts, finishes, golds = old["stats"][region][route]
             new["stats"][region][route] = [
                 attempts,
@@ -208,16 +214,19 @@ def migrate_v6(old: dict[str, list]) -> dict[str, list]:
                     old["best"][region][old_first:old_first + count]
                 )
             for profile in range(PROFILES):
-                if route == B2_ROUTE:
-                    continue
                 new["identity"][region][profile][route] = (
                     old["identity"][region][profile][route]
                 )
-                count = V6_ROUTE_COUNTS[route]
-                new["pb"][region][profile][new_first:new_first + count] = (
-                    old["pb"][region][profile]
-                       [old_first:old_first + count]
-                )
+                if route == B2_ROUTE:
+                    new["pb"][region][profile][new_first + 2:new_first + 6] = (
+                        old["pb"][region][profile][old_first + 1:old_first + 5]
+                    )
+                else:
+                    count = V6_ROUTE_COUNTS[route]
+                    new["pb"][region][profile][new_first:new_first + count] = (
+                        old["pb"][region][profile]
+                           [old_first:old_first + count]
+                    )
     return new
 
 
@@ -287,13 +296,35 @@ class SchemaContracts(unittest.TestCase):
                 self.assertEqual(schema.CHECKPOINTS[route],
                                  schema.V5_CHECKPOINTS[route])
         self.assertEqual(
-            schema.CHECKPOINTS[B2_ROUTE][0],
-            "scene=02:00|02:01;trigger=mario-status-enter;"
-            "status=rollout;y>=3200",
+            schema.CHECKPOINTS[B2_ROUTE],
+            (
+                "scene=02:00;trigger=mario-status-enter;"
+                "status=rollout;y>=3200",
+                "scene=02:00->37:00;trigger=scene-transition;"
+                "target=37:00;meaning=pakkun-fmv",
+                "scene=37:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=1",
+                "scene=37:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=2",
+                "scene=37:00;trigger=actor-damage-ordinal;"
+                "actor=petey;value=3",
+            ),
+        )
+        self.assertEqual(
+            schema.V5_CHECKPOINTS[B2_ROUTE],
+            (
+                "scene=02:00|02:01;trigger=demo-start",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=1",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=2",
+                "scene=02:00|02:01;trigger=actor-damage-ordinal;"
+                "actor=petey;value=3",
+            ),
         )
         self.assertTrue(all(not points for points in schema.CHECKPOINTS[V5_ROUTES:]))
 
-    def test_source_route_table_exactly_tiles_all_segments(self) -> None:
+    def test_source_route_table_consumes_bianco_fmv_slot(self) -> None:
         routes = parse_route_table(SPLITS.read_text(encoding="utf-8"))
         expected = tuple(
             (ROUTE_FIRST[i], ROUTE_ENTRIES[i], ROUTE_COUNTS[i] - 1)
@@ -301,7 +332,7 @@ class SchemaContracts(unittest.TestCase):
         )
         self.assertEqual(routes, expected)
         self.assertEqual(routes[0][0], 0)
-        for previous, current in zip(routes, routes[1:]):
+        for route, (previous, current) in enumerate(zip(routes, routes[1:]), 1):
             self.assertEqual(current[0], previous[0] + previous[2] + 1)
         self.assertEqual(routes[-1][0] + routes[-1][2] + 1, SEGMENTS)
 
@@ -348,13 +379,16 @@ class SchemaContracts(unittest.TestCase):
 
 
 class LayoutAndPersistenceContracts(unittest.TestCase):
-    def test_v7_header_and_struct_sizes_are_frozen(self) -> None:
+    def test_v8_header_and_legacy_struct_sizes_are_frozen(self) -> None:
         header = HEADER.read_text(encoding="utf-8")
         expected = {
             "SUSAMUNE_SPLIT_STATS_VERSION": VERSION,
             "SUSAMUNE_SPLIT_STATS_ROUTE_COUNT": ROUTES,
             "SUSAMUNE_SPLIT_STATS_SEGMENT_COUNT": SEGMENTS,
             "SUSAMUNE_SPLIT_STATS_SCHEMA_HASH": SCHEMA_HASH,
+            "SUSAMUNE_SPLIT_STATS_V7_ROUTE_COUNT": V7_ROUTES,
+            "SUSAMUNE_SPLIT_STATS_V7_SEGMENT_COUNT": V7_SEGMENTS,
+            "SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH": V7_SCHEMA_HASH,
             "SUSAMUNE_SPLIT_STATS_V6_ROUTE_COUNT": V6_ROUTES,
             "SUSAMUNE_SPLIT_STATS_V6_SEGMENT_COUNT": V6_SEGMENTS,
             "SUSAMUNE_SPLIT_STATS_V6_SCHEMA_HASH": V6_SCHEMA_HASH,
@@ -373,10 +407,14 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
             r"\[SUSAMUNE_SPLIT_STATS_ROUTE_COUNT\];\s*"
             r"unsigned int bestQf",
         )
-        self.assertIn("sizeof(struct SusamuneSplitStatsPayload) == 0x6E34",
+        self.assertIn("sizeof(struct SusamuneSplitStatsPayload) == 0x744C",
                       header)
-        self.assertIn("sizeof(struct SusamuneSplitStatsCfg) == 0x7000", header)
-        self.assertIn("sizeof(struct SusamuneSplitStatsFile) == 0x6FE0", header)
+        self.assertIn("sizeof(struct SusamuneSplitStatsCfg) == 0x7500", header)
+        self.assertIn("sizeof(struct SusamuneSplitStatsFile) == 0x74A0", header)
+        self.assertIn("sizeof(struct SusamuneSplitStatsPayloadV7) == 0x6E34",
+                      header)
+        self.assertIn("sizeof(struct SusamuneSplitStatsFileV7) == 0x6FE0",
+                      header)
         self.assertIn("sizeof(struct SusamuneSplitStatsPayloadV6) == 0x6DF8",
                       header)
         self.assertIn("sizeof(struct SusamuneSplitStatsFileV6) == 0x6FE0",
@@ -394,7 +432,7 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
         pb_segments = REGIONS * PROFILES * SEGMENTS * 4
         self.assertEqual(route_stats + played + best + identities + pb_segments,
                          PAYLOAD_SIZE)
-        self.assertEqual(CFG_OFFSET + CFG_SIZE, 0xF800)
+        self.assertEqual(CFG_OFFSET + CFG_SIZE, 0xF780)
         self.assertLessEqual(CFG_OFFSET + CFG_SIZE, 0x10000)
 
         header = HEADER.read_text(encoding="utf-8")
@@ -409,8 +447,10 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
         self.assertIn("SUSAMUNE_DOLPHIN_PB_LIVE_PPC_BASE - SUSAMUNE_DOLPHIN_RUNTIME_PPC_BASE",
                       header)
 
-    def test_v7_uses_new_files_and_v6_is_read_only_migration_input(self) -> None:
+    def test_v8_uses_new_files_and_v7_is_read_only_migration_input(self) -> None:
         kernel = KERNEL.read_text(encoding="utf-8")
+        self.assertIn("susamune_il_stats_v8_a.bin", kernel)
+        self.assertIn("susamune_il_stats_v8_b.bin", kernel)
         self.assertIn("susamune_il_stats_v7_a.bin", kernel)
         self.assertIn("susamune_il_stats_v7_b.bin", kernel)
         self.assertIn("susamune_il_stats_v6_a.bin", kernel)
@@ -418,12 +458,15 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
         self.assertIn("susamune_il_stats_v5_a.bin", kernel)
         self.assertIn("susamune_il_stats_v5_b.bin", kernel)
         init = function_block(kernel, "static bool InitSplitStatsFiles(")
+        self.assertIn("ReadSplitStatsV7File", init)
+        self.assertIn("MigrateSplitStatsV7", init)
         self.assertIn("ReadSplitStatsV6File", init)
         self.assertIn("MigrateSplitStatsV6", init)
         self.assertIn("ReadSplitStatsV5File", init)
         self.assertIn("MigrateSplitStatsV5", init)
         writer = function_block(kernel, "static int WriteSplitStatsFile(")
         self.assertIn("SplitStatsPaths[target]", writer)
+        self.assertNotIn("v7Paths[target]", writer)
         self.assertNotIn("v6Paths[target]", writer)
         self.assertNotIn("v5Paths[target]", writer)
         self.assertNotIn("susamune_il_stats_v6", writer)
@@ -436,16 +479,18 @@ class LayoutAndPersistenceContracts(unittest.TestCase):
         )
         self.assertIn("file->magic == SUSAMUNE_SPLIT_STATS_FILE_MAGIC", reader)
         self.assertIn("file->version != SUSAMUNE_SPLIT_STATS_VERSION", reader)
-        self.assertIn("file->schemaHash != SUSAMUNE_SPLIT_STATS_SCHEMA_HASH",
-                      reader)
+        self.assertIn("!SplitStatsV8SchemaSupported(file->schemaHash)", reader)
+        supported = function_block(kernel, "static bool SplitStatsV7SchemaSupported(")
+        self.assertIn("SUSAMUNE_SPLIT_STATS_V7_SCHEMA_HASH", supported)
+        self.assertIn("SUSAMUNE_SPLIT_STATS_PREVIOUS_SCHEMA_HASH", supported)
         self.assertGreaterEqual(reader.count("return PB_READ_UNSAFE;"), 3)
 
         init = function_block(kernel, "static bool InitSplitStatsFiles(")
         unsafe = init.index("if (readResult == PB_READ_UNSAFE)")
         unsafe_tail = init[unsafe:unsafe + 180]
         self.assertIn("safe = false;", unsafe_tail)
-        v5_fallback = init.index("ReadSplitStatsV5File")
-        self.assertIn("if (safe && SplitStatsActiveFile < 0", init[:v5_fallback])
+        v7_fallback = init.index("ReadSplitStatsV7File")
+        self.assertIn("if (safe && SplitStatsActiveFile < 0", init[:v7_fallback])
         writable = init.rindex("SUSAMUNE_SPLIT_STATS_FLAG_WRITABLE")
         self.assertIn("if (safe)", init[writable - 120:writable])
 
@@ -555,13 +600,18 @@ class MigrationContracts(unittest.TestCase):
                     identity = old["identity"][region][profile][route]
                     if route == B2_ROUTE:
                         self.assertEqual(
-                            new["identity"][region][profile][route], UNSET
+                            new["identity"][region][profile][route], identity
                         )
                         new_first = ROUTE_FIRST[route]
                         self.assertEqual(
-                            new["pb"][region][profile]
-                               [new_first:new_first + ROUTE_COUNTS[route]],
-                            [UNSET] * ROUTE_COUNTS[route],
+                            new["pb"][region][profile][new_first:new_first + 2],
+                            [UNSET, UNSET],
+                        )
+                        self.assertEqual(
+                            new["pb"][region][profile][new_first + 2:new_first + 6],
+                            old["pb"][region][profile]
+                               [V5_ROUTE_FIRST[route] + 1:
+                                V5_ROUTE_FIRST[route] + 5],
                         )
                     elif route in TERMINAL_ONLY_CHANGED:
                         self.assertEqual(
@@ -583,11 +633,11 @@ class MigrationContracts(unittest.TestCase):
                                [V5_ROUTE_FIRST[route]:V5_ROUTE_FIRST[route] + count],
                         )
 
-    def test_v6_migration_resets_only_incompatible_b2_baseline(self) -> None:
+    def test_v6_migration_remaps_compatible_b2_tail(self) -> None:
         old = self.populated_v6()
         new = migrate_v6(old)
         for region in range(REGIONS):
-            for route in range(ROUTES):
+            for route in range(V6_ROUTES):
                 self.assertEqual(new["stats"][region][route][:2],
                                  old["stats"][region][route][:2])
                 self.assertEqual(new["played"][region][route],
@@ -618,12 +668,17 @@ class MigrationContracts(unittest.TestCase):
                 for profile in range(PROFILES):
                     if route == B2_ROUTE:
                         self.assertEqual(
-                            new["identity"][region][profile][route], UNSET
+                            new["identity"][region][profile][route],
+                            old["identity"][region][profile][route],
                         )
                         self.assertEqual(
-                            new["pb"][region][profile]
-                               [new_first:new_first + ROUTE_COUNTS[route]],
-                            [UNSET] * ROUTE_COUNTS[route],
+                            new["pb"][region][profile][new_first:new_first + 2],
+                            [UNSET, UNSET],
+                        )
+                        self.assertEqual(
+                            new["pb"][region][profile][new_first + 2:new_first + 6],
+                            old["pb"][region][profile]
+                               [old_first + 1:old_first + 5],
                         )
                     else:
                         self.assertEqual(
@@ -637,6 +692,16 @@ class MigrationContracts(unittest.TestCase):
                             old["pb"][region][profile]
                                [old_first:old_first + count],
                         )
+            for route in range(V6_ROUTES, ROUTES):
+                self.assertEqual(new["stats"][region][route], [0, 0, 0])
+                self.assertEqual(new["played"][region][route], 0)
+                self.assertEqual(new["best"][region][ROUTE_FIRST[route]], UNSET)
+                for profile in range(PROFILES):
+                    self.assertEqual(new["identity"][region][profile][route],
+                                     UNSET)
+                    self.assertEqual(
+                        new["pb"][region][profile][ROUTE_FIRST[route]], UNSET
+                    )
 
     def test_v5_terminal_only_unset_identity_remains_unset(self) -> None:
         old = self.populated_v5()
@@ -690,7 +755,8 @@ class MigrationContracts(unittest.TestCase):
         self.assertIn("const bool b2 = route == 13", migration_v6)
         self.assertIn("dst->playedQf[region][route]", migration_v6)
         self.assertIn("dst->routeStats[region][route].golds = 0", migration_v6)
-        self.assertIn("if (b2)\n\t\t\t\t\tcontinue;", migration_v6)
+        self.assertIn("if (b2 && local == 0)", migration_v6)
+        self.assertIn("(b2 ? 1u : 0u)", migration_v6)
         init = function_block(kernel, "static bool InitSplitStatsFiles(")
         migrate_v6_call = init.index("MigrateSplitStatsV6")
         self.assertIn("ResetSplitStatsPayload", init[:migrate_v6_call])

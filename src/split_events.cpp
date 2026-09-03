@@ -59,6 +59,7 @@ const CarryDesc kCarryRoutes[] = {
     {SplitStats::ROUTE_RICCO_1, 3, 0, 0x3B, 0},
     {SplitStats::ROUTE_RICCO_2, 3, 1, 0x1E, 0},
     {SplitStats::ROUTE_RICCO_4, 3, 3, 0x30, 0},
+    {SplitStats::ROUTE_BIANCO_2, 2, 0, 0x37, 0},
     {SplitStats::ROUTE_BIANCO_3_FULL, 2, 2, 0x2F, 0},
     {SplitStats::ROUTE_BIANCO_6_FULL, 2, 5, 0x2E, 0},
     {SplitStats::ROUTE_PIANTA_5_FULL, 8, 4, 0x2A, 0},
@@ -100,6 +101,8 @@ const u32 kGatekeeperVtable =
     SUSAMUNE_MEM1_ADDR(0x803DFDF4u, 0x803BB71Cu, 0x803B353Cu);
 const u32 kPeteyVtable =
     SUSAMUNE_MEM1_ADDR(0x803D8E0Cu, 0x803B45D4u, 0x803AC3F4u);
+const u32 kPeteyManagerVtable =
+    SUSAMUNE_MEM1_ADDR(0x803D8DB8u, 0x803B4580u, 0x803AC3A0u);
 const u32 kFireWanwanVtable =
     SUSAMUNE_MEM1_ADDR(0x803D87C0u, 0x803B3F88u, 0x803ABDA8u);
 const u32 kBossWanwanVtable =
@@ -169,11 +172,13 @@ bool sCoconutThrowArmed;
 TSpineEnemy *sTinKoopa;
 TSpineEnemy *sBossGesso;
 TSpineEnemy *sBossEel;
+TSpineEnemy *sPetey;
 void *sEmario;
 u8 sGatekeeperHits;
 u8 sPeteyHits;
 u8 sBossGessoHits;
 u8 sBossGessoHealth;
+u8 sPeteyHealth;
 u8 sBossTelesaHits;
 u8 sFireWanwanDeaths;
 u8 sEelCleanedCount;
@@ -185,6 +190,7 @@ bool sCannonKilledSeen;
 bool sEelActivatedSeen;
 bool sTinKoopaFourthSeen;
 bool sBossGessoHealthValid;
+bool sPeteyHealthValid;
 bool sMantaPinkSeen;
 bool sNoki2FirstWallkick;
 TLiveActor *sDeadFireWanwans[3];
@@ -293,11 +299,13 @@ void clearAttemptState() {
     sTinKoopa = nullptr;
     sBossGesso = nullptr;
     sBossEel = nullptr;
+    sPetey = nullptr;
     sEmario = nullptr;
     sGatekeeperHits = 0;
     sPeteyHits = 0;
     sBossGessoHits = 0;
     sBossGessoHealth = 0;
+    sPeteyHealth = 0;
     sBossTelesaHits = 0;
     sFireWanwanDeaths = 0;
     sEelCleanedCount = 0;
@@ -309,6 +317,7 @@ void clearAttemptState() {
     sEelActivatedSeen = false;
     sTinKoopaFourthSeen = false;
     sBossGessoHealthValid = false;
+    sPeteyHealthValid = false;
     sMantaPinkSeen = false;
     sNoki2FirstWallkick = false;
     sGenericTalkCount = 0;
@@ -579,8 +588,7 @@ void noteMarioStatus(TMario *mario, u32 status) {
             publishEvent(sActiveRoute, 0);
         break;
     case SplitStats::ROUTE_BIANCO_2:
-        if ((routeScene(sActiveRoute, 2, 0) ||
-             routeScene(sActiveRoute, 2, 1)) &&
+        if (routeScene(sActiveRoute, 2, 0) &&
             status == kMarioRolloutStatus &&
             mario->mTranslation.y >= 3200.0f)
             publishEvent(sActiveRoute, 0);
@@ -708,7 +716,7 @@ void notePetey(u32 nerveBefore, s32 nerveTimerBefore, u32 nerveAfter) {
                                         nerveAfter,
                                         kPeteyBreakSleepVtable)) {
         sPeteyWakeSeen = true;
-        if (sActiveRoute == SplitStats::ROUTE_BIANCO_5)
+        if (routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4))
             publishEvent(sActiveRoute, 0);
     }
 }
@@ -964,19 +972,6 @@ void noteTalk(TBaseNPC *npc) {
     }
 }
 
-bool captureDemoEvent(TMarDirector *director, u16 *route, u8 *event, s32 *qf) {
-    if (!route || !event || !qf || director != gpMarDirector ||
-        !SplitStats::routeActive(SplitStats::ROUTE_BIANCO_2) ||
-        Ghost::observerStatsSuppressed())
-        return false;
-    if (director->mAreaID != 2 || director->mEpisodeID != 0 ||
-        !gQFTTimer.currentQf(qf))
-        return false;
-    *route = SplitStats::ROUTE_BIANCO_2;
-    *event = 1;
-    return true;
-}
-
 void updateTransitions() {
     armCarryTransition();
     switch (sActiveRoute) {
@@ -987,6 +982,10 @@ void updateTransitions() {
     case SplitStats::ROUTE_RICCO_4:
         if (routeScene(sActiveRoute, 3, 3))
             publishTransition(sActiveRoute, 1, 0x30);
+        break;
+    case SplitStats::ROUTE_BIANCO_2:
+        if (routeScene(sActiveRoute, 2, 0))
+            publishTransition(sActiveRoute, 1, 0x37);
         break;
     case SplitStats::ROUTE_BIANCO_3_FULL:
         if (routeScene(sActiveRoute, 2, 2))
@@ -1131,6 +1130,23 @@ void updateBossGesso() {
     }
     noteBossGesso(sBossGessoHealth, health);
     sBossGessoHealth = health;
+}
+
+void updatePetey() {
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0);
+    const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
+    if (!b2 && !b5) return;
+    if (!sPetey) {
+        sPetey = reinterpret_cast<TSpineEnemy *>(
+            findManagedActor(kPeteyManagerVtable, kPeteyVtable));
+    }
+    if (!sPetey) return;
+
+    const u8 health = sPetey->mHealth;
+    if (sPeteyHealthValid)
+        notePeteyDamage(sPeteyHealth, health);
+    sPeteyHealth = health;
+    sPeteyHealthValid = true;
 }
 
 void updateManta() {
@@ -1303,6 +1319,12 @@ void beforeStageSetup() {
         sceneMatches(current, 0x3B, 0)) {
         sCarryAttempt = true;
     }
+    if (sameAttempt && sActiveRoute == SplitStats::ROUTE_BIANCO_2 &&
+        sArmedCarryRoute == SplitStats::ROUTE_BIANCO_2 &&
+        sceneMatches(current, 0x37, 0)) {
+        // The movie director overwrites mPrevScene before the boss setup.
+        sCarryAttempt = true;
+    }
 
     for (u32 i = 0; i < sizeof(kCarryRoutes) / sizeof(kCarryRoutes[0]); ++i) {
         const CarryDesc &desc = kCarryRoutes[i];
@@ -1353,6 +1375,7 @@ void update() {
     updateTransitions();
     updateHeldObject();
     updatePositionAndDamage();
+    updatePetey();
     updateBossGesso();
     updateTinKoopa();
     updateManta();
@@ -1459,11 +1482,6 @@ extern "C" void susamuneSplitStartDemo(
     u32 callbackArg, JDrama::TActor *actor,
     const JDrama::TFlagT<u16> *demoFlag) {
     // This accepted queue edge is the single owner of demo-event freezes.
-    u16 candidateRoute = SplitStats::ROUTE_INVALID;
-    u8 candidateEvent = 0;
-    s32 candidateQf = 0;
-    const bool hasCandidate = captureDemoEvent(
-        director, &candidateRoute, &candidateEvent, &candidateQf);
     const u8 before = *(reinterpret_cast<const u8 *>(director) + 0x24C);
     // Retail passes the non-trivial by-value flag through an indirect pointer.
     reinterpret_cast<StartDemoFn>(sStartDemoTrampoline)(
@@ -1473,8 +1491,6 @@ extern "C" void susamuneSplitStartDemo(
     if (after == before) return;
     if (gSettings.getBool(SETTING_TIMER_FREEZE_DEMO))
         gQFTTimer.freezeEvent();
-    if (hasCandidate)
-        SplitStats::onRouteEvent(candidateRoute, candidateEvent, candidateQf);
 }
 
 extern "C" void susamuneSplitOpenTalk(void *talk, TBaseNPC *npc) {
@@ -1527,9 +1543,16 @@ extern "C" void susamuneSplitPeteyHipDrop(void *petey) {
     const u8 before = enemy->mHealth;
     reinterpret_cast<PeteyHipDropFn>(sPeteyHipDropTrampoline)(petey);
     if (!sRetailDirectOpen || !stageIdentityValid()) return;
-    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 2, 0);
+    const bool b2 = routeScene(SplitStats::ROUTE_BIANCO_2, 0x37, 0);
     const bool b5 = routeScene(SplitStats::ROUTE_BIANCO_5, 2, 4);
-    if (b2 || b5) notePeteyDamage(before, enemy->mHealth);
+    if (b2 || b5) {
+        const u8 after = enemy->mHealth;
+        notePeteyDamage(before, after);
+        // Keep the per-frame fallback from counting this hit again.
+        sPetey = enemy;
+        sPeteyHealth = after;
+        sPeteyHealthValid = true;
+    }
 }
 
 extern "C" void susamuneSplitGessoTentacleDamage(void *gesso) {

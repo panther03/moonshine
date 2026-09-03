@@ -31,14 +31,40 @@ previous boot would otherwise be injected into an unrelated game.
 
 extern char launch_dir[MAXPATHLEN];
 
+static bool ValidModFile(const struct SusamuneModHeader *header, u32 gameID,
+	u32 fileSize)
+{
+	u32 payloadSize;
+
+	if (fileSize < SUSAMUNE_MOD_HEADER_SIZE ||
+		header->magic != SUSAMUNE_MOD_MAGIC ||
+		header->version != SUSAMUNE_MOD_VERSION ||
+		header->gameId != gameID ||
+		header->baseAddr != SUSAMUNE_MOD_BASE_FOR_GAME_ID(gameID) ||
+		header->arenaReserve != SUSAMUNE_ARENA_RESERVE_SIZE ||
+		header->codeSize > header->memSize ||
+		header->memSize > SUSAMUNE_MOD_BLOB_MAX_SIZE ||
+		(header->codeSize & 3) || (header->memSize & 3))
+		return false;
+
+	payloadSize = fileSize - SUSAMUNE_MOD_HEADER_SIZE;
+	if (header->codeSize > payloadSize)
+		return false;
+	payloadSize -= header->codeSize;
+	if (header->writeCount > payloadSize / 8)
+		return false;
+	return payloadSize == header->writeCount * 8;
+}
+
 void SusamuneLoadMod(u32 gameID)
 {
 	struct SusamuneModHeader *dst = SUSAMUNE_MOD_PPC_PTR;
 	const char *region = SUSAMUNE_MOD_REGION_TAG(gameID);
 	char path[MAXPATHLEN];
-	char name[32];
 	FIL fd;
 	UINT read = 0;
+	FSIZE_t sizeOnDisk;
+	int written;
 	u32 size;
 
 	/* Invalidate any blob left in MEM2 by a previous launch first, so every
@@ -49,11 +75,12 @@ void SusamuneLoadMod(u32 gameID)
 	if (region == NULL)
 		return;  /* not one of ours */
 
-	snprintf(name, sizeof(name), SUSAMUNE_MOD_FILE_FMT, region);
 	/* launch_dir is empty when loaded over the network; fall back to the
 	 * conventional install path, same as titles.txt / meta.xml do. */
-	snprintf(path, sizeof(path), "%s%s",
-		 launch_dir[0] != 0 ? launch_dir : "/apps/moonshine_launcher/", name);
+	written = snprintf(path, sizeof(path), "%s" SUSAMUNE_MOD_FILE_FMT,
+		launch_dir[0] != 0 ? launch_dir : "/apps/moonshine_launcher/", region);
+	if ((unsigned int)written >= sizeof(path))
+		return;
 
 	if (f_open_char(&fd, path, FA_READ | FA_OPEN_EXISTING) != FR_OK)
 	{
@@ -61,14 +88,16 @@ void SusamuneLoadMod(u32 gameID)
 		return;
 	}
 
-	size = fd.obj.objsize;
-	if (size < SUSAMUNE_MOD_HEADER_SIZE ||
-		size > SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE)
+	sizeOnDisk = fd.obj.objsize;
+	if (sizeOnDisk < SUSAMUNE_MOD_HEADER_SIZE ||
+		sizeOnDisk > SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE)
 	{
-		gprintf("Susamune: %s has a bad size (%u)\r\n", path, size);
+		gprintf("Susamune: %s has a bad size (%llu)\r\n", path,
+			(unsigned long long)sizeOnDisk);
 		f_close(&fd);
 		return;
 	}
+	size = (u32)sizeOnDisk;
 
 	if (f_read(&fd, dst, size, &read) != FR_OK || read != size)
 	{
@@ -76,14 +105,15 @@ void SusamuneLoadMod(u32 gameID)
 		memset(dst, 0, sizeof(*dst));
 		read = sizeof(*dst);
 	}
-	else if (dst->fileSize != size)
+	else if (!ValidModFile(dst, gameID, size))
 	{
-		gprintf("Susamune: %s manifest size does not match the file\r\n", path);
+		gprintf("Susamune: %s has an invalid manifest\r\n", path);
 		memset(dst, 0, sizeof(*dst));
 		read = sizeof(*dst);
 	}
 	f_close(&fd);
 
 	DCFlushRange(dst, read);
-	gprintf("Susamune: staged %s (%u bytes)\r\n", name, read);
+	gprintf("Susamune: staged " SUSAMUNE_MOD_FILE_FMT " (%u bytes)\r\n",
+		region, read);
 }

@@ -45,8 +45,49 @@ const ChompletPath kChompletPaths[] = {
 
 const u8 kBossPaths[3] = { 0x1e, 0x6e, 0x20 };  // left, up, right
 
+const u32 kAnimalBirdType = 0x00800001u;
+const u32 kBlueCoinType = 0x20000010u;
+
+// One authored outgoing edge for every Bianco Petey graph node. The stop
+// sequence is 3 (N1) -> 10 (S1) -> 8 (S2) -> 12 (S3); 16 and 9 are the
+// retail non-stop transit back to S1.
+const u8 kPeteyPath[] = {
+    1, 2, 3, 10, 3, 4, 7, 8, 12, 10, 8, 4, 16, 3, 11, 12, 9, 3,
+};
+
 bool inPlayableStage() {
     return gpMarDirector && gpMarDirector->mCurState == TMarDirector::STATE_NORMAL;
+}
+
+u8 blueBirdSlot(const char *name) {
+    if (!name) return 0;
+    u8 hash = 0;
+    int digit = -1;
+    for (const u8 *p = reinterpret_cast<const u8 *>(name); *p; p++) {
+        hash = (u8)(hash * 33u + *p);
+        if (*p >= '0' && *p <= '9') digit = *p - '0';
+    }
+    return digit >= 0 ? digit != 0 : hash & 1;
+}
+
+int selectedBlueCoinBirdNode(TSpineEnemy *enemy, TGraphWeb *graph,
+                             int current, int previous) {
+    const u8 pattern = gSettings.get(SETTING_GELATO_BLUE_BIRD_PATTERN);
+    if (pattern < 1 || pattern > 4 || previous != -1 || !enemy || !graph ||
+        enemy->mObjectID != kAnimalBirdType || current < 0 ||
+        current >= graph->mNodeCount)
+        return -1;
+
+    const u8 *actor = reinterpret_cast<const u8 *>(enemy);
+    const THitActor *coin =
+        *reinterpret_cast<THitActor *const *>(actor + 0x150);
+    if (!coin || coin->mObjectID != kBlueCoinType) return -1;
+
+    const TRailNode *node = graph->mNodes[current].mRailNode;
+    if (!node || node->mNeighborCount != 2) return -1;
+    const u8 actorIndex = blueBirdSlot(enemy->mKeyName);
+    const u8 slot = (u8)(((pattern - 1) >> (1 - actorIndex)) & 1);
+    return node->mNeighborIDs[slot];
 }
 
 int selectedNode(TSpineEnemy *enemy, int current, int previous) {
@@ -93,6 +134,12 @@ int selectedNode(TSpineEnemy *enemy, int current, int previous) {
         }
     }
     return -1;
+}
+
+bool forcesPeteyRoute(TSpineEnemy *enemy) {
+    return gSettings.getBool(SETTING_PETEY_ROUTE) && gpMarDirector &&
+           gpMarDirector->mAreaID == 2 && gpMarDirector->mEpisodeID == 4 &&
+           *(const u32 *)enemy == SUSAMUNE_VT_BOSS_PAKKUN;
 }
 
 }  // namespace
@@ -161,9 +208,27 @@ extern "C" void susamuneGoToRandomNextGraphNode(TSpineEnemy *enemy) {
         tracer->setTo(findNearest(graph, enemy->mTranslation, (u32)-1));
     } else {
         const int current = tracer->getCurGraphIndex();
-        int next = selectedNode(enemy, current, tracer->mPreviousNode);
-        if (next < 0) {
+        int next;
+        if (forcesPeteyRoute(enemy)) {
+            // Preserve the conditional retail RNG advance even though its edge
+            // choice is replaced. The graph node itself is the route phase.
             next = graph->getRandomNextIndex(current, tracer->mPreviousNode, (u32)-1);
+            if ((u32)current < sizeof(kPeteyPath)) next = kPeteyPath[current];
+        } else {
+            const int blueBird = selectedBlueCoinBirdNode(
+                enemy, graph, current, tracer->mPreviousNode);
+            if (blueBird >= 0) {
+                // Keep the shared libc stream aligned with an unassisted run.
+                graph->getRandomNextIndex(current, tracer->mPreviousNode,
+                                          (u32)-1);
+                next = blueBird;
+            } else {
+                next = selectedNode(enemy, current, tracer->mPreviousNode);
+            }
+            if (next < 0) {
+                next = graph->getRandomNextIndex(current, tracer->mPreviousNode,
+                                                 (u32)-1);
+            }
         }
         tracer->moveTo(next);
     }
