@@ -20,6 +20,8 @@ FIXTURE = r'''
 #include "susamune/state_codec.hxx"
 #include "susamune/state_crc.hxx"
 #include "susamune/state_live_video.hxx"
+#include "susamune/state_restore_bindings.hxx"
+static StateRestoreBindings::Words sRestoreBindings = {};
 typedef unsigned int u32;typedef unsigned char u8;typedef long long OSTime;
 extern "C" void *memcpy(void*d,const void*s,__SIZE_TYPE__ n){u8*a=(u8*)d;const u8*b=(const u8*)s;while(n--)*a++=*b++;return d;}
 extern "C" void *memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++=(u8)c;return d;}
@@ -179,7 +181,7 @@ class SavestateArchiveTests(unittest.TestCase):
         source=FIXTURE+'\nnamespace PracticeSession {\n'+function_source(ROOT/'src/practice_session.cpp','bool projectSavestateMatches(')+'\n}\n'
         for name in ('void poolWriteSpans(', 'void poolReadSpans(', 'u32 packedChecksum(',
                      'bool archiveStageReady()', 'bool admitArchiveStage()',
-                     'void copyOwnedStateBytes(', 'void copyStateBytes(',
+                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
                      'bool SavestateManager::diskBusy()', 'void SavestateManager::updateDisk()',
                      'bool SavestateManager::takeTransferResult('):
             source+=function_source(SOURCE,name)
@@ -463,7 +465,8 @@ extern "C" __declspec(dllexport) u32 restorePayload(u32 slot,u32 direct,void*out
 
     def test_game_manifest_and_live_profile_checks_precede_decode_and_commit(self):
         check=function_source(SOURCE,'bool archiveCandidateMatches(')
-        for condition in ('file.buildCrc != archiveBuildId()', 'file.gameId != archiveGameId()',
+        for condition in ('!archiveBuildCompatible(file.buildCrc)', 'file.gameId != archiveGameId()',
+                'sCandidate.archiveProfile.build != file.buildCrc', 'sCandidate.archiveProfile.config != file.configId',
                 'file.snapshotVersion != kSnapshotVersion', 'file.sceneKey != archiveSceneKey()',
                 'sCandidate.metadataTag != metadataTag(sCandidate)', '!validSnapshotRegions(&h, begin, end)',
                 '!Ghost::savestateRestoreSpans(sCandidate.ghost, ghost)',

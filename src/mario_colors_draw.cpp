@@ -49,7 +49,7 @@ static_assert(__builtin_offsetof(TMarioCap, mCap1) == 0x10 &&
 static_assert(__builtin_offsetof(J3DModel, mShapePackets) == 0x84,
               "retail shape packet array moved");
 
-bool mem1(const void *pointer, u32 size) {
+__attribute__((noinline)) bool mem1(const void *pointer, u32 size) {
     const u32 address = reinterpret_cast<u32>(pointer);
     return address >= 0x80000000u && address < 0x81800000u &&
            size <= 0x81800000u - address;
@@ -167,6 +167,16 @@ void onStageSetup() {
     memset(&sDraw, 0, sizeof(sDraw));
     sDraw.director = gpMarDirector;
     sDraw.mario = gpMarioAddress;
+}
+
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    if (!keep || !live() || !sDraw.packetCount || sDraw.packetCount > 16) return false;
+    for (u32 i = 0; i < sDraw.packetCount; ++i) {
+        J3DShapePacket *packet = sDraw.packets[i].packet;
+        if (!mem1(packet, 0x34) || callback(packet) != drawPacket ||
+            !keep(&callback(packet))) return false;
+    }
+    return true;
 }
 
 void update() {

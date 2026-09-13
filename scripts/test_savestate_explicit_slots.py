@@ -21,8 +21,9 @@ extern "C" void *memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++
 extern "C" char *strncpy(char*d,const char*s,__SIZE_TYPE__ n){char*r=d;while(n--)*d++=*s?*s++:0;return r;}
 static int snprintf(char*d,__SIZE_TYPE__ n,const char*,...){if(n)*d=0;return 0;}
 struct Header {u32 magic;u8 area_id,episode_id;};
-struct StoredState {Header header;u32 archiveProfile,generation,rawSize,packedSize,parentEpisode;};
-static StoredState sSlots[3];static StateSlotPool sPool;
+struct StoredState {Header header;u32 archiveProfile,generation,rawSize,packedSize,parentEpisode,metadataTag;};
+static StoredState sSlots[3],sCandidate;static StateSlotPool sPool;
+static u32 metadataTag(const StoredState &s){return s.generation^s.archiveProfile;}
 static u32 sActiveSlot,sLoadSlot,sDiskSlot,sDiskGeneration,sDiskPoolUsed,sDiskScene,sStreamId;
 static bool sBusy,sAwaitingLoadApproval,sDiskActive,sDiskRestore,sDiskStream,sDiskRecovered;
 static bool sExplicitTransfer,sTransferReady;
@@ -33,10 +34,11 @@ static OSTime sDiskStarted;static const char*sDiskStatus;
 static const u32 kSnapshotMagic=0x53544154,kSnapshotVersion=16;
 static bool valid,admitted,transportAccept;static u32 calls,notices;
 static u32 archiveGameId(){return 0x474D5345;}static u32 archiveBuildId(){return 12;}static u32 archiveSceneKey(){return 13;}
+static bool archiveBuildCompatible(u32 build){return build==12;}
 static u32 poolCapacity(){return 250000;}static bool validStore(){return valid;}
 static bool admitArchiveStage(){return admitted;}static OSTime OSGetTime(){return 101;}
 struct Menu{void toast(const char*){++notices;}}menu;static Menu*gMenu=&menu;
-namespace StateArchiveProfile{static bool valid(u32 p){return p==19;}}
+namespace StateArchiveProfile{static bool valid(u32 p){return p==19;}static bool reidentify(u32&p,u32 b){return valid(p)&&b==12;}}
 namespace StateStorage{
 static u32 command,poolOffset,id,crc,size;static bool occupied;
 static SusamuneTasRequest context;static bool hasContext;
@@ -98,7 +100,8 @@ __declspec(dllexport) u32 get(u32 n){switch(n){case 0:return sActiveSlot;case 1:
  case 2:return sSelectedSD.id;case 3:return calls;case 4:return sDiskSlot;case 5:return sDiskGeneration;
  case 6:return sExplicitTransfer;case 7:return StateStorage::poolOffset;case 8:return sDiskActive;
  case 9:return StateStorage::hasContext;case 10:return StateStorage::context.componentId;
- case 11:return StateStorage::header.sceneKey;case 12:return StateStorage::metadata==&sSlots[0];
+ case 11:return StateStorage::header.sceneKey;case 12:return StateStorage::metadata==&sCandidate &&
+ sCandidate.generation==sSlots[0].generation && sCandidate.metadataTag==metadataTag(sCandidate) && !sSlots[0].metadataTag;
  case 13:return sDiskPoolUsed;case 14:return sDiskScene;case 15:return StateStorage::command;case 16:return sProjectStartKey[0];
  case 17:return sProjectStartKey[1];case 18:return sProjectRole;case 19:return sProjectFrames;}
  return 0;}

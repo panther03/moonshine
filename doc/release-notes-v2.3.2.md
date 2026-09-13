@@ -23,6 +23,6 @@
 ## Memory and compatibility
 
 - Moved about 14 KB of live split statistics from MEM1 into unused space in an existing allocation. The game's memory reservation, savestate pool and ghost capacity are unchanged.
-- Use the launcher and mod files from this build together. Settings, records and ghosts remain usable. Savestates and TAS projects require their matching build; keep old files with the old release and make fresh ones here.
+- Use the launcher and mod files from this build together. Settings, records and ghosts remain usable. This compatibility update also accepts SD states and TAS projects from the public V2.3.1 and V2.3.2 releases, in their original game region and episode. Saving an older TAS creates an updated copy and keeps the original. Older development builds still require their matching release.
 - The English-menu launcher supports US, PAL and JP. The Japanese-menu download remains separate; it translates the launcher and JP mod menus without changing Sunshine's own language.
 - The Japanese download uses the runner-supplied translations for 52 achievement names. Achievement requirements are unchanged.

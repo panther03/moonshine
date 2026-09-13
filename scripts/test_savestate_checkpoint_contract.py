@@ -18,6 +18,8 @@ FIXTURE = r'''
 #include "susamune/state_archive_profile.hxx"
 #include "susamune/state_pool_memory.h"
 #include "susamune/state_live_video.hxx"
+#include "susamune/state_restore_bindings.hxx"
+static StateRestoreBindings::Words sRestoreBindings = {};
 #define private public
 #include "susamune/savestate.hxx"
 #undef private
@@ -91,7 +93,7 @@ class SavestateCheckpointContractTests(unittest.TestCase):
         production = SOURCE.read_text()
         stored = production[production.index('const u32 kSnapshotMagic'):production.index('StateSlotPool sPool;')]
         methods = ''.join(function_source(SOURCE, method) for method in (
-            'u32 metadataTag(', 'bool validStore()', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
+            'u32 metadataTag(', 'bool validStore()', 'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
             'SavestateManager::SlotInfo SavestateManager::slotInfo(',
             'bool SavestateManager::practiceData(', 'void SavestateManager::feedback('))
         cls.libs = {}

@@ -21,6 +21,8 @@ FIXTURE = r'''
 #include "susamune/state_codec.hxx"
 #include "susamune/state_crc.hxx"
 #include "susamune/state_live_video.hxx"
+#include "susamune/state_restore_bindings.hxx"
+static StateRestoreBindings::Words sRestoreBindings = {};
 typedef unsigned int u32;typedef unsigned char u8;typedef long long OSTime;
 extern "C" void *memcpy(void*d,const void*s,__SIZE_TYPE__ n){u8*a=(u8*)d;const u8*b=(const u8*)s;while(n--)*a++=*b++;return d;}
 extern "C" void *memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++=(u8)c;return d;}
@@ -148,7 +150,7 @@ class SavestateStreamingTests(unittest.TestCase):
         text = FIXTURE
         for name in ('void poolWriteSpans(', 'void poolReadSpans(', 'u32 packedChecksum(',
                      'bool waitStateWindow(', 'bool readStateWindow(',
-                     'void copyOwnedStateBytes(', 'void copyStateBytes('):
+                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes('):
             text += function_source(SOURCE, name)
         production = SOURCE.read_text()
         text += production[production.index('struct SDRecovery {'):production.index('bool prepareSDRecovery(')]

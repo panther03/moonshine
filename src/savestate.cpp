@@ -66,6 +66,9 @@
 #include "susamune/features.hxx"
 #include "susamune/ghost.hxx"
 #include "susamune/ghost_storage.hxx"
+#include "susamune/ghost_model.hxx"
+#include "susamune/mario_colors.hxx"
+#include "susamune/fludd_colors.hxx"
 #include "susamune/mem2_map.h"
 #include "susamune/qft_timer.hxx"
 #include "susamune/split_events.hxx"
@@ -83,6 +86,8 @@
 #include "susamune/state_storage.hxx"
 #include "susamune/state_archive_profile.hxx"
 #include "susamune/state_live_video.hxx"
+#include "susamune/state_restore_bindings.hxx"
+#include "susamune/state_compatibility.h"
 #include "Dolphin/CARD.h"
 #include "Dolphin/GX.h"
 #include "Dolphin/mem.h"
@@ -140,6 +145,15 @@ extern "C" unsigned char ActivePlayer[];
 extern "C" unsigned int THPPlayerCalcNeedMemory();
 StateLiveVideo::Range sLiveVideo = {};
 StateLiveVideo::Range sVideoReadRing = {};
+StateRestoreBindings::Words sRestoreBindings = {};
+
+bool preserveRestoreWord(const void *field) { return sRestoreBindings.add(field); }
+bool captureRestoreBindings(u32 first, u32 last, bool durable) {
+    sRestoreBindings.reset(first, last);
+    return !durable || (MarioColors::preserveSavestateBindings(preserveRestoreWord) &&
+        FluddColors::preserveSavestateBindings(preserveRestoreWord) &&
+        GhostModel::preserveSavestateBindings(preserveRestoreWord));
+}
 
 bool captureLiveVideo() {
     // THPPlayer's threads and queues stay live; its heap buffer must stay with them.
@@ -570,11 +584,14 @@ u32 parentEpisode() {
         ? TFlagManager::smInstance->getFlag(0x40003) : 0;
 }
 
+#pragma clang section text=".foxtrot.text"
 u32 archiveBuildId() {
-    const SusamuneCrashReport *report = SUSAMUNE_CRASH_PPC_PTR;
-    return report->magic == SUSAMUNE_CRASH_MAGIC && report->version == SUSAMUNE_CRASH_VERSION
-        ? report->modFileCrc32 : 0;
+    return SUSAMUNE_STATE_COMPATIBILITY_ID;
 }
+__attribute__((noinline)) bool archiveBuildCompatible(u32 build) {
+    return SusamuneStateBuildCompatible(SUSAMUNE_GAME_VERSION, build);
+}
+#pragma clang section text=""
 
 u32 archiveGameId() {
     return SUSAMUNE_GAME_VERSION == 1 ? 0x474D534Au :
@@ -755,7 +772,8 @@ bool admitArchiveStage() {
 
 bool archiveCandidateMatches(const SusamuneStateArchiveHeader &file) {
     const SavestateHeader &h = sCandidate.header;
-    if (file.metadataSize != sizeof(sCandidate) || file.buildCrc != archiveBuildId() ||
+    if (file.metadataSize != sizeof(sCandidate) || !archiveBuildCompatible(file.buildCrc) ||
+        sCandidate.archiveProfile.build != file.buildCrc || sCandidate.archiveProfile.config != file.configId ||
         file.gameId != archiveGameId() || file.snapshotVersion != kSnapshotVersion ||
         file.sceneKey != archiveSceneKey() || file.packedSize != sCandidate.packedSize ||
         file.rawSize != sCandidate.rawSize || h.magic != kSnapshotMagic ||
@@ -784,7 +802,7 @@ bool archiveCandidateMatches(const SusamuneStateArchiveHeader &file) {
 
 bool archiveProjectCandidateMatches(const SusamuneStateArchiveHeader &file) {
     const SavestateHeader &h = sCandidate.header;
-    if (file.metadataSize != sizeof(sCandidate) || file.buildCrc != archiveBuildId() ||
+    if (file.metadataSize != sizeof(sCandidate) || !archiveBuildCompatible(file.buildCrc) ||
         file.gameId != archiveGameId() || file.snapshotVersion != kSnapshotVersion ||
         file.sceneKey != sProjectScene || file.packedSize != sCandidate.packedSize ||
         file.rawSize != sCandidate.rawSize || h.magic != kSnapshotMagic ||
@@ -810,9 +828,13 @@ bool archiveProjectCandidateMatches(const SusamuneStateArchiveHeader &file) {
 }
 
 #pragma clang section text=".foxtrot.text"
-void copyOwnedStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
+void copyBaseStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
     if (profile) StateArchiveProfile::copyGameBytes(profile, destination, source, size);
     else memcpy(destination, source, size);
+}
+
+void copyOwnedStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
+    StateRestoreBindings::copyExcept(sRestoreBindings, profile, destination, source, size, copyBaseStateBytes);
 }
 
 void copyStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
@@ -1070,7 +1092,7 @@ const char *SavestateManager::sdStatus() const {
 }
 
 bool SavestateManager::projectCompatible(const SusamuneTasManifest &project) const {
-    return project.gameId == archiveGameId() && project.buildCrc == archiveBuildId() &&
+    return project.gameId == archiveGameId() && archiveBuildCompatible(project.buildCrc) &&
         project.configId == StateStorage::configId();
 }
 u32 SavestateManager::slotSceneKey(u32 slot) const {
@@ -1098,6 +1120,7 @@ bool SavestateManager::exportSlotExplicit(u32 slot, u32 expectedGeneration,
     return beginSDExport(slot, expectedGeneration, nullptr, project);
 }
 
+#pragma clang section text=".foxtrot.text"
 bool SavestateManager::beginSDExport(u32 slot, u32 expectedGeneration, const char *name,
                                      const SusamuneTasRequest *project) {
     if (slot >= kSlotCount || sBusy || diskBusy() || mLoadPending || sAwaitingLoadApproval || !validStore()) return false;
@@ -1121,7 +1144,11 @@ bool SavestateManager::beginSDExport(u32 slot, u32 expectedGeneration, const cha
     if (name) strncpy(h.name, name, sizeof(h.name) - 1);
     else snprintf(h.name, sizeof(h.name), "State %lu - area %u episode %u", slot + 1,
                   saved.header.area_id, saved.header.episode_id);
-    if (!StateStorage::startExport(h, &saved, sPool.slots[slot].offset, project)) return false;
+    // Export a compatible header without changing the retained state or its file.
+    sCandidate = saved;
+    if (!StateArchiveProfile::reidentify(sCandidate.archiveProfile, archiveBuildId())) return false;
+    sCandidate.metadataTag = metadataTag(sCandidate);
+    if (!StateStorage::startExport(h, &sCandidate, sPool.slots[slot].offset, project)) return false;
     sDiskSlot = slot;
     sDiskGeneration = expectedGeneration;
     sExplicitTransfer = project != nullptr;
@@ -1130,6 +1157,7 @@ bool SavestateManager::beginSDExport(u32 slot, u32 expectedGeneration, const cha
     sDiskStatus = "Saving state to SD...";
     return true;
 }
+#pragma clang section text=""
 
 bool SavestateManager::loadFromSD(u32 id, u32 crc, u32 packed) {
     return beginSDLoad(id, crc, packed, false);
@@ -1729,6 +1757,13 @@ bool SavestateManager::loadSlot(u32 slot, u32 expectedGeneration) {
             return false;
         }
     }
+    if (!captureRestoreBindings(heapStart, heapEnd, durable)) {
+        unmuteAudioDma(dma);
+        OSRestoreInterrupts(ints);
+        sBusy = false;
+        feedback("E:models", "Wait for models to finish loading");
+        return false;
+    }
     StateCodec::ReadSpan compressed[3] = {};
     if (fromSD && !sDiskStream) {
         const u32 first = saved.packedSize < SUSAMUNE_STATE_STAGING_SIZE ?
@@ -1807,6 +1842,7 @@ bool SavestateManager::loadSlot(u32 slot, u32 expectedGeneration) {
         feedback("E:badsnap", "State is damaged - save again");
         return false;
     }
+    GhostModel::onSavestateLoaded();
     for (u32 i = 0; i < h->region_count; i++) {
         const RegionEntry &r = h->regions[i];
         // Decompression has placed the restored bytes in D-cache, so the

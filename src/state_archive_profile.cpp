@@ -1,4 +1,5 @@
 #include "susamune/state_archive_profile.hxx"
+#include "susamune/state_compatibility.h"
 
 #pragma clang section text=".foxtrot.text" rodata=".foxtrot.rodata" data=".foxtrot.data" bss=".foxtrot.bss"
 #include "Dolphin/mem.h"
@@ -258,7 +259,21 @@ bool valid(const Data &data) {
     return true;
 }
 bool matches(const Data &saved, const Data &live) {
-    return valid(saved) && valid(live) && memcmp(&saved, &live, sizeof(saved)) == 0;
+    return valid(saved) && valid(live) && saved.game == live.game &&
+        SusamuneStateBuildCompatible(saved.game, saved.build) &&
+        SusamuneStateBuildCompatible(live.game, live.build) &&
+        memcmp(&saved, &live, __builtin_offsetof(Data, build)) == 0 &&
+        memcmp(&saved.config, &live.config,
+               __builtin_offsetof(Data, checksum) - __builtin_offsetof(Data, config)) == 0 &&
+        memcmp(saved.anchors, live.anchors,
+               sizeof(Data) - __builtin_offsetof(Data, anchors)) == 0;
+}
+bool reidentify(Data &data, unsigned int build) {
+    if (!valid(data) || !SusamuneStateBuildCompatible(data.game, data.build) ||
+        !SusamuneStateBuildCompatible(data.game, build)) return false;
+    data.build = build;
+    data.checksum = checksum(data);
+    return true;
 }
 unsigned int failureAddress() { return sFailure; }
 

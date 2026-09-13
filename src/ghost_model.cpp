@@ -619,7 +619,7 @@ void restoreHeap(JKRHeap *heap) {
     else JKRHeap::sCurrentHeap = nullptr;
 }
 
-void clearLiveModel(ModelSlot &slot) {
+__attribute__((noinline)) void clearLiveModel(ModelSlot &slot) {
     slot.data = nullptr;
     slot.model = nullptr;
     slot.mtxCalc = nullptr;
@@ -924,6 +924,7 @@ public:
 
 alignas(32) u8 sViewStorage[sizeof(GhostView)];
 GhostView *sView;
+void **sViewWord;
 
 bool registerView(TMarDirector *director) {
     static const char kPlayerGroup[] =
@@ -935,14 +936,21 @@ bool registerView(TMarDirector *director) {
         reinterpret_cast<JDrama::TViewObjPtrListT<JDrama::TViewObj> *>(ref);
     for (JGadget::TList_pointer_void::iterator it = group->mViewObjList.begin();
          it != group->mViewObjList.end(); ++it) {
-        if (*it == sView) return true;
+        if (*it == sView) {
+            sViewWord = &*it;
+            return true;
+        }
     }
     JKRHeap *nodeHeap = JKRHeap::sCurrentHeap;
     if (!nodeHeap || nodeHeap->getFreeSize() < kRegistrationMinFree)
         return false;
     const u32 oldSize = group->mViewObjList.size();
     group->mViewObjList.push_back(sView);
-    return group->mViewObjList.size() == oldSize + 1;
+    if (group->mViewObjList.size() != oldSize + 1) return false;
+    auto last = group->mViewObjList.end();
+    --last;
+    sViewWord = &*last;
+    return true;
 }
 
 bool retirePlayerDrawBuffers() {
@@ -1013,6 +1021,7 @@ void init() {
     sQuiescedGeneration = 0;
     sLoadedGeneration = 0;
     sView = new (sViewStorage) GhostView();
+    sViewWord = nullptr;
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     sSlots[APPEARANCE_SHADOW].heap = JKRExpHeap::create(
         reinterpret_cast<void *>(SUSAMUNE_GHOST_MODEL_HEAP_PPC_BASE),
@@ -1054,5 +1063,24 @@ bool available() {
 bool submitted(bool secondary) {
     return sSubmitted[secondary ? 1 : 0];
 }
+
+#pragma clang section text=".foxtrot.text"
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    const u32 address = reinterpret_cast<u32>(sViewWord);
+    if (!keep || !sRegistered || !gpMarDirector ||
+        sPendingDirector != gpMarDirector || !gpMarDirector->_260 ||
+        sLoadedGeneration != sPendingGeneration || !sView ||
+        (address & 3u) || address < 0x80000000u || address > 0x817ffffcu ||
+        *sViewWord != sView) return false;
+    return keep(sViewWord);
+}
+
+void onSavestateLoaded() {
+    retirePlayerDrawBuffers();
+    sSubmitted[0] = sSubmitted[1] = false;
+    sPrepared[0] = sPrepared[1] = false;
+    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+}
+#pragma clang section text=""
 
 }  // namespace GhostModel

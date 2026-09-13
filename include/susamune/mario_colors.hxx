@@ -27,6 +27,7 @@ void updateEditor(TMarioGamePad *pad);
 void drawEditor(Menu *menu);
 void onStageSetup();
 void update();
+bool preserveSavestateBindings(bool (*keep)(const void *word));
 
 } // namespace MarioColors
 

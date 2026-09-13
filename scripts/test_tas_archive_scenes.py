@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src/savestate.cpp'
 FIXTURE = r'''
 #include "susamune/state_storage.h"
+static bool archiveBuildCompatible(unsigned int build){return build==123;}
 typedef unsigned int u32;
 enum {SUSAMUNE_GAME_VERSION=1,kSnapshotVersion=17,kSnapshotMagic=0x53555341};
 struct Region {u32 buf_offset;};

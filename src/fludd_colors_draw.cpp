@@ -40,7 +40,7 @@ static_assert(__builtin_offsetof(TMario, mFludd) == 0x3E4 &&
               __builtin_offsetof(MActor, mModel) == 4,
               "retail FLUDD model owners moved");
 
-bool mem1(const void *p, u32 size) {
+__attribute__((noinline)) bool mem1(const void *p, u32 size) {
     const u32 address = reinterpret_cast<u32>(p);
     return address >= 0x80000000u && address < 0x81800000u &&
            size <= 0x81800000u - address;
@@ -136,6 +136,15 @@ void onStageSetup() {
     memset(&sDraw, 0, sizeof(sDraw));
     sDraw.director = gpMarDirector;
     sDraw.mario = gpMarioAddress;
+}
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    if (!keep || !live() || !sDraw.count || sDraw.count > 12) return false;
+    for (u32 i = 0; i < sDraw.count; ++i) {
+        J3DShapePacket *packet = sDraw.packets[i].packet;
+        if (!mem1(packet, 0x34) || callback(packet) != drawPacket ||
+            !keep(&callback(packet))) return false;
+    }
+    return true;
 }
 void update() {
     if (!live()) return;

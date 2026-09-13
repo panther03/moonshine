@@ -52,7 +52,7 @@ bool overlaps(const void *a, unsigned int as, const void *b, unsigned int bs) {
     return ap < bp + bs && bp < ap + as;
 }
 
-Status checkSource(void *workspace, unsigned int workspaceBytes,
+__attribute__((noinline)) Status checkSource(void *workspace, unsigned int workspaceBytes,
                    const ReadSpan *source, unsigned int count,
                    unsigned int *total) {
     *total = 0;
@@ -106,7 +106,7 @@ struct PackSink {
     unsigned int written;
 };
 
-int packOutput(const void *data, int length, void *context) {
+__attribute__((noinline)) int packOutput(const void *data, int length, void *context) {
     PackSink *sink = static_cast<PackSink *>(context);
     if (length < 0 || static_cast<unsigned int>(length) > kMaxSize - sink->written)
         return 0;
@@ -202,7 +202,7 @@ struct SpanReader {
         else offset += size;
     }
 
-    const unsigned char *take(unsigned int size, unsigned char *scratch) {
+    __attribute__((noinline)) const unsigned char *take(unsigned int size, unsigned char *scratch) {
         unsigned int room;
         const unsigned char *data = peek(&room);
         if (data && size <= room) {
@@ -457,7 +457,7 @@ Status validate(void *workspace, unsigned int workspaceBytes,
                        expectedRaw, expectedAdler);
 }
 
-Status validateRestore(void *workspace, unsigned int workspaceBytes,
+__attribute__((noinline)) Status validateRestore(void *workspace, unsigned int workspaceBytes,
                   const ReadSpan *source, unsigned int sourceCount,
                   const WriteSpan *output, unsigned int outputCount,
                   unsigned int expectedRaw, unsigned int expectedAdler) {
