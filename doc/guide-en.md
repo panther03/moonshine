@@ -1,4 +1,4 @@
-# Moonshine V2.3.2 Frame By Frame
+# Moonshine V2.3.3 Frame By Frame
 
 User guide · English
 
@@ -6,7 +6,7 @@ Moonshine provides tools for studying movement, building TAS recordings and comp
 
 ## Install and update
 
-Copy the ZIP's `apps` folder to the SD card root. The launcher belongs in `apps/moonshine_launcher`. Replace the package files, and keep your existing themes, music, settings, records and ghosts. The launcher supports the existing JP, US and PAL disc revisions. Use your own disc or game image. Use the launcher and mod files from the same release. **Make fresh SD states with this build. Earlier SD states and TAS projects cannot be opened by this update. Keep older files with their matching build; make new saves here.** Settings, records and ghosts remain usable.
+Copy the ZIP's `apps` folder to the SD card root. The launcher belongs in `apps/moonshine_launcher`. Replace the package files, and keep your existing themes, music, settings, records and ghosts. The launcher supports the existing JP, US and PAL disc revisions. Use your own disc or game image. Use the launcher and mod files from the same release. **Public V2.3.1/V2.3.2 states and TAS projects remain compatible with the existing region, episode and state checks. Older development builds still require their matching release.** Settings, records and ghosts remain usable.
 
 The **standard download keeps every Moonshine menu in English**, including when you play JP. It does not change Sunshine's own language. The **Japanese download (日本語版)** uses Japanese launcher menus regardless of the selected game region, and translates Moonshine's in-game menus on JP; US/PAL in-game menus stay English. Some Japanese status messages and the built-in Guide body remain English. Use **System > Moonshine guide** for a short in-game reference.
 
@@ -113,7 +113,7 @@ Hold your **Load** shortcut to keep gameplay still after the state restores. Rel
 
 If the saved state is in an intro, the intro finishes first. Keep Load held to stop on Mario's first controllable frame, or release it early to let play continue. A previous practice pause still takes effect when Mario becomes controllable.
 
-The three states share **17.938 MiB** of compressed-state memory with this launcher. Their size depends on the scene and the length of any ghost recording included in the state. Nothing is deleted automatically. A replacement can reuse its old state's space once the new save is known to fit. If it cannot fit, all previous states remain, including the state you tried to replace. **Clear save slot** asks for confirmation before clearing the slot shown under Save to; the other states stay saved. Loading still requires the stage and episode where the state was made. Saving and loading can briefly stop the game while it processes the state. Errors remain visible even if you disable successful save/load messages. If a slot refuses, report its exact error; there is no confirmed problem specific to Japanese State 3.
+The three states share **17.938 MiB** of compressed-state memory with this launcher. Their size depends on the scene and the length of any ghost recording included in the state. Nothing is deleted automatically. A replacement can reuse its old state's space once the new save is known to fit. If it cannot fit, all previous states remain, including the state you tried to replace. **Clear save slot** asks for confirmation before clearing the slot shown under Save to; the other states stay saved. Loading still requires the stage and episode where the state was made. Saving and loading can briefly stop the game while it processes the state. Successful save/load messages and savestate errors have separate visibility switches; System messages can also be disabled. If a slot refuses, report its exact error; there is no confirmed problem specific to Japanese State 3.
 
 The three memory slots start empty after closing the game or rebooting. To keep a state, save a separate SD copy before closing the game.
 
@@ -180,7 +180,7 @@ If Replay reaches the expected loading zone early or late, it warns and keeps th
 
 Personal ghosts and imports now use paged lists with no 45/12-entry or ten-hour library cap. Select **Personal page** or **Imported page** and use C-stick left/right to change pages; A opens the next page. Choose **Save latest ghost** to create a new personal file. Selecting an empty personal ghost row also offers **Save latest ghost**, with confirmation. Existing ghosts stay available, and Watch2 selections remain attached to their files when you browse another page.
 
-Available storage limits the library. The existing per-ghost recording limit remains about 15 minutes. Imported files stay in the import folder; sharing and deleting still act on the file you selected.
+Available storage limits the library. New ghosts record up to 10 minutes and include FLUDD, nozzle and spray observations. Older ghosts, including recordings longer than 10 minutes, remain readable; they do not gain spray data that was never recorded. Imported files stay in the import folder; sharing and deleting still act on the file you selected.
 
 New ghost files can include the inputs actually consumed during the attempt, plus timestamps for existing supported split endpoints. Earlier pose-only ghost files remain readable and show unavailable input data honestly.
 

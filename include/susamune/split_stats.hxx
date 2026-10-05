@@ -203,9 +203,8 @@ DeleteGoldResult deleteGold(int entry, u8 localSegment);
 
 StorageState storageState();
 
-// Presentation only. QftDisplay refuses adjacency unless the compact QFT
-// actually drew earlier in this same closed-menu render pass.
-void draw(Menu *menu);
+// Draw the captured clock once with its split. True replaces the ordinary QFT.
+bool draw(Menu *menu);
 
 }  // namespace SplitStats
 

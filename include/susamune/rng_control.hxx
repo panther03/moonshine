@@ -17,9 +17,8 @@ void rngControlOnSavestateLoaded();
 // Apply transition-based instruction controls before the director advances.
 void rngControlApply();
 
-// Boss steering makes the current attempt ineligible for leaderboard credit.
-// Crane controls are ordinary practice setup and stay eligible.
-bool rngControlInvalidatesIl();
+// RNG setup, including Petey/King Boo, no longer applies the red HUD warning.
+inline bool rngControlInvalidatesIl() { return false; }
 
 extern "C" void susamuneForceKingBooFruit(void *slot, s32 reel);
 

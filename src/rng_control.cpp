@@ -188,21 +188,8 @@ void rngControlOnSavestateLoaded() {
 
 void rngControlApply() {
     applyPeteyTornadoControl();
-    u8 reasons = 0;
-    if (gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT))
-        reasons |= Assist::KING_BOO_FRUIT;
-    if (gSettings.getBool(SETTING_PETEY_NO_TORNADO))
-        reasons |= Assist::PETEY_NO_TORNADO;
-    if (gSettings.get(SETTING_PETEY_ROUTE) != 0)
-        reasons |= Assist::PETEY_ROUTE;
-    if (reasons) ILing::invalidateForAssist(reasons);
 }
 
-bool rngControlInvalidatesIl() {
-    return gSettings.getBool(SETTING_KING_BOO_ALWAYS_FRUIT) ||
-           gSettings.getBool(SETTING_PETEY_NO_TORNADO) ||
-           gSettings.get(SETTING_PETEY_ROUTE) != 0;
-}
 
 extern "C" int susamuneCraneUpDownRandImpl(void *crane) {
     const int retail = rand();

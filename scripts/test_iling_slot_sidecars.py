@@ -42,6 +42,8 @@ static bool sRocketEquipPending,sBowserNozzleShieldPending,sBowserNozzleShieldAc
 static u8 sSavedSecondNozzle;
 static s32 sSavedSecondNozzleFlag,sSavedBowserNozzleFlag;
 static int sFanfareDelay,sAchievementChimeBlockFrames,sBannerFrames;
+#define sAttemptSerial sAttemptState.serial
+struct Timer{u32 attemptSerial(){return 999;}}gQFTTimer;
 #define sRunning sAttemptState.running
 #define sAttemptReady sAttemptState.ready
 #define sAwaitingStageSetup sAttemptState.awaitingStageSetup
@@ -59,7 +61,7 @@ static int sFanfareDelay,sAchievementChimeBlockFrames,sBannerFrames;
 #define sSelectedEntry sAttemptState.selectedEntry
 static unsigned ended,invalidated;
 namespace Records {void onILAttemptEnded(){}}
-namespace StageLoader {void onILAttemptEnded(){++ended;}void invalidatePlaylistBest(){++invalidated;}}
+namespace StageLoader {bool onSavestateLoaded(){return false;}void onILAttemptEnded(){++ended;}void invalidatePlaylistBest(){++invalidated;}}
 namespace SplitStats {void onILAttemptEnded(){}}
 struct TFlagManager {
     static TFlagManager *smInstance;

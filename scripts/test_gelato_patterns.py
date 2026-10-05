@@ -108,10 +108,9 @@ class GelatoPatternTests(unittest.TestCase):
         self.assertIn("next = blueBird", branch)
 
     def test_patterns_follow_non_invalidating_practice_policy(self) -> None:
-        source = RUNTIME.read_text(encoding="utf-8")
-        invalidation = source.split("bool rngControlInvalidatesIl()", 1)[1].split(
-            'extern "C"', 1
-        )[0]
+        source = (ROOT / "include/susamune/rng_control.hxx").read_text(encoding="utf-8")
+        invalidation = source.split("bool rngControlInvalidatesIl()", 1)[1].split("}", 1)[0]
+        self.assertIn("return false;", invalidation)
         self.assertNotIn("SETTING_GELATO_RED_COIN_FISH_PATTERN", invalidation)
         self.assertNotIn("SETTING_GELATO_BLUE_BIRD_PATTERN", invalidation)
 

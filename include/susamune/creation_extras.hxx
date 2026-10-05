@@ -20,6 +20,9 @@ void drawCreationKeyboard(Menu *menu, const char *title, const char *text,
 bool updateCreationKeyboardText(TMarioGamePad *pad, char *text, u8 &length,
                                 u8 capacity, u8 &page, bool &uppercase,
                                 u8 &cursor);
+bool updateCreationKeyboardButtons(u32 pressed, char *text, u8 &length,
+                                   u8 capacity, u8 &page, bool &uppercase,
+                                   u8 &cursor);
 const char *wallkickDisplayLabel(int index);
 const char *practiceDisplayName(unsigned display);
 void formatPracticeDisplay(char *out, unsigned capacity, unsigned display,

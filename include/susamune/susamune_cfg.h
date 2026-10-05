@@ -50,7 +50,17 @@
 // say how much of each is meaningful.
 #define SUSAMUNE_CFG_MAX_SETTINGS 128
 #define SUSAMUNE_CFG_MAX_EXTRA_SETTINGS 14
-#define SUSAMUNE_CFG_TOTAL_SETTINGS (SUSAMUNE_CFG_MAX_SETTINGS + SUSAMUNE_CFG_MAX_EXTRA_SETTINGS)
+#define SUSAMUNE_CFG_SETTINGS_TAIL_SIZE 32u
+#define SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET 0x1A00u
+#define SUSAMUNE_DOLPHIN_SETTINGS_TAIL_PPC_BASE 0x71900120u
+#define SUSAMUNE_CFG_FLAG_SETTINGS_TAIL 0x02000000u
+#define SUSAMUNE_CFG_TOTAL_SETTINGS (SUSAMUNE_CFG_MAX_SETTINGS + SUSAMUNE_CFG_MAX_EXTRA_SETTINGS + SUSAMUNE_CFG_SETTINGS_TAIL_SIZE)
+// An independent PPC-owned line; no existing mailbox or settings offset moves.
+#if defined(IS_EMULATOR) && IS_EMULATOR
+#define SUSAMUNE_CFG_SETTINGS_TAIL(cfg) ((volatile unsigned char *)SUSAMUNE_DOLPHIN_SETTINGS_TAIL_PPC_BASE)
+#else
+#define SUSAMUNE_CFG_SETTINGS_TAIL(cfg) ((volatile unsigned char *)(cfg) + SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET)
+#endif
 #define SUSAMUNE_CFG_MAX_BINDS    64
 
 // Value meaning "the ini had no entry for this setting" -- the mod leaves the
@@ -1311,12 +1321,19 @@ struct SusamuneCfg {
     struct SusamuneNativeTimerStyleCfg nativeTimerStyle;
 };
 
+// These helpers operate on the live settings mailbox, not on a serialized
+// SusamuneCfg prefix. The advertised tail has independent backing: cfg+0x1A00
+// on console and the fixed live mirror on Dolphin. CARD records copy that
+// tail explicitly; their unchanged 5,152-byte cfg member has no such gap.
 static inline unsigned char SusamuneCfgGetSetting(const volatile struct SusamuneCfg *cfg,
                                                   unsigned int index)
 {
     if (index < SUSAMUNE_CFG_MAX_SETTINGS) return cfg->values[index];
     index -= SUSAMUNE_CFG_MAX_SETTINGS;
-    return index < SUSAMUNE_CFG_MAX_EXTRA_SETTINGS ? cfg->extraValues[index] : SUSAMUNE_CFG_UNSET;
+    if (index < SUSAMUNE_CFG_MAX_EXTRA_SETTINGS) return cfg->extraValues[index];
+    index -= SUSAMUNE_CFG_MAX_EXTRA_SETTINGS;
+    return (cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_TAIL) && index < SUSAMUNE_CFG_SETTINGS_TAIL_SIZE
+        ? SUSAMUNE_CFG_SETTINGS_TAIL(cfg)[index] : SUSAMUNE_CFG_UNSET;
 }
 
 static inline int SusamuneCfgSetSetting(volatile struct SusamuneCfg *cfg,
@@ -1325,8 +1342,12 @@ static inline int SusamuneCfgSetSetting(volatile struct SusamuneCfg *cfg,
     if (index < SUSAMUNE_CFG_MAX_SETTINGS) cfg->values[index] = value;
     else {
         index -= SUSAMUNE_CFG_MAX_SETTINGS;
-        if (index >= SUSAMUNE_CFG_MAX_EXTRA_SETTINGS) return 0;
-        cfg->extraValues[index] = value;
+        if (index < SUSAMUNE_CFG_MAX_EXTRA_SETTINGS) cfg->extraValues[index] = value;
+        else {
+            index -= SUSAMUNE_CFG_MAX_EXTRA_SETTINGS;
+            if (!(cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_TAIL) || index >= SUSAMUNE_CFG_SETTINGS_TAIL_SIZE) return 0;
+            SUSAMUNE_CFG_SETTINGS_TAIL(cfg)[index] = value;
+        }
     }
     return 1;
 }
@@ -1387,6 +1408,9 @@ typedef char susamune_mario_colors_dolphin_check[(SUSAMUNE_DOLPHIN_MARIO_COLORS_
 typedef char susamune_fludd_colors_size_check[(sizeof(struct SusamuneFluddColorsCfg) == 64) ? 1 : -1];
 typedef char susamune_il_episodes_gap_check[(SUSAMUNE_FLUDD_COLORS_CFG_OFFSET + sizeof(struct SusamuneFluddColorsCfg) == SUSAMUNE_IL_EPISODES_CFG_OFFSET && SUSAMUNE_IL_EPISODES_CFG_OFFSET + sizeof(struct SusamuneILEpisodesCfg) <= SUSAMUNE_PROGRESS_CFG_OFFSET) ? 1 : -1];
 typedef char susamune_practice_display_gap_check[(SUSAMUNE_IL_EPISODES_CFG_OFFSET + sizeof(struct SusamuneILEpisodesCfg) == SUSAMUNE_PRACTICE_DISPLAY_STYLE_CFG_OFFSET && SUSAMUNE_PRACTICE_DISPLAY_STYLE_CFG_OFFSET + sizeof(struct SusamunePracticeDisplayStyleCfg) <= SUSAMUNE_PROGRESS_CFG_OFFSET) ? 1 : -1];
+typedef char susamune_settings_tail_gap_check[(SUSAMUNE_PRACTICE_DISPLAY_STYLE_CFG_OFFSET + sizeof(struct SusamunePracticeDisplayStyleCfg) == SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET && SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET + SUSAMUNE_CFG_SETTINGS_TAIL_SIZE <= SUSAMUNE_PROGRESS_CFG_OFFSET) ? 1 : -1];
+typedef char susamune_settings_tail_alignment_check[(SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET % 32 == 0 && SUSAMUNE_CFG_SETTINGS_TAIL_SIZE == 32 && SUSAMUNE_DOLPHIN_SETTINGS_TAIL_PPC_BASE % 32 == 0) ? 1 : -1];
+typedef char susamune_settings_tail_dolphin_check[(SUSAMUNE_DOLPHIN_MARIO_COLORS_PPC_BASE + SUSAMUNE_CFG_SETTINGS_TAIL_OFFSET - SUSAMUNE_MARIO_COLORS_CFG_OFFSET == SUSAMUNE_DOLPHIN_SETTINGS_TAIL_PPC_BASE && SUSAMUNE_DOLPHIN_SETTINGS_TAIL_PPC_BASE + SUSAMUNE_CFG_SETTINGS_TAIL_SIZE <= SUSAMUNE_DOLPHIN_STATE_POOL_EXTRA_PPC_BASE) ? 1 : -1];
 typedef char susamune_fludd_colors_gap_check[(SUSAMUNE_MARIO_COLORS_CFG_OFFSET + sizeof(struct SusamuneMarioColorsCfg) == SUSAMUNE_FLUDD_COLORS_CFG_OFFSET && SUSAMUNE_FLUDD_COLORS_CFG_OFFSET + 64 <= SUSAMUNE_PROGRESS_CFG_OFFSET) ? 1 : -1];
 typedef char susamune_fludd_colors_dolphin_check[(SUSAMUNE_DOLPHIN_MARIO_COLORS_PPC_BASE + 32 == SUSAMUNE_DOLPHIN_FLUDD_COLORS_PPC_BASE && SUSAMUNE_DOLPHIN_FLUDD_COLORS_PPC_BASE + 64 <= SUSAMUNE_DOLPHIN_STATE_POOL_EXTRA_PPC_BASE) ? 1 : -1];
 

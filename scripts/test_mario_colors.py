@@ -193,12 +193,13 @@ struct Extras{bool editing(){return false;}void updateEditor(TMarioGamePad*){}
  void beginSavestateFeedbackEditor(){}void beginNativeTimerEditor(){}
  void beginWallkickEditor(){}void beginRolloutEditor(){}void beginDustEditor(){}
  void beginPracticeDisplayEditor(unsigned){}}gCreationExtras;
+struct Qft{bool editing(){return false;}void updateEditor(TMarioGamePad*){}void beginEditor(){}}gQftDisplay;
 int wrap(int value,int n){return (value+n)%n;}
 const u8 kAppearanceMarioSettings[]={1,2,3};const u8 otherSettings[]={4};
 class CategorySettingsTab{public:
  int mSel=0,mMode=1;bool appearance=true;struct Page{const u8*ids;}page={kAppearanceMarioSettings};
  bool isAppearance()const{return appearance;}const Page&currentPage()const{return page;}
- bool hasFactoryReset()const{return false;}bool hasFeedbackEditor()const{return false;}
+ bool hasFactoryReset()const{return false;}bool hasTimerEditors()const{return false;}bool hasFeedbackEditor()const{return false;}
  bool hasMovementEditors()const{return false;}bool hasNativeTimerEditor()const{return false;}
  bool resetConfirm()const{return false;}bool pageRoot()const{return !mMode;}
  bool hasPages()const{return true;}bool isStarred()const{return false;}

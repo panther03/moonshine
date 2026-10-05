@@ -59,7 +59,7 @@ class GuideContentTests(unittest.TestCase):
         self.assertIn('"Moonshine Launcher"', build)
         self.assertIn("<name>Moonshine Launcher</name>", meta)
         for source in (build, guide, meta):
-            self.assertIn("V2.3.2 Frame By Frame", source)
+            self.assertIn("V2.3.3 Frame By Frame", source)
             for old in ("FOXTROT", "PRE-RELEASE", "RC1"):
                 self.assertNotIn(old, source.upper())
 

@@ -22,11 +22,12 @@
     X(132, "sirena_2_full_reds") \
     X(133, "sirena_4_full_reds") \
     X(134, "noki_6_full_reds") \
-    X(135, "pianta_5_full_reds")
+    X(135, "pianta_5_full_reds") \
+    X(112, "gelato_enter_plaza")
 
 #define SUSAMUNE_IL_EPISODE_MAGIC 0x53494550u
 #define SUSAMUNE_IL_EPISODE_VERSION 1u
-#define SUSAMUNE_IL_EPISODE_COUNT 20u
+#define SUSAMUNE_IL_EPISODE_COUNT 21u
 #define SUSAMUNE_CFG_FLAG_IL_EPISODES 0x00400000u
 struct SusamuneILEpisodesCfg {
     unsigned int magic;
@@ -34,7 +35,7 @@ struct SusamuneILEpisodesCfg {
     unsigned short count;
     // 0 keeps the catalogue default; 1..8 selects a numbered episode.
     unsigned char episodes[SUSAMUNE_IL_EPISODE_COUNT];
-    unsigned char reserved[36];
+    unsigned char reserved[35];
 };
 #define SUSAMUNE_IL_EPISODES_CFG_OFFSET 0x1940u
 #define SUSAMUNE_IL_EPISODES_PHYS_PTR \

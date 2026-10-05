@@ -26,8 +26,8 @@ typedef unsigned long long FSIZE_t;
 #define MAXPATHLEN 1024
 #define SUSAMUNE_MOD_HEADER_SIZE 32
 #define SUSAMUNE_MOD_STAGED_FILE_MAX_SIZE 0x9F000
-#define SUSAMUNE_JP_UI_OFFSET 0x84000
-#define SUSAMUNE_JP_UI_SIZE 0x1B000
+#define SUSAMUNE_JP_UI_OFFSET 0x86000
+#define SUSAMUNE_JP_UI_SIZE 0x19000
 #define SUSAMUNE_JP_UI_FILENAME "ja_ui.bin"
 #define SUSAMUNE_MOD_FILE_FMT "mod_%s.bin"
 static u8 staging[0x9F000];
@@ -81,7 +81,7 @@ __declspec(dllexport) unsigned cleared(void){for(unsigned i=0;i<64;i++)if(SUSAMU
         self.assertEqual(self.lib.result(5),ord('M'))
         self.assertEqual(self.lib.result(2),2)
         for game,errors,size in ((0x474D5345,0,96),(0x474D5350,0,96),(0,0,96),
-                                 (0x474D534A,1,96),(0x474D534A,2,96),(0x474D534A,0,0x84004)):
+                                 (0x474D534A,1,96),(0x474D534A,2,96),(0x474D534A,0,0x86004)):
             self.lib.run(1,game,errors,size)
             self.assertEqual(self.lib.result(0),0)
             self.assertEqual(self.lib.cleared(),1)

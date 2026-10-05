@@ -290,7 +290,13 @@ void drawCreationKeyboard(Menu *menu, const char *title, const char *text,
 bool updateCreationKeyboardText(TMarioGamePad *pad, char *text, u8 &length,
                                 u8 capacity, u8 &pageIndex, bool &uppercase,
                                 u8 &cursor) {
-    const u32 pressed = pad->mButtons.mRapidInput;
+    return updateCreationKeyboardButtons(pad->mButtons.mRapidInput, text, length,
+                                         capacity, pageIndex, uppercase, cursor);
+}
+
+bool updateCreationKeyboardButtons(u32 pressed, char *text, u8 &length,
+                                   u8 capacity, u8 &pageIndex, bool &uppercase,
+                                   u8 &cursor) {
     bool changed = false;
     const int count = pageIndex ? (int)sizeof(gCreationSymbols) - 1 : 32;
     if (pressed & TMarioGamePad::DPAD_LEFT)

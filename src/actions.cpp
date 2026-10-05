@@ -13,6 +13,7 @@
 // =====================================================================
 
 #include "susamune/actions.hxx"
+#include "susamune/qft_timer.hxx"
 
 #include "susamune/addresses.hxx"  // SUSAMUNE_MEM1_ADDR
 #include "susamune/binds.hxx"
@@ -283,6 +284,7 @@ void loadPosition() {
     *gpMarioAngleY = gPositionSnapshot.marioAngleY;
     gpCamera->mHorizontalAngle = gPositionSnapshot.cameraHorizontalAngle;
     gpCamera->mInterpolateDistance = gPositionSnapshot.cameraInterpolateDistance;
+    gQFTTimer.markPracticeAssisted();
     ILing::invalidateForAssist();
 }
 

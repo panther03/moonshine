@@ -14,6 +14,8 @@
 #include "SMS/Player/Mario.hxx"
 #include "SMS/Player/MarioDraw.hxx"
 #include "SMS/Player/Yoshi.hxx"
+#include "SMS/Player/Watergun.hxx"
+#include "Dolphin/math.h"
 #include "SMS/MoveBG/ResetFruit.hxx"
 #include "SMS/Strategic/LiveActor.hxx"
 #include "SMS/Strategic/Strategy.hxx"
@@ -21,6 +23,7 @@
 #include "susamune/addresses.hxx"
 #include "susamune/checksum.hxx"
 #include "susamune/ghost.hxx"
+#include "susamune/ghost_fludd.hxx"
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ghost_storage.h"
 #include "susamune/menu.hxx"
@@ -32,6 +35,7 @@ public:
 };
 
 extern TScreenTexture *gpScreenTexture;
+extern "C" f32 ghostSquareRoot(f32) asm("sqrtf__3stdFf");
 
 void SMS_InitPacket_MatColor(J3DModel *, u16, GXChannelID,
                              const GXColor *);
@@ -72,6 +76,8 @@ enum AttachmentKind {
     ATTACHMENT_NONE,
     ATTACHMENT_YOSHI,
     ATTACHMENT_HELD,
+    ATTACHMENT_FLUDD,
+    ATTACHMENT_NOZZLE,
 };
 
 struct AttachmentPacketState {
@@ -82,6 +88,7 @@ struct AttachmentPacketState {
 
 struct AttachmentModel {
     J3DModelData *data;
+    J3DModelData *sourceData;
     J3DModel *model;
     int runner;
     AttachmentKind kind;
@@ -175,10 +182,11 @@ static_assert(SUSAMUNE_GHOST_MAX_SAMPLE_DATA_SIZE +
 
 ModelSlot sSlots[APPEARANCE_COUNT];
 JKRExpHeap *sAttachmentHeap;
-AttachmentModel sAttachmentModels[2];
+const int kAttachments = 6; // held/Yoshi, body, nozzle for each runner
+AttachmentModel sAttachmentModels[kAttachments];
 bool sRegistered;
 bool sPrepared[2];
-AttachmentModel *sPreparedAttachments[2];
+AttachmentModel *sPreparedAttachments[kAttachments];
 bool sSubmitted[2];
 Ghost::VisualState sVisualStates[2];
 bool sHaveVisualState[2];
@@ -467,6 +475,18 @@ void installAttachmentCallbacks(AttachmentModel &attachment) {
             packet + kShapePacketUserAreaOffset) = &attachment.packetState;
         *reinterpret_cast<void (**)(J3DShapePacket *, int)>(
             packet + kShapePacketCallbackOffset) = attachmentPacketCallback;
+        if (attachment.kind == ATTACHMENT_FLUDD && attachment.data->mMaterialNames) {
+            // These interior tank masks rely on retail's opaque depth/alpha
+            // passes. Forcing ghost transparency exposes their clipping planes.
+            // Keep the tank shell, but omit the unrecorded water-level masks.
+            const char *names[] = {"_mat_waterline", "_mat_froater(2)", "_mat_froater(3)"};
+            for (unsigned n = 0; n < 3; ++n) {
+                const s32 material = attachment.data->mMaterialNames->getIndex(names[n]);
+                if (material >= 0 && material < attachment.data->getMaterialNum() &&
+                    attachment.data->mMaterials[material]->shape == attachment.data->mShapes[i])
+                    packet[0x30] = 0;
+            }
+        }
     }
 }
 
@@ -531,12 +551,21 @@ AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
                                   AttachmentKind kind, J3DModel *source) {
     memset(&attachment, 0, sizeof(attachment));
     attachment.data = source ? source->mModelData : nullptr;
+    attachment.sourceData = attachment.data;
     attachment.runner = runner;
     attachment.kind = kind;
     if (!sAttachmentHeap || !source || !source->mModelData) return nullptr;
     u32 estimate = 0;
-    if (!validAttachmentSource(source, &estimate) ||
-        sAttachmentHeap->getTotalFreeSize() < estimate) {
+    if (!validAttachmentSource(source, &estimate)) return nullptr;
+    const bool independent = kind == ATTACHMENT_FLUDD || kind == ATTACHMENT_NOZZLE;
+    const void *bmd = independent ? source->mModelData->_4 : nullptr;
+    if (independent) {
+        if (!bmd || memcmp(bmd, "J3D2bmd3", 8) ||
+            readBig32(static_cast<const u8 *>(bmd) + 8) > 0x9000u) return nullptr;
+        // Bounded retail FLUDD assets; includes loader objects and heap overhead.
+        estimate += kind == ATTACHMENT_FLUDD ? 0x5000u : 0x2000u;
+    }
+    if (sAttachmentHeap->getTotalFreeSize() < estimate) {
         return nullptr;
     }
 
@@ -547,8 +576,9 @@ AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     sAttachmentHeap->becomeCurrentHeap();
     const u32 before = sAttachmentHeap->getTotalFreeSize();
+    if (independent) attachment.data = J3DModelLoaderDataBase::load(bmd, 0x10040000u);
     void *storage = sAttachmentHeap->alloc(sizeof(J3DModel), 32);
-    if (storage) {
+    if (storage && attachment.data) {
         attachment.model =
             new (storage) J3DModel(attachment.data, 0, 1);
         attachment.model->makeDL();
@@ -587,28 +617,92 @@ AttachmentRequest desiredAttachment(const Ghost::VisualState &state) {
     return request;
 }
 
-bool attachmentSetMatches(const AttachmentRequest requests[2]) {
-    for (int runner = 0; runner < 2; ++runner) {
+#pragma clang section text=".foxtrot.text"
+ModelSlot &runnerSlot(int runner);
+void desiredFludd(const Ghost::VisualState &state, AttachmentRequest *out) {
+    if (state.yoshi || !(state.fludd.mode & SUSAMUNE_GHOST_FLUDD_PRESENT) ||
+        !gpMarioOriginal || !gpMarioOriginal->mFludd) return;
+    TWaterGun *gun = gpMarioOriginal->mFludd;
+    const u32 nozzle = state.fludd.mode & 7;
+    if (nozzle >= 6 || !gun->mNozzleList[nozzle]) return;
+    // Retail Watergun.hpp: body MActor at 1CD4, nozzle MActor at 380.
+    MActor *body = *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun) + 0x1CD4);
+    MActor *head = *reinterpret_cast<MActor **>(
+        reinterpret_cast<u8 *>(gun->mNozzleList[nozzle]) + 0x380);
+    if (body && body->mModel) out[0] = {ATTACHMENT_FLUDD, body->mModel};
+    if (head && head->mModel) out[1] = {ATTACHMENT_NOZZLE, head->mModel};
+}
+
+bool prepareFludd(AttachmentModel &attachment, int runner,
+                  const Ghost::VisualState &state) {
+    ModelSlot &mario = runnerSlot(runner);
+    Mtx *base = attachment.model->getBaseTRMtx();
+    if (attachment.kind == ATTACHMENT_FLUDD) {
+        if (!mario.data->mJointNames) return false;
+        const s32 chest = mario.data->mJointNames->getIndex("chn_chest");
+        if (chest < 0 || chest >= mario.data->getJointNum()) return false;
+        const Mtx &joint = *mario.model->getAnmMtx(chest);
+        Mtx tilt;
+        // Same default backpack tilt as retail setBaseTRMtx; no live writes.
+        MTXRotRad(tilt, 'z', (fabsf(joint[1][0]) - 1.0f) * 0.589048623f);
+        MTXConcat(joint, tilt, *base);
+    } else {
+        AttachmentModel &body = sAttachmentModels[runner * 3 + 1];
+        if (!body.model || !body.data->mJointNames) return false;
+        const s32 center = body.data->mJointNames->getIndex("nozzle_center");
+        if (center < 0 || center >= body.data->getJointNum()) return false;
+        MTXCopy(*body.model->getAnmMtx(center), *base);
+    }
+    // Private model data has no live-Mario callbacks or animation ownership.
+    attachment.model->J3DModel::calc();
+    const u8 nozzle = state.fludd.mode & 7u;
+    if (attachment.kind == ATTACHMENT_NOZZLE && (nozzle == 0 || nozzle == 5)) {
+        const s32 muzzle = attachment.data->mJointNames->getIndex("null_G_muzzle");
+        if (muzzle < 0 || muzzle >= attachment.data->getJointNum()) return true;
+        const Mtx &emitter = *attachment.model->getAnmMtx(muzzle);
+        TVec3f current, desired, axis;
+        current.set(emitter[0][0], emitter[1][0], emitter[2][0]);
+        GhostFludd::direction(state.fludd, desired);
+        axis.set(current.y * desired.z - current.z * desired.y,
+                 current.z * desired.x - current.x * desired.z,
+                 current.x * desired.y - current.y * desired.x);
+        const f32 length = ghostSquareRoot(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+        const f32 dot = current.x * desired.x + current.y * desired.y + current.z * desired.z;
+        if (length > 0.0001f) {
+            const TVec3f origin = {(*base)[0][3], (*base)[1][3], (*base)[2][3]};
+            Mtx rotation;
+            MTXRotAxisRad(rotation, reinterpret_cast<Vec *>(&axis), atan2f(length, dot));
+            MTXConcat(rotation, *base, *base);
+            (*base)[0][3] = origin.x; (*base)[1][3] = origin.y; (*base)[2][3] = origin.z;
+            attachment.model->J3DModel::calc();
+        }
+    }
+    return true;
+}
+#pragma clang section text=""
+
+bool attachmentSetMatches(const AttachmentRequest requests[kAttachments]) {
+    for (int runner = 0; runner < kAttachments; ++runner) {
         const J3DModelData *desired = requests[runner].source
             ? requests[runner].source->mModelData : nullptr;
         const AttachmentModel &current = sAttachmentModels[runner];
         if (current.kind != requests[runner].kind ||
-            current.data != desired) {
+            current.sourceData != desired) {
             return false;
         }
     }
     return true;
 }
 
-void rebuildAttachments(const AttachmentRequest requests[2]) {
+void rebuildAttachments(const AttachmentRequest requests[kAttachments]) {
     if (!sAttachmentHeap || attachmentSetMatches(requests)) return;
     // The previous frame may still reference these private display lists.
     GXDrawDone();
     sAttachmentHeap->freeAll();
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
-    for (int runner = 0; runner < 2; ++runner) {
+    for (int runner = 0; runner < kAttachments; ++runner) {
         if (requests[runner].kind != ATTACHMENT_NONE)
-            createAttachment(sAttachmentModels[runner], runner,
+            createAttachment(sAttachmentModels[runner], runner / 3,
                              requests[runner].kind,
                              requests[runner].source);
     }
@@ -791,20 +885,25 @@ void setAttachmentColor(AttachmentModel &attachment,
     attachment.packetState.tevColor.a = sGhostColor.a;
 }
 
-AttachmentModel *prepareAttachment(int runner,
+AttachmentModel *prepareAttachment(int index,
                                    const AttachmentRequest &request,
                                    const Ghost::VisualState &state) {
-    AttachmentModel *attachment = &sAttachmentModels[runner];
+    const int runner = index / 3;
+    AttachmentModel *attachment = &sAttachmentModels[index];
     J3DModel *source = request.source;
     if (!source || request.kind == ATTACHMENT_NONE ||
         attachment->kind != request.kind ||
-        attachment->data != source->mModelData || !attachment->model) {
+        attachment->sourceData != source->mModelData || !attachment->model) {
         return nullptr;
     }
     setAttachmentColor(*attachment, state);
     attachment->model->mBaseScale = source->mBaseScale;
 
-    if (request.kind == ATTACHMENT_YOSHI) {
+    if (request.kind == ATTACHMENT_FLUDD || request.kind == ATTACHMENT_NOZZLE) {
+        if (!prepareFludd(*attachment, runner, state)) return nullptr;
+        attachment->model->J3DModel::viewCalc();
+        return attachment;
+    } else if (request.kind == ATTACHMENT_YOSHI) {
         Mtx yaw;
         MTXRotRad(yaw, 'y', static_cast<f32>(state.yaw) * kAngleToRadians);
         yaw[0][3] = state.x;
@@ -828,7 +927,7 @@ AttachmentModel *prepareAttachment(int runner,
 void entryAttachment(AttachmentModel &attachment) {
     if (!attachment.model || !attachment.data) return;
     u32 savedShapeFlags[kYoshiMaxShapeCount];
-    const u16 shapeCount = attachment.kind == ATTACHMENT_YOSHI
+    const u16 shapeCount = attachment.kind != ATTACHMENT_HELD
         ? attachment.data->mShapeNum : 0;
     for (u16 i = 0; i < shapeCount; ++i) {
         J3DShape *shape = attachment.data->mShapes[i];
@@ -875,10 +974,7 @@ public:
         if (cue & kCueCalcView) {
             Ghost::prepareVisual();
             sGhostColor.a = ghostAlpha();
-            AttachmentRequest requests[2] = {
-                {ATTACHMENT_NONE, nullptr},
-                {ATTACHMENT_NONE, nullptr},
-            };
+            AttachmentRequest requests[kAttachments] = {};
             for (int appearance = 0; appearance < APPEARANCE_COUNT;
                  ++appearance) {
                 ModelSlot &slot = sSlots[appearance];
@@ -898,13 +994,14 @@ public:
                 slot.model->J3DModel::viewCalc();
                 sPrepared[runner] = modelPacketsReady(slot);
                 if (!sPrepared[runner]) continue;
-                requests[runner] = desiredAttachment(sVisualStates[runner]);
+                requests[runner * 3] = desiredAttachment(sVisualStates[runner]);
+                desiredFludd(sVisualStates[runner], requests + runner * 3 + 1);
             }
             rebuildAttachments(requests);
-            for (int runner = 0; runner < 2; ++runner) {
-                sPreparedAttachments[runner] = sPrepared[runner]
-                    ? prepareAttachment(runner, requests[runner],
-                                        sVisualStates[runner])
+            for (int index = 0; index < kAttachments; ++index) {
+                sPreparedAttachments[index] = sPrepared[index / 3]
+                    ? prepareAttachment(index, requests[index],
+                                        sVisualStates[index / 3])
                     : nullptr;
             }
         }
@@ -913,9 +1010,10 @@ public:
                 ModelSlot &slot = runnerSlot(runner);
                 if (!sPrepared[runner] || !modelPacketsReady(slot)) continue;
                 slot.model->J3DModel::entry();
-                AttachmentModel *attachment = sPreparedAttachments[runner];
-                if (attachment && attachment->model)
-                    entryAttachment(*attachment);
+                for (int part = 0; part < 3; ++part) {
+                    AttachmentModel *attachment = sPreparedAttachments[runner * 3 + part];
+                    if (attachment && attachment->model) entryAttachment(*attachment);
+                }
                 sSubmitted[runner] = true;
             }
         }

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class Episodes(C.Structure):
     _fields_ = [("magic", C.c_uint), ("version", C.c_ushort), ("count", C.c_ushort),
-                ("episodes", C.c_ubyte * 20), ("reserved", C.c_ubyte * 36)]
+                ("episodes", C.c_ubyte * 21), ("reserved", C.c_ubyte * 35)]
 
 
 class EpisodePersistenceTests(unittest.TestCase):
@@ -260,7 +260,7 @@ API unsigned operations(){return tempOpens|(sourceCloses<<8)|(commits<<16);}
             f"il_episode_{key} = {i % 9}\r\n" for i, key in enumerate(self.keys))
         self.lib.parse(source.encode())
         expected = bytes(self.snapshot())
-        self.assertEqual(list(self.snapshot().episodes), [i % 9 for i in range(20)])
+        self.assertEqual(list(self.snapshot().episodes), [i % 9 for i in range(21)])
         rewritten = self.lib.rewrite(source.encode()).decode()
         self.assertTrue(rewritten.startswith(other))
         self.lib.selectRegion(b"pal")
@@ -285,22 +285,22 @@ API unsigned operations(){return tempOpens|(sourceCloses<<8)|(commits<<16);}
 
     def test_adoption_rejects_bad_headers_and_limits_partial_or_bad_entries(self):
         valid = self.snapshot()
-        valid.episodes[:] = range(20)
-        valid.reserved[:] = [0xa5] * 36
+        valid.episodes[:] = range(21)
+        valid.reserved[:] = [0xa5] * 35
         out = Episodes()
         self.lib.adopt(C.byref(valid), C.byref(out))
-        self.assertEqual(list(out.episodes), list(range(9)) + [0] * 11)
-        self.assertEqual(bytes(out.reserved), bytes(36))
+        self.assertEqual(list(out.episodes), list(range(9)) + [0] * 12)
+        self.assertEqual(bytes(out.reserved), bytes(35))
         valid.count = 3
         self.lib.adopt(C.byref(valid), C.byref(out))
-        self.assertEqual(list(out.episodes), [0, 1, 2] + [0] * 17)
-        for field, value in (("magic", 0), ("version", 2), ("count", 21)):
+        self.assertEqual(list(out.episodes), [0, 1, 2] + [0] * 18)
+        for field, value in (("magic", 0), ("version", 2), ("count", 22)):
             broken = Episodes.from_buffer_copy(valid)
             setattr(broken, field, value)
             self.lib.adopt(C.byref(broken), C.byref(out))
-            self.assertEqual(bytes(out.episodes), bytes(20))
+            self.assertEqual(bytes(out.episodes), bytes(21))
         self.lib.adopt(None, C.byref(out))
-        self.assertEqual(bytes(out.episodes), bytes(20))
+        self.assertEqual(bytes(out.episodes), bytes(21))
 
     def test_wii_handoff_flush_and_read_are_explicit(self):
         kernel = (ROOT / "launcher/kernel/SusamuneCfg.c").read_text()

@@ -8,6 +8,7 @@
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/native_timer_transform.h"
 #include "susamune/creation_extras.hxx"
+#include "susamune/mem2_map.h"
 
 extern "C" void *retailPaneVtable[] asm("__vt__7J2DPane");
 extern "C" void *retailPictureVtable[] asm("__vt__10J2DPicture");
@@ -41,10 +42,14 @@ struct DrawState {
     int rootRect[4];
     unsigned count;
     int percent;
-    bool active;
 };
 
+#if defined(__powerpc__)
+#define sDraw (*reinterpret_cast<DrawState *>(SUSAMUNE_NATIVE_TIMER_DRAW_PPC_BASE))
+#else
 DrawState sDraw;
+#endif
+bool sActive;
 
 static_assert(__builtin_offsetof(J2DPane, mCRect) == 0x24,
               "J2DPane draw bounds moved");
@@ -110,7 +115,7 @@ bool collect(J2DPane *root) {
 }  // namespace
 
 bool beginDraw(J2DScreen *screen) {
-    if (sDraw.active) return false;
+    if (sActive) return false;
     const CreationStyle &style = gCreationExtras.nativeTimerStyle();
     const bool preview = gCreationExtras.editingNativeTimer();
     if (style.x > 1280 || style.y > 960 || style.scale < 50 || style.scale > 200 ||
@@ -166,7 +171,7 @@ bool beginDraw(J2DScreen *screen) {
                 saved.pane->mIsVisible = gCreationExtras.timerLabelVisible();
         }
     }
-    sDraw.active = true;
+    sActive = true;
     root->add(static_cast<int>(style.x) - 640, static_cast<int>(style.y) - 480);
     // Retail draw rebuilds matrices before clipping and walking children.
     // Lend each pane its original vtable with only that draw step wrapped.
@@ -180,7 +185,7 @@ bool beginDraw(J2DScreen *screen) {
 }
 
 void endDraw() {
-    if (!sDraw.active) return;
+    if (!sActive) return;
     for (unsigned i = 0; i < sDraw.count; ++i) {
         PaneState &saved = sDraw.panes[i];
         *reinterpret_cast<void ***>(saved.pane) = saved.vtable;
@@ -195,7 +200,7 @@ void endDraw() {
         }
     }
     memcpy(&sDraw.panes[0].pane->mRect, sDraw.rootRect, sizeof(sDraw.rootRect));
-    sDraw.active = false;
+    sActive = false;
 }
 
 }  // namespace NativeTimerLayout

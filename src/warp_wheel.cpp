@@ -175,13 +175,7 @@ void armExitAreaWarp(const LevelWarp::Dest &dest) {
 }
 
 bool saveFlowActive() {
-    if (!gpMarDirector) return false;
-    if (gpMarDirector->mCurState == TMarDirector::STATE_SAVE_CARD) return true;
-    if (gpMarDirector->mCurState == TMarDirector::STATE_PAUSE_MENU &&
-        gpMarDirector->mPauseMenu &&
-        gpMarDirector->mPauseMenu->mState == TPauseMenu2::MENU_SAVING) {
-        return true;
-    }
+    // A displayed save box does not own storage. Only defer an actual write.
     return gpCardManager &&
         gpCardManager->getLastStatus() == CARD_ERROR_BUSY;
 }
@@ -1862,7 +1856,10 @@ void update(TMarioGamePad *pad) {
     if (state == TMarDirector::STATE_DEATH) {
         sDeathSequence = true;
     }
-    if (state != TMarDirector::STATE_NORMAL) {
+    const bool saveDialogOpen = state == TMarDirector::STATE_SAVE_CARD ||
+        (state == TMarDirector::STATE_PAUSE_MENU && gpMarDirector->mPauseMenu &&
+         gpMarDirector->mPauseMenu->mState == TPauseMenu2::MENU_SAVING);
+    if (state != TMarDirector::STATE_NORMAL && !saveDialogOpen) {
         close();
         const u16 rawButtons = JUTGamePad::mPadStatus[0].mButton;
         if (sDeathSequence &&

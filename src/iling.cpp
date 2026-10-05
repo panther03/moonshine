@@ -172,7 +172,7 @@ constexpr char kRegularShortGroupNames[] =
 constexpr char kHundredGroupLetters[] = "BRGPSNV";
 constexpr char kMenuGroupNames[] =
     "BIANCO\0RICCO\0GELATO\0PINNA\0SIRENA\0NOKI\0PIANTA\0"
-    "AIRSTRIP\0CORONA\0DELFINO\0ANY PERCENT";
+    "AIRSTRIP\0CORONA\0DELFINO\0PLAZA MOVEMENT";
 constexpr u8 kMenuGroupOffsets[] = {0, 7, 13, 20, 26, 33, 38, 45, 54, 61, 69};
 static_assert(sizeof(kMenuGroupOffsets) == GROUP_COUNT,
               "IL menu group labels changed");
@@ -523,7 +523,7 @@ const u32 kPbSaveTimeoutFrames = 300;
 const u32 kPbRetryDelayFrames = 300;
 
 static_assert(sizeof(Entry) == 6, "ILing entry layout changed");
-static_assert(kEntryCount == 132, "ILing entry count changed");
+static_assert(kEntryCount == 133, "ILing entry count changed");
 static_assert(kEntryCount <= 0x100, "recent IL entry index exceeds u8");
 static_assert(sizeof(kAnyPercentTheorySlots) == 55,
               "Any% theory route changed");
@@ -1003,8 +1003,14 @@ LevelWarp::Dest selectedStart(int entry) {
     }
     const int index = episodeChoiceIndex(entry);
     if (index < 0 || !sEpisodeChoices[index] ||
-        sEpisodeChoices[index] == original.gameInt3 + 1) return original;
+        (pbSlot(entry) != 112 && sEpisodeChoices[index] == original.gameInt3 + 1)) return original;
     const u8 episode = sEpisodeChoices[index] - 1;
+    if (pbSlot(entry) == 112) {
+        static const u8 scenarios[] = {0, 1, 5, 2, 7, 8, 9, 2};
+        original.episode = scenarios[episode];
+        if (episode == 7) original.gameInt3 |= LevelWarp::Dest::POST_CORONA;
+        return original;
+    }
     return {parentOrSelf(original.area), episode, episode};
 }
 
@@ -1244,7 +1250,7 @@ void applyPlazaOverlay(int entry) {
     TFlagManager *flags = TFlagManager::smInstance;
     flags->setBool(false, 0x30001);  // do not inherit a death return
 
-    const u8 scenario = kEntries[entry].start.episode;
+    const u8 scenario = sAttemptStart.episode;
     if (!sHavePlazaStoryFlags) {
         sPlazaStoryFlags = flags->Type1Flag.m1Type[0x70];
         sHavePlazaStoryFlags = true;
@@ -1274,7 +1280,8 @@ void applyPlazaOverlay(int entry) {
 
     switch (scenario) {
     case 2:
-        applyOverlayFlag(kPostCoronaFlag, true, true);
+        applyOverlayFlag(kPostCoronaFlag, pbSlot(entry) != 112 ||
+            (sAttemptStart.gameInt3 & LevelWarp::Dest::POST_CORONA), true);
         break;
     case 7:
         applyOverlayFlag(kPinnaUnlockFlag, false, true);
@@ -1294,9 +1301,7 @@ void restorePlazaSetupState() {
         TFlagManager::smInstance->setFlag(0x40000, sSetupShineCount);
     }
     if (sHaveSetupMovieFlag && TFlagManager::smInstance) {
-        const u8 scenario = validEntry(sSelectedEntry)
-                                ? kEntries[sSelectedEntry].start.episode
-                                : 1;
+        const u8 scenario = sAttemptStart.episode;
         TFlagManager::smInstance->setBool(sSetupMovieFlag,
                                            0x3000B + scenario);
     }
@@ -1308,7 +1313,7 @@ bool plazaOverlayRunsLive(int entry) {
     if (!isPlazaEntry(entry)) {
         return false;
     }
-    const u8 scenario = kEntries[entry].start.episode;
+    const u8 scenario = sAttemptStart.episode;
     return scenario == 0 || scenario == 1 || scenario == 5 || scenario == 7;
 }
 
@@ -1552,7 +1557,11 @@ void recordResult(int entry, s32 qf) {
     }
     Records::onILResult(entry, (u8)resultSlot, qf, igtCentis,
                         sRecordsEligible, raceSource, ghostQf, startingPbQf);
-    StageLoader::onILResult(entry, qf, sRecordsEligible);
+    const u8 rngReasons = Assist::KING_BOO_FRUIT | Assist::PETEY_NO_TORNADO |
+                          Assist::PETEY_ROUTE;
+    const bool streakEligible = !(sAssistReasons & ~rngReasons);
+    StageLoader::onILResult(entry, qf, StageLoader::mode() == StageLoader::MODE_STREAKING
+                                           ? streakEligible : sRecordsEligible);
     recordPB(entry, qf);
     SplitStats::onILResult(entry, qf);
 }
@@ -1584,7 +1593,16 @@ int count() { return kEntryCount; }
 
 bool canChooseEpisode(int entry) { return episodeChoiceIndex(entry) >= 0; }
 
+bool choosesPlazaState(int entry) { return validEntry(entry) && pbSlot(entry) == 112; }
+const char *plazaStateName(int choice) {
+    static const char names[] = "Bianco plant\0Shadow Mario\0Ricco / Gelato plants\0Peaceful\0Pinna unlock\0Yoshi unlock\0Flooded\0Post-Corona";
+    return PackedText::at(names, choice);
+}
 int selectedEpisode(int entry) {
+    if (choosesPlazaState(entry)) {
+        const u8 value = sEpisodeChoices[episodeChoiceIndex(entry)];
+        return value ? value - 1 : 3;
+    }
     return validEntry(entry) ? selectedStart(entry).gameInt3 : -1;
 }
 
@@ -1808,10 +1826,10 @@ const char *groupName(int entry) {
 int menuEntryAt(int position) {
     if (position < 0 || position >= kEntryCount) return -1;
     static const u8 kInsertAfter[] = {
-        4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84
+        4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84, 120
     };
     static const u8 kInsertedEntry[] = {
-        122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131
+        122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131, 132
     };
     int projected = 0;
     for (int entry = 0; entry < kEntryGelatoGbs; entry++) {
@@ -1971,7 +1989,8 @@ bool start(int entry, u32 approvedDiscardToken) {
             return false;
         }
         const LevelWarp::Dest source = {item.start.gameInt3, 0, 0};
-        const LevelWarp::Dest destination = {item.start.area, item.start.episode, 0};
+        const LevelWarp::Dest destination = {item.start.area, sAttemptStart.episode,
+            (u8)(sAttemptStart.gameInt3 & LevelWarp::Dest::POST_CORONA)};
         LevelWarp::warpFromGuarded(source, destination,
                                    approvedDiscardToken, true);
         return true;
@@ -2124,9 +2143,9 @@ void onStageSetup() {
     if (plaza) {
         restorePlazaSetupState();
         u8 &story = TFlagManager::smInstance->Type1Flag.m1Type[0x70];
-        story = plazaStoryProfile(kEntries[sSelectedEntry].start.episode, story);
+        story = plazaStoryProfile(sAttemptStart.episode, story);
         reapplyOverlayFlags();
-        if (kEntries[sSelectedEntry].start.episode == 8) {
+        if (sAttemptStart.episode == 8) {
             TMapObjBase *coverFruit = findCoverFruit();
             if (coverFruit) {
                 coverFruit->makeObjAppeared();
@@ -2285,7 +2304,7 @@ void update() {
             captureGhostRace(entry);
             Records::onILAttemptStarted(entry);
             if (entry >= 0) {
-                StageLoader::onILAttemptStarted(entry);
+                StageLoader::onILAttemptStarted(entry, sessionChildReset);
                 // A full-route split attempt cannot restart inside its child:
                 // its parent checkpoints are no longer reachable.
                 if (sessionChildReset)
@@ -2423,6 +2442,7 @@ void onSavestateLoaded() {
     sBannerFrames = 0;
     sHaveSetupShineCount = false;
     sHaveSetupMovieFlag = false;
+    const bool streakPractice = StageLoader::onSavestateLoaded();
     if (sRunning) StageLoader::invalidatePlaylistBest();
     if (!sHaveSavedAttempt) {
         if (sRunning) StageLoader::onILAttemptEnded();
@@ -2441,6 +2461,12 @@ void onSavestateLoaded() {
     // eligible. A genuine reset or stage load arms the next attempt normally.
     sAttemptState = sSavedAttemptState;
     sPinnaEygRestart = sSavedPinnaEygRestart;
+    if (streakPractice) {
+        sRecordsEligible = false;
+        sAssistReasons |= Assist::OTHER;
+        sAttemptSerial = gQFTTimer.attemptSerial();
+        return;
+    }
     clearAttempt();
 }
 

@@ -213,7 +213,16 @@
     X(SETTING_TAS_BANNER,                    "tas_banner")                    \
     X(SETTING_FREE_CAMERA_SMOOTHING,         "free_camera_smoothing")          \
     X(SETTING_GB_SKIP_DISPLAY,                "gb_skip_display")                \
-    X(SETTING_JUMP_DISPLAY,                   "jump_display")
+    X(SETTING_JUMP_DISPLAY,                   "jump_display")                 \
+    X(SETTING_SYSTEM_MESSAGES,                "system_messages")              \
+    X(SETTING_SAVESTATE_ERRORS,               "savestate_errors")             \
+    X(SETTING_STREAK_FAILURE_BANNER,          "streak_failure_banner")        \
+    X(SETTING_STREAK_FAILURE_X,               "streak_failure_x")             \
+    X(SETTING_STREAK_FAILURE_Y,               "streak_failure_y")             \
+    X(SETTING_STREAK_FAILURE_SIZE,            "streak_failure_size")          \
+    X(SETTING_STREAK_FAILURE_DURATION,        "streak_failure_duration")      \
+    X(SETTING_FAVORITES_EXTRA_8,              "favorites_extra_8")            \
+    X(SETTING_FAVORITES_EXTRA_9,              "favorites_extra_9")
 
 
 #endif  // SUSAMUNE_SETTINGS_LIST_H

@@ -27,10 +27,10 @@ typedef long long OSTime;
 extern "C" void*memcpy(void*d,const void*s,__SIZE_TYPE__ n){u8*a=(u8*)d;const u8*b=(const u8*)s;while(n--)*a++=*b++;return d;}
 extern "C" void*memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++=(u8)c;return d;}
 extern "C" char*strncpy(char*d,const char*s,__SIZE_TYPE__ n){char*out=d;while(n--)*d++=*s?*s++:0;return out;}
-enum{SETTING_SAVESTATE_FEEDBACK};
-static bool confirmations;
-struct Settings{bool getBool(int){return confirmations;}}gSettings;
-struct Menu{enum{kToastFrames=120};char message[48];u32 calls;void toast(const char*s){strncpy(message,s,47);message[47]=0;++calls;}}menu;
+enum{SETTING_SAVESTATE_FEEDBACK,SETTING_SAVESTATE_ERRORS,SETTING_SYSTEM_MESSAGES};
+static bool confirmations,errorsEnabled=true,systemEnabled=true;
+struct Settings{bool getBool(int id){return id==SETTING_SAVESTATE_FEEDBACK?confirmations:id==SETTING_SAVESTATE_ERRORS?errorsEnabled:systemEnabled;}}gSettings;
+struct Menu{enum{kToastFrames=120};char message[48];u32 calls;void toast(const char*s){if(!systemEnabled)return;strncpy(message,s,47);message[47]=0;++calls;}}menu;
 static Menu*gMenu=&menu;
 #define SET_STATUS(text) ((void)0)
 static u32 policyCalls,practiceCalls;
@@ -53,7 +53,7 @@ extern "C" {
 __declspec(dllexport) void reset(){
  memset(&sPool,0,sizeof(sPool));memset(sSlots,0,sizeof(sSlots));memset(&menu,0,sizeof(menu));
  memset(&manager,0,sizeof(manager));memset(take,0x55,sizeof(take));memset(ordinary,0x55,sizeof(ordinary));
- confirmations=ownReplay=false;policyCalls=practiceCalls=0;sLiveVideo={0,0};
+ confirmations=ownReplay=false;errorsEnabled=systemEnabled=true;policyCalls=practiceCalls=0;sLiveVideo={0,0};
  for(u32 i=0;i<3;++i){sPool.slots[i]={i*64,64};StoredState&s=sSlots[i];
   s.header.magic=kSnapshotMagic;s.header.version=kSnapshotVersion;s.header.game_version=SUSAMUNE_GAME_VERSION;
   s.header.area_id=(u8)(i+2);s.header.episode_id=(u8)(i+3);s.generation=i+101;s.packedSize=64;
@@ -67,6 +67,7 @@ __declspec(dllexport) u32 practice(u32 i){PracticeSession::SavestateData data={}
 __declspec(dllexport) void damage(u32 i){sSlots[i].metadataTag^=1;}
 __declspec(dllexport) u32 metadataSize(){return sizeof(StoredState);}
 __declspec(dllexport) u32 headerSize(){return sizeof(SavestateHeader);}
+__declspec(dllexport) void messages(u32 system,u32 errors){systemEnabled=system!=0;errorsEnabled=errors!=0;}
 __declspec(dllexport) void feedback(u32 enabled,u32 error){confirmations=enabled!=0;
  manager.feedback(error?"E:space":"saved",error?"State 3 won't fit - clear another slot":"State 3 saved");}
 __declspec(dllexport) const char*message(){return menu.message;}
@@ -142,6 +143,17 @@ class SavestateCheckpointContractTests(unittest.TestCase):
             lib.feedback(enabled, 0)
             self.assertEqual(lib.value(0), 0)
             self.assertEqual(lib.value(1), 120 if enabled else 0)
+
+    def test_error_and_system_message_switches_are_independent(self):
+        lib = self.libs['JP']
+        for system in (0, 1):
+            for errors in (0, 1):
+                lib.reset()
+                lib.messages(system, errors)
+                lib.feedback(1, 1)
+                self.assertEqual(lib.value(0), system and errors)
+                lib.feedback(1, 0)
+                self.assertEqual(lib.value(1), 120 if system else 0)
 
     def test_replay_tape_copy_policy_precedes_optional_owner_filter(self):
         lib = self.libs['JP']

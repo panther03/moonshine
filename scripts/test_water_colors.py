@@ -25,6 +25,7 @@ class WaterColorTests(unittest.TestCase):
 typedef unsigned char u8;typedef unsigned u32;
 extern "C" void *memset(void*d,int v,unsigned long long n){u8*p=(u8*)d;while(n--)*p++=(u8)v;return d;}
 struct GXColor{u8 r,g,b,a;};namespace JDrama{struct TGraphics{};}
+namespace GhostFludd {void draw(JDrama::TGraphics*);}
 struct TWaterGun{u8 data[0x1dbc];};struct TMario{TWaterGun*mFludd;};
 struct TMarDirector{enum{STATE_GAME_STARTING=2};int _260,mCurState;};
 struct TApplication{enum{CONTEXT_DIRECT_STAGE=5};int mContext;}gpApplication;
@@ -50,6 +51,10 @@ bool mem1(const void*p,u32 n){auto a=(__UINTPTR_TYPE__)p;return a>=0x81000000u&&
 }
 using namespace WaterColors;
 unsigned calls,cues[4],currentScenario;GXColor observed[4][7];
+unsigned ghostCalls,retailBeforeGhost;GXColor ghostPalette;
+void GhostFludd::draw(JDrama::TGraphics*){
+ ++ghostCalls;retailBeforeGhost=calls;ghostPalette=gModelWaterManagerWaterColor[0];
+}
 u8*base;void*e1;void*e2;void*e3;u8*infos;
 bool equal(GXColor a,GXColor b){return a.r==b.r&&a.g==b.g&&a.b==b.b&&a.a==b.a;}
 void pointer(void*p,unsigned off,void*v){*(u32*)((u8*)p+off)=(u32)(__UINTPTR_TYPE__)v;}
@@ -65,7 +70,7 @@ void retailParticles(void*,u32 cue,JDrama::TGraphics*){
  observe(cue);if(currentScenario==5&&(cue&2))pointer(infos,12,e2);
 }
 void initialize(void*memory,unsigned scenario){
- base=(u8*)memory;memset(base,0,0x30000);currentScenario=scenario;calls=0;
+ base=(u8*)memory;memset(base,0,0x30000);currentScenario=scenario;calls=ghostCalls=retailBeforeGhost=0;
  gpModelWaterManager=base;gpSplashManager=base+0x10000;gpMarioParticleManager=base+0x12000;
  gpMarioAddress=(TMario*)(base+0x20000);gpMarioAddress->mFludd=(TWaterGun*)(base+0x21000);
  director={1,2};gpMarDirector=&director;gpApplication.mContext=5;
@@ -117,6 +122,13 @@ extern "C" __declspec(dllexport) int run(void*memory,unsigned scenario){
  }else if(scenario==7){
   FluddColors::mask=0x300;drawSplash(gpSplashManager,0xc,0);
   if(calls!=2||!equal(observed[0][3],spray)||!equal(observed[1][3],{19,61,255,171}))return 8;
+ }else if(scenario==9){
+  FluddColors::mask=0x300;drawWater(gpModelWaterManager,0x80,0);
+  if(ghostCalls!=1||retailBeforeGhost!=1||!equal(ghostPalette,baseColor))return 13;
+  drawWater(gpModelWaterManager,8,0);
+  if(ghostCalls!=1)return 14;
+  gpApplication.mContext=0;drawWater(gpModelWaterManager,0x80,0);
+  if(ghostCalls!=1)return 15;
  }else{
   if(waterVtable[8]!=(void*)drawWater||splashVtable[8]!=(void*)drawSplash||particleVtable[8]!=(void*)drawParticles)return 9;
   splashVtable[8]=(void*)retailWater;onStageSetup();if(splashVtable[8]!=(void*)retailWater)return 10;
@@ -171,6 +183,9 @@ extern "C" __declspec(dllexport) int run(void*memory,unsigned scenario){
 
     def test_repeat_stage_install_preserves_foreign_hooks_and_stale_guard(self):
         self.assertEqual(self.lib.run(self.memory, 8), 0)
+
+    def test_ghost_water_follows_composite_with_retail_palette_restored(self):
+        self.assertEqual(self.lib.run(self.memory, 9), 0)
 
 
 if __name__ == "__main__":

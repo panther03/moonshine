@@ -591,16 +591,17 @@ class PlaylistFormatTests(unittest.TestCase):
             r"prepareArmedDeparture\(\)",
         )
         self.assertIn("if (holdPostSave) return 0;", on_directed)
-        self.assertIn('name = "Streak auto-reset";', menu)
-        self.assertIn("gSettings.cycle(SETTING_STREAK_AUTO_RESET, 1);", menu)
+        self.assertIn('if (option == OPTION_AUTO_RESET) return SETTING_STREAK_AUTO_RESET;', menu)
+        self.assertIn('name = Settings::name(setting);', menu)
+        self.assertIn("gSettings.cycle(setting, 1);", menu)
         self.assertIn(
-            "return mStreaking ? OPTION_BUILTIN + 1 : OPTION_AUTO_RESET;",
+            "return mStreaking ? 10 : OPTION_AUTO_RESET;",
             menu,
         )
         self.assertRegex(
             menu,
-            r"mStreaking\s*&&\s*row == OPTION_BUILTIN\s*\?\s*"
-            r"OPTION_AUTO_RESET",
+            r"mStreaking\s*&&\s*row >= OPTION_BUILTIN\s*\?\s*"
+            r"\(Option\)\(OPTION_AUTO_RESET \+ row - OPTION_BUILTIN\)",
         )
         update = stage_loader[
             stage_loader.index("void update()"):

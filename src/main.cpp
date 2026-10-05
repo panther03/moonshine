@@ -616,7 +616,5 @@ extern "C" void afterDraw() {
         if (!sessionModal &&
             (!gSettings.getBool(SETTING_DISABLE_WARPS) || WarpWheel::shown()))
             WarpWheel::draw();
-        if (gMenu)
-            gMenu->drawInvalidIlWarning();
     }
 }

@@ -182,9 +182,6 @@ struct IlPbSetting {
 const IlPbSetting kIlPbSettings[] = {
     {SETTING_ILING_RECORDING, 1, 0},
     {SETTING_STAGE_INTRO_SKIP, 0, 1},
-    {SETTING_KING_BOO_ALWAYS_FRUIT, 0, 1},
-    {SETTING_PETEY_NO_TORNADO, 0, 1},
-    {SETTING_PETEY_ROUTE, 0, 1},
     {SETTING_PINNA_HIDDEN_ITEMS, 0, 1},
     {SETTING_ENEMY_HURTBOXES, 0, 1},
     {SETTING_RICCO_RACE_CHECKPOINTS, 0, 1},
@@ -289,6 +286,8 @@ void Settings::init() {
         return;
     }
 
+    if (cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_TAIL)
+        DCInvalidateRange((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
     adopt(cfg);
     mSaveSeq = cfg->saveSeq;
 
@@ -342,6 +341,8 @@ void Settings::save() {
     if (cfg->flags & SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE)
         DCStoreRange(SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR, sizeof(SusamunePracticeDisplayStyleCfg));
 
+    if (cfg->flags & SUSAMUNE_CFG_FLAG_SETTINGS_TAIL)
+        DCStoreRange((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
     mSaveSeq     = cfg->saveSeq + 1;
     cfg->saveSeq = mSaveSeq;
     DCStoreRange((void *)cfg, 32);  // line 0 includes extraValues and saveSeq
@@ -539,7 +540,8 @@ void Settings::stageInto(volatile SusamuneCfg *cfg) {
 void Settings::set(SettingId id, u8 value) {
     if ((id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) ||
         (id >= SETTING_FAVORITES_EXTRA_0 && id <= SETTING_FAVORITES_EXTRA_7) ||
-        id == SETTING_RNG_FAVORITES) {
+        id == SETTING_RNG_FAVORITES || id == SETTING_FAVORITES_EXTRA_8 ||
+        id == SETTING_FAVORITES_EXTRA_9) {
         value &= 0x7F;
     } else {
         value = value % choiceCount(kSettingDescs[id]);
@@ -554,24 +556,19 @@ bool Settings::favoriteable(SettingId id) {
     return id >= 0 && id <= SETTING_BUTTSLIDE_DISPLAY && name(id)[0] != '\0';
 }
 
-bool Settings::favorite(SettingId id) const {
-    if (!favoriteable(id)) return false;
-    if (id >= 0 && id < SETTING_FAVORITES_0) {
-        const int index = (int)id;
-        const SettingId storage =
-            (SettingId)(SETTING_FAVORITES_0 + index / 7);
-        return (mValues[storage] & (1u << (index % 7))) != 0;
-    }
-    const int bit = rngFavoriteBit(id);
-    if (bit >= 0)
-        return (mValues[SETTING_RNG_FAVORITES] & (1u << bit)) != 0;
-    const int index = (int)id - (SETTING_FAVORITES_10 + 1);
-    return (mValues[SETTING_FAVORITES_EXTRA_0 + index / 7] &
-            (1u << (index % 7))) != 0;
+static int extraFavoriteIndex(SettingId id) {
+    // The UI-only Buttslide alias used wire bit 142 before these settings
+    // existed. Keep that bit, and give appended real settings the next bits.
+    const int wire = id == SETTING_BUTTSLIDE_DISPLAY ? 142 :
+                     id >= SETTING_SYSTEM_MESSAGES ? (int)id + 1 : (int)id;
+    return wire - (SETTING_FAVORITES_10 + 1);
+}
+static SettingId extraFavoriteBank(int index) {
+    return (SettingId)(index / 7 < 8 ? SETTING_FAVORITES_EXTRA_0 + index / 7 :
+                                      SETTING_FAVORITES_EXTRA_8 + index / 7 - 8);
 }
 
-void Settings::toggleFavorite(SettingId id) {
-    if (!favoriteable(id)) return;
+static unsigned favoriteLocation(SettingId id) {
     SettingId storage;
     int bit;
     if (id >= 0 && id < SETTING_FAVORITES_0) {
@@ -582,18 +579,32 @@ void Settings::toggleFavorite(SettingId id) {
         bit = rngFavoriteBit(id);
         storage = SETTING_RNG_FAVORITES;
         if (bit < 0) {
-            const int index = (int)id - (SETTING_FAVORITES_10 + 1);
-            storage = (SettingId)(SETTING_FAVORITES_EXTRA_0 + index / 7);
+            const int index = extraFavoriteIndex(id);
+            storage = extraFavoriteBank(index);
             bit = index % 7;
         }
     }
-    mValues[storage] ^= (u8)(1u << bit);
+    return ((unsigned)storage << 3) | bit;
+}
+
+bool Settings::favorite(SettingId id) const {
+    if (!favoriteable(id)) return false;
+    const unsigned location = favoriteLocation(id);
+    return (mValues[location >> 3] & (1u << (location & 7))) != 0;
+}
+
+void Settings::toggleFavorite(SettingId id) {
+    if (!favoriteable(id)) return;
+    const unsigned location = favoriteLocation(id);
+    mValues[location >> 3] ^= (u8)(1u << (location & 7));
     mDirty = true;
 }
 
 static_assert(SETTING_BUTTSLIDE_DISPLAY + 1 - (SETTING_FAVORITES_10 + 1) <=
-              (SETTING_FAVORITES_EXTRA_7 - SETTING_FAVORITES_EXTRA_0 + 1) * 7,
+              10 * 7,
               "new settings need more Shined storage");
+static_assert(SETTING_SYSTEM_MESSAGES == 142 && SETTING_FAVORITES_EXTRA_7 == 137,
+              "existing Shined bits must retain their wire identities");
 #pragma clang section text=""
 
 void Settings::cycle(SettingId id, int dir) {
@@ -621,11 +632,13 @@ const char *Settings::valueLabel(SettingId id) const {
     if (id == SETTING_JUMP_DISPLAY || id == SETTING_BUTTSLIDE_DISPLAY)
         return PackedText::at(kChoiceLabels, (mValues[SETTING_JUMP_DISPLAY] &
             (id == SETTING_JUMP_DISPLAY ? 1u : 2u)) != 0);
-    if (id >= SETTING_NATIVE_TIMER_X && id <= SETTING_NATIVE_TIMER_SCALE) {
-        int value = id == SETTING_NATIVE_TIMER_X ? ((int)mValues[id] - 16) * 10 :
-                    id == SETTING_NATIVE_TIMER_Y ? ((int)mValues[id] - 12) * 10 :
-                    50 + (int)mValues[id] * 10;
-        snprintf(numeric, sizeof(numeric), id == SETTING_NATIVE_TIMER_SCALE ? "%d pct" : "%d px", value);
+    if ((id >= SETTING_STREAK_FAILURE_X && id <= SETTING_STREAK_FAILURE_SIZE) ||
+        (id >= SETTING_NATIVE_TIMER_X && id <= SETTING_NATIVE_TIMER_SCALE)) {
+        const bool scale = id == SETTING_STREAK_FAILURE_SIZE || id == SETTING_NATIVE_TIMER_SCALE;
+        int value = scale ? 50 + (int)mValues[id] * 10 : (int)mValues[id] * 20;
+        if (id == SETTING_NATIVE_TIMER_X) value = ((int)mValues[id] - 16) * 10;
+        if (id == SETTING_NATIVE_TIMER_Y) value = ((int)mValues[id] - 12) * 10;
+        snprintf(numeric, sizeof(numeric), scale ? "%d pct" : "%d px", value);
         return numeric;
     }
     const SettingDesc &d = kSettingDescs[id];

@@ -22,7 +22,7 @@ class ShinedSettingsTests(unittest.TestCase):
         cls.names = re.findall(r'^S(?:BOOL|CHOICE)\("([^"]*)"', (ROOT / "src/settings_descs.inc").read_text(), re.M)
         production = ROOT / "src/settings.cpp"
         methods = "\n".join(function_source(production, signature) for signature in (
-            "int rngFavoriteBit(", "void Settings::set(", "bool Settings::favoriteable(",
+            "int rngFavoriteBit(", "static int extraFavoriteIndex(", "static SettingId extraFavoriteBank(", "static unsigned favoriteLocation(", "void Settings::set(", "bool Settings::favoriteable(",
             "bool Settings::favorite(", "void Settings::toggleFavorite(", "const char *Settings::name("))
         source = Path(cls.tmp.name) / "shined.cpp"
         source.write_text(r'''

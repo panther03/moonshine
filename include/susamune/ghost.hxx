@@ -4,6 +4,7 @@
 #include <Dolphin/types.h>
 #include "susamune/practice_input.h"
 #include "susamune/state_codec.hxx"
+#include "susamune/ghost_fludd.h"
 
 class Menu;
 class TMarDirector;
@@ -53,6 +54,9 @@ struct VisualState {
     u16 heldNameKey;
     u8 yoshi;
     bool visible;
+    SusamuneGhostFluddSample fludd;
+    u32 visualQf;
+    u32 recordingToken;
 };
 
 void init();

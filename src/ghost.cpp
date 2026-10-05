@@ -20,6 +20,7 @@
 #include "susamune/ghost_format.h"
 #include "susamune/ghost_clock.h"
 #include "susamune/ghost_model.hxx"
+#include "susamune/ghost_fludd.hxx"
 #include "susamune/ghost_storage.h"
 #include "susamune/iling.hxx"
 #include "susamune/input_display.hxx"
@@ -39,7 +40,8 @@ namespace {
 
 const s32 kPositionScale = SUSAMUNE_GHOST_POSITION_SCALE;
 const s32 kMaxPosition = 1000000;
-const s32 kMaxDurationQf = 107892;  // 15 minutes at 120000/1001 QF/s
+// Legacy imports and savestate prefixes keep their fifteen-minute bounds.
+const s32 kMaxDurationQf = SUSAMUNE_GHOST_MAX_DURATION_QF;
 const u16 kClockSettleObservations = 30;
 const u16 kMaxSegments = SUSAMUNE_GHOST_V4_MAX_SEGMENTS;
 const u32 kPlaybackTokenBit = 0x80000000u;
@@ -143,6 +145,15 @@ struct Track {
     bool pb;
     u8 failure;
 };
+
+#pragma clang section text=".foxtrot.text"
+SusamuneGhostInputSample &inputAt(const Track &track, u32 index) {
+    return *reinterpret_cast<SusamuneGhostInputSample *>(
+        reinterpret_cast<u8 *>(track.inputs) +
+        index * SusamuneGhostInputStride(track.formatVersion));
+}
+
+#pragma clang section text=""
 
 Track sRecord;
 Track sPlayback;
@@ -513,7 +524,7 @@ void clearTrack(Track &track) {
     track.routeParentArea = SUSAMUNE_GHOST_ROUTE_PARENT_NONE;
     track.routeFlags = 0;
     track.segmentCount = 0;
-    track.formatVersion = SUSAMUNE_GHOST_FILE_VERSION_V4;
+    track.formatVersion = SUSAMUNE_GHOST_FILE_VERSION_V6;
     track.attachmentFlags = 0;
     track.attachmentCount = 0;
     memset(track.attachments, 0, sizeof(track.attachments));
@@ -1015,14 +1026,15 @@ bool appendSample(s32 qf) {
     }
 
     if (sRecord.count != 0 &&
-        qf - static_cast<s32>(sRecord.startQf) > kMaxDurationQf) {
+        qf - static_cast<s32>(sRecord.startQf) >
+            static_cast<s32>(SusamuneGhostDurationLimit(sRecord.formatVersion))) {
         dropLastEmptySegment();
         sRecording = false;
         sClockPhase = CLOCK_FINISHED;
-        if (gMenu) gMenu->toast("Ghost: 15 minute cap");
+        if (gMenu) gMenu->toast("Ghost: recording limit reached");
         return false;
     }
-    if (sRecord.count >= kMaxSamples) {
+    if (sRecord.count >= SusamuneGhostPoseLimit(sRecord.formatVersion)) {
         dropLastEmptySegment();
         sRecording = false;
         sClockPhase = CLOCK_FINISHED;
@@ -1155,7 +1167,8 @@ bool finishTrackAt(s32 qf) {
     Segment *segment = lastSegment(sRecord);
     if (!segment || segment->sampleCount == 0 ||
         qf < static_cast<s32>(segment->startQf) ||
-        qf - static_cast<s32>(sRecord.startQf) > kMaxDurationQf) {
+        qf - static_cast<s32>(sRecord.startQf) >
+            static_cast<s32>(SusamuneGhostDurationLimit(sRecord.formatVersion))) {
         return false;
     }
 
@@ -1227,7 +1240,7 @@ bool finishTrackAt(s32 qf) {
     }
 
     const s32 delta = qf - sampleQf;
-    if (delta <= 0 || delta > 0xffff || sRecord.count >= kMaxSamples) {
+    if (delta <= 0 || delta > 0xffff || sRecord.count >= SusamuneGhostPoseLimit(sRecord.formatVersion)) {
         return false;
     }
     Sample terminal = sRecord.samples[sRecord.count - 1];
@@ -2106,7 +2119,8 @@ bool validSampleAnimation(const Sample &sample, u16 version,
         return !(packed & SUSAMUNE_GHOST_ANIMATION_RESERVED_MASK);
     }
     if (version != SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-        version != SUSAMUNE_GHOST_FILE_VERSION_V5) return false;
+        version != SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+        version != SUSAMUNE_GHOST_FILE_VERSION_V6) return false;
     const u8 yoshi = static_cast<u8>(
         (packed >> SUSAMUNE_GHOST_V4_YOSHI_SHIFT) &
         SUSAMUNE_GHOST_V4_YOSHI_MASK);
@@ -2119,6 +2133,7 @@ bool validSampleAnimation(const Sample &sample, u16 version,
               SUSAMUNE_GHOST_V4_ATTACHMENT_HELD_OVERFLOW)));
 }
 
+#pragma clang section text=".foxtrot.text"
 bool validCanonicalFile(const void *data, u32 size,
                         SusamuneGhostFileHeader *headerOut) {
     if (!data || !headerOut || size < SUSAMUNE_GHOST_FILE_HEADER_SIZE ||
@@ -2129,10 +2144,12 @@ bool validCanonicalFile(const void *data, u32 size,
     SusamuneGhostFileHeader header;
     memcpy(&header, data, sizeof(header));
     const bool v3 = header.version == SUSAMUNE_GHOST_FILE_VERSION_V3;
-    const bool v5 = header.version == SUSAMUNE_GHOST_FILE_VERSION_V5;
+    const bool v6 = header.version == SUSAMUNE_GHOST_FILE_VERSION_V6;
+    const bool v5 = header.version == SUSAMUNE_GHOST_FILE_VERSION_V5 || v6;
     const bool v4 = header.version == SUSAMUNE_GHOST_FILE_VERSION_V4 || v5;
     if (!v3 && !v4) return false;
-    const u32 supportedFeatures = v5
+    const u32 supportedFeatures = v6
+        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6 : v5
         ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5 : v4
         ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V4
         : SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V3;
@@ -2164,13 +2181,13 @@ bool validCanonicalFile(const void *data, u32 size,
                                   header.routeParentArea, header.routeFlags,
                                   header.routeVariant)) ||
         header.sampleCount < SUSAMUNE_GHOST_MIN_SAMPLE_COUNT ||
-        header.sampleCount > SUSAMUNE_GHOST_MAX_SAMPLE_COUNT ||
+        header.sampleCount > SusamuneGhostPoseLimit(header.version) ||
         header.startQf > SUSAMUNE_GHOST_QF_MAX ||
         header.endQf > SUSAMUNE_GHOST_QF_MAX ||
         header.endQf < header.startQf ||
         header.durationQf != header.endQf - header.startQf ||
         header.durationQf == 0 ||
-        header.durationQf > SUSAMUNE_GHOST_MAX_DURATION_QF ||
+        header.durationQf > SusamuneGhostDurationLimit(header.version) ||
         (header.resultQf != SUSAMUNE_GHOST_RESULT_QF_NONE &&
          (header.resultQf < header.startQf ||
           header.resultQf > header.endQf)) ||
@@ -2346,7 +2363,9 @@ bool validCanonicalFile(const void *data, u32 size,
         const u32 offset = extension.sampleDataOffset + sampleDataSize;
         const u8 *teaching = bytes + offset;
         const u32 teachingSize = size - offset;
-        if (!SusamuneGhostTeachingHeaderValid(teaching, teachingSize))
+        if (!SusamuneGhostTeachingHeaderValid(teaching, teachingSize) ||
+            teaching[5] != (v6 ? SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION
+                                : SUSAMUNE_GHOST_TEACHING_VERSION))
             return false;
         const u32 inputs = SusamuneGhostReadBe32(teaching + 8);
         const u32 splits = SusamuneGhostReadBe32(teaching + 12);
@@ -2355,9 +2374,10 @@ bool validCanonicalFile(const void *data, u32 size,
                 input, teachingSize - SUSAMUNE_GHOST_TEACHING_HEADER_SIZE))
             return false;
         u32 previous = 0;
-        for (u32 i = 0; i < inputs; ++i, input += 16) {
+        for (u32 i = 0; i < inputs; ++i, input += SusamuneGhostInputStride(header.version)) {
             if (!SusamuneGhostTeachingInputValid(input, header.startQf,
-                    header.endQf, previous, i == 0)) return false;
+                    header.endQf, previous, i == 0) ||
+                (v6 && !SusamuneGhostFluddValid(input + 16))) return false;
             previous = SusamuneGhostReadBe32(input);
         }
         const u32 route = splits ? ((u32)input[8] << 8) | input[9] : 0;
@@ -2374,6 +2394,7 @@ bool validCanonicalFile(const void *data, u32 size,
     return true;
 }
 
+#pragma clang section text=""
 void installCanonicalTrack(Track &track, const void *data,
                            const SusamuneGhostFileHeader &header) {
     clearTrack(track);
@@ -2403,17 +2424,15 @@ void installCanonicalTrack(Track &track, const void *data,
         memcpy(track.attachments, extension.attachments,
                sizeof(track.attachments));
     }
-    if (header.version == SUSAMUNE_GHOST_FILE_VERSION_V5) {
+    if (header.version >= SUSAMUNE_GHOST_FILE_VERSION_V5) {
         const u8 *teaching = bytes + extension.sampleDataOffset +
                             extension.sampleDataSize;
         track.inputCount = SusamuneGhostReadBe32(teaching + 8);
         track.splitCount = (u8)SusamuneGhostReadBe32(teaching + 12);
         track.teachingFlags = (u8)SusamuneGhostReadBe32(teaching + 16);
         const u8 *inputs = teaching + SUSAMUNE_GHOST_TEACHING_HEADER_SIZE;
-        memcpy(track.inputs, inputs, track.inputCount *
-                                      sizeof(SusamuneGhostInputSample));
-        memcpy(track.splits, inputs + track.inputCount *
-                                     sizeof(SusamuneGhostInputSample),
+        memcpy(track.inputs, inputs, track.inputCount * SusamuneGhostInputStride(header.version));
+        memcpy(track.splits, inputs + track.inputCount * SusamuneGhostInputStride(header.version),
                track.splitCount * sizeof(SusamuneGhostSplitSample));
     }
     track.valid = true;
@@ -2685,6 +2704,7 @@ void frameControl(bool frozen, bool assisted) {
 }
 
 void beforeDirect() {
+    GhostFludd::beginFrame();
     if (TMovieDirector *movie = RetailInput::movieDirector()) {
         // Watch is pose playback. Skip movies without feeding its raw exit bind
         // or accepting the movie's later dialogs.
@@ -3060,15 +3080,17 @@ void captureInput(const SusamunePracticeInput &input) {
         sRecord.segmentCount == 0) return;
     qf = SusamuneGhostClockMap(&sRecordClock, qf);
     if (sRecord.inputCount &&
-        sRecord.inputs[sRecord.inputCount - 1].qf >= (u32)qf) return;
+        inputAt(sRecord, sRecord.inputCount - 1).qf >= (u32)qf) return;
     if (!sRecording && (u32)qf != sRecord.endQf) return;
-    if (sRecord.inputCount == SUSAMUNE_GHOST_INPUT_MAX_COUNT) {
+    if (sRecord.inputCount >= SusamuneGhostInputLimit(sRecord.formatVersion)) {
         sRecord.teachingFlags |= SUSAMUNE_GHOST_TEACHING_INPUT_TRUNCATED;
         return;
     }
-    SusamuneGhostInputSample &sample = sRecord.inputs[sRecord.inputCount++];
+    SusamuneGhostInputSample &sample = inputAt(sRecord, sRecord.inputCount++);
     sample.qf = (u32)qf;
     sample.input = input;
+    if (sRecord.formatVersion == SUSAMUNE_GHOST_FILE_VERSION_V6)
+        GhostFludd::capture(*reinterpret_cast<SusamuneGhostFluddSample *>(&sample + 1));
 }
 
 void captureSplit(u16 route, u8 endpoint, s32 absoluteQf) {
@@ -3102,22 +3124,38 @@ bool comparisonSplit(u16 route, u8 endpoint, s32 *out) {
     return true;
 }
 
-static bool playbackInput(const Track &track, u16 segmentIndex,
-                          SusamunePracticeInput *out) {
-    if (!out || !track.inputs || !track.inputCount || sVisualQf < 0 ||
-        segmentIndex >= track.segmentCount) return false;
+static const SusamuneGhostInputSample *playbackObservation(
+        const Track &track, u16 segmentIndex) {
+    if (!track.inputs || !track.inputCount || sVisualQf < 0 ||
+        segmentIndex >= track.segmentCount) return nullptr;
     u32 lo = 0, hi = track.inputCount;
     while (lo < hi) {
         const u32 mid = lo + (hi - lo) / 2;
-        if (track.inputs[mid].qf <= (u32)sVisualQf) lo = mid + 1;
+        if (inputAt(track, mid).qf <= (u32)sVisualQf) lo = mid + 1;
         else hi = mid;
     }
-    if (!lo || track.inputs[lo - 1].qf <
-                    track.segments[segmentIndex].startQf) return false;
+    if (!lo || inputAt(track, lo - 1).qf <
+                    track.segments[segmentIndex].startQf) return nullptr;
     if ((track.teachingFlags & SUSAMUNE_GHOST_TEACHING_INPUT_TRUNCATED) &&
-        (u32)sVisualQf > track.inputs[track.inputCount - 1].qf) return false;
-    *out = track.inputs[lo - 1].input;
+        (u32)sVisualQf > inputAt(track, track.inputCount - 1).qf) return nullptr;
+    return &inputAt(track, lo - 1);
+}
+
+static bool playbackInput(const Track &track, u16 segmentIndex,
+                          SusamunePracticeInput *out) {
+    const SusamuneGhostInputSample *sample = playbackObservation(track, segmentIndex);
+    if (!sample || !out) return false;
+    *out = sample->input;
     return true;
+}
+
+static void visualFludd(const Track &track, u16 segmentIndex, VisualState &out) {
+    memset(&out.fludd, 0, sizeof(out.fludd));
+    out.visualQf = sVisualQf < 0 ? 0 : (u32)sVisualQf;
+    out.recordingToken = sPlaybackToken;
+    if (track.formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V6) return;
+    const SusamuneGhostInputSample *sample = playbackObservation(track, segmentIndex);
+    if (sample) memcpy(&out.fludd, sample + 1, sizeof(out.fludd));
 }
 
 void drawInputs(Menu *menu, u8 mode) {
@@ -3173,7 +3211,8 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
         track->segmentCount == 0 || track->segmentCount > kMaxSegments ||
         track->endQf < track->startQf ||
         (track->formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-         track->formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V5) ||
+         track->formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+         track->formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V6) ||
         track->attachmentCount >
             SUSAMUNE_GHOST_V4_ATTACHMENT_DESCRIPTOR_COUNT ||
         (track->attachmentFlags &
@@ -3185,18 +3224,20 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     const u32 sampleDataSize = track->count * sizeof(Sample);
     const u32 sampleDataOffset = SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET;
     u32 firstInput = 0, inputCount = track->inputCount;
-    while (inputCount && track->inputs[inputCount - 1].qf > track->endQf)
+    while (inputCount && inputAt(*track, inputCount - 1).qf > track->endQf)
         --inputCount;
     while (firstInput < inputCount &&
-           track->inputs[firstInput].qf < track->startQf) ++firstInput;
+           inputAt(*track, firstInput).qf < track->startQf) ++firstInput;
     inputCount -= firstInput;
     u8 splitCount = track->splitCount;
     while (splitCount && track->splits[splitCount - 1].qf > track->endQf)
         --splitCount;
     if (splitCount && track->splits[0].qf < track->startQf) splitCount = 0;
+    const bool fludd = track->formatVersion == SUSAMUNE_GHOST_FILE_VERSION_V6;
+    const u32 inputStride = SusamuneGhostInputStride(track->formatVersion);
     const bool teaching = inputCount != 0 || splitCount != 0;
     const u32 teachingSize = teaching
-        ? SUSAMUNE_GHOST_TEACHING_HEADER_SIZE + inputCount * 16u +
+        ? SUSAMUNE_GHOST_TEACHING_HEADER_SIZE + inputCount * inputStride +
               splitCount * 12u : 0;
     const u32 payloadSize = sampleDataSize +
         SUSAMUNE_GHOST_V4_SEGMENT_TABLE_SIZE + teachingSize;
@@ -3217,14 +3258,15 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
         u8 *section = bytes + sampleDataOffset + sampleDataSize;
         SusamuneGhostTeachingHeader info = {};
         info.magic = SUSAMUNE_GHOST_TEACHING_MAGIC;
-        info.version = SUSAMUNE_GHOST_TEACHING_VERSION;
+        info.version = fludd ? SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION
+                             : SUSAMUNE_GHOST_TEACHING_VERSION;
         info.headerSize = SUSAMUNE_GHOST_TEACHING_HEADER_SIZE;
         info.inputCount = inputCount;
         info.splitCount = splitCount;
         info.flags = track->teachingFlags;
         if (inputCount) memcpy(section + sizeof(info),
-                               track->inputs + firstInput, inputCount * 16u);
-        memcpy(section + sizeof(info) + inputCount * 16u, track->splits,
+                               &inputAt(*track, firstInput), inputCount * inputStride);
+        memcpy(section + sizeof(info) + inputCount * inputStride, track->splits,
                splitCount * 12u);
         info.dataChecksum = Checksum::crc32(section + sizeof(info),
                                             teachingSize - sizeof(info));
@@ -3234,12 +3276,14 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
     SusamuneGhostFileHeader header;
     memset(&header, 0, sizeof(header));
     header.magic = SUSAMUNE_GHOST_FILE_MAGIC;
-    header.version = teaching ? SUSAMUNE_GHOST_FILE_VERSION_V5
+    header.version = teaching ? (fludd ? SUSAMUNE_GHOST_FILE_VERSION_V6
+                                       : SUSAMUNE_GHOST_FILE_VERSION_V5)
                               : SUSAMUNE_GHOST_FILE_VERSION_V4;
     header.headerSize = SUSAMUNE_GHOST_FILE_HEADER_SIZE;
     header.fileSize = fileSize;
     header.requiredFeatures = teaching
-        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5
+        ? (fludd ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6
+                 : SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5)
         : SUSAMUNE_GHOST_REQUIRED_EXTENDED_CODEC;
     header.runFlags = track->runFlags;
     header.gameId = runningGameId();
@@ -3321,7 +3365,7 @@ bool exportLatest(void *out, u32 capacity, u8 sourceProfile,
 bool importPlayback(const void *data, u32 size, bool imported) {
     SusamuneGhostFileHeader header;
     if (!validCanonicalFile(data, size, &header)) return false;
-    if (header.version == SUSAMUNE_GHOST_FILE_VERSION_V5 && !sPlayback.inputs)
+    if (header.version >= SUSAMUNE_GHOST_FILE_VERSION_V5 && !sPlayback.inputs)
         return false;
     if (sPlayback.valid && sPlayback.pb && !sPlayback.saved &&
         sPlayback.pbToken != 0) {
@@ -3397,7 +3441,7 @@ bool importObserverTrack(const void *data, u32 size, bool secondary) {
           !sObserverPrimaryReady))) {
         return false;
     }
-    if (header.version == SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+    if (header.version >= SUSAMUNE_GHOST_FILE_VERSION_V5 &&
         !(secondary ? sRecord.inputs : sPlayback.inputs)) return false;
 
     if (secondary) {
@@ -3553,6 +3597,7 @@ bool visualState(VisualState *out) {
     out->heldNameKey = sGhostHeldNameKey;
     out->yoshi = sGhostYoshi;
     out->visible = sGhostVisible;
+    visualFludd(sPlayback, observerRunning() ? sObserverPrimarySegment : sPlaybackSegment, *out);
     return true;
 }
 
@@ -3568,6 +3613,7 @@ bool secondaryVisualState(VisualState *out) {
     out->heldNameKey = sSecondaryGhostHeldNameKey;
     out->yoshi = sSecondaryGhostYoshi;
     out->visible = sSecondaryGhostVisible;
+    visualFludd(sObserverSecondary, sObserverSecondarySegment, *out);
     return true;
 }
 
@@ -3824,13 +3870,14 @@ bool decodeSavedPrefix(const SavestateData &data, SavedPrefix *saved) {
         track.samples || track.segments || track.inputs ||
         !track.count || track.count > kMaxSamples ||
         !track.segmentCount || track.segmentCount > kMaxSegments ||
-        track.inputCount > SUSAMUNE_GHOST_INPUT_MAX_COUNT ||
+        track.inputCount > SusamuneGhostInputLimit(track.formatVersion) ||
         track.splitCount > SUSAMUNE_GHOST_SPLIT_MAX_COUNT ||
         track.attachmentCount > SUSAMUNE_GHOST_V4_ATTACHMENT_DESCRIPTOR_COUNT ||
         (track.attachmentFlags & ~SUSAMUNE_GHOST_V4_ATTACHMENT_FLAGS) ||
         (track.teachingFlags & ~SUSAMUNE_GHOST_TEACHING_INPUT_TRUNCATED) ||
         (track.formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-         track.formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V5) ||
+         track.formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+         track.formatVersion != SUSAMUNE_GHOST_FILE_VERSION_V6) ||
         !validRouteTuple(track.area, track.episode, track.routeParentArea,
                          track.routeFlags, track.parentEpisode) ||
         track.endQf < track.startQf || track.endQf > 0x7fffffffu ||
@@ -3898,7 +3945,7 @@ bool captureSavestate(SavestateData &out,
     if (!decodeSavedPrefix(out, &saved)) return false;
     spans[0] = {sRecord.samples, sRecord.count * static_cast<u32>(sizeof(Sample))};
     spans[1] = {sRecord.segments, sRecord.segmentCount * static_cast<u32>(sizeof(Segment))};
-    spans[2] = {sRecord.inputs, sRecord.inputCount * static_cast<u32>(sizeof(SusamuneGhostInputSample))};
+    spans[2] = {sRecord.inputs, sRecord.inputCount * SusamuneGhostInputStride(sRecord.formatVersion)};
     return true;
 }
 
@@ -3911,7 +3958,7 @@ bool savestateRestoreSpans(const SavestateData &data,
     if (!recorderBanksValid() || (saved.track.inputCount && !sRecord.inputs)) return false;
     spans[0] = {sRecord.samples, saved.track.count * static_cast<u32>(sizeof(Sample))};
     spans[1] = {sRecord.segments, saved.track.segmentCount * static_cast<u32>(sizeof(Segment))};
-    spans[2] = {sRecord.inputs, saved.track.inputCount * static_cast<u32>(sizeof(SusamuneGhostInputSample))};
+    spans[2] = {sRecord.inputs, saved.track.inputCount * SusamuneGhostInputStride(saved.track.formatVersion)};
     return true;
 }
 

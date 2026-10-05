@@ -156,3 +156,6 @@ SHINE_FULL_REDS("Sirena 2 Full Reds", 6, 1, 1, 48, GROUP_SIRENA, 132, 41)
 SHINE_FULL_REDS("Sirena 4 Full Reds", 6, 3, 3, 49, GROUP_SIRENA, 133, 43)
 SHINE_FULL_REDS("Noki 6 Full Reds", 9, 5, 5, 58, GROUP_NOKI, 134, 55)
 SHINE_FULL_REDS("Pianta 5 Full Reds", 8, 4, 4, 68, GROUP_PIANTA, 135, 64)
+
+// New movement IL uses the previously unused PB slot 112.
+PLAZA("Gelato Enter", 9, 2, FINISH_TRANSITION, TGameSequence::AREA_MAMMA, 112)

@@ -21,9 +21,10 @@
 #define MOONSHINE_LAYOUT_ERROR_INVALID 0x10001u
 #define MOONSHINE_LAYOUT_ERROR_CHANGED 0x10002u
 #define MOONSHINE_LAYOUT_ERROR_EMPTY 0x10003u
+#define MOONSHINE_LAYOUT_SETTINGS_COUNT 142u
 
 struct MoonshineLayoutPayload {
-    unsigned char settings[SUSAMUNE_CFG_TOTAL_SETTINGS];
+    unsigned char settings[MOONSHINE_LAYOUT_SETTINGS_COUNT];
     unsigned char reserved[2];
     struct SusamuneInputDisplayCfg input;
     struct SusamuneInputStyleCfg inputStyle;

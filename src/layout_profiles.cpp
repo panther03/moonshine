@@ -91,7 +91,7 @@ bool layoutSetting(SettingId id) {
 void capture(MoonshineLayoutPayload *out) {
     memset(out, 0, sizeof(*out));
     memset(out->settings, SUSAMUNE_CFG_UNSET, sizeof(out->settings));
-    for (int i = 0; i < SETTING_COUNT; ++i)
+    for (unsigned i = 0; i < MOONSHINE_LAYOUT_SETTINGS_COUNT; ++i)
         if (layoutSetting((SettingId)i)) out->settings[i] = gSettings.get((SettingId)i);
     gInputDisplay.stageInto(&out->input);
     out->input.startVisible = gInputDisplay.visible();
@@ -125,7 +125,7 @@ bool apply(const MoonshineLayoutPayload &layout) {
 #if IS_EMULATOR
     EmulatorPersistence::unlock();
 #endif
-    for (int i = 0; i < SETTING_COUNT; ++i)
+    for (unsigned i = 0; i < MOONSHINE_LAYOUT_SETTINGS_COUNT; ++i)
         if (layoutSetting((SettingId)i) && layout.settings[i] != SUSAMUNE_CFG_UNSET)
             gSettings.set((SettingId)i, layout.settings[i]);
     gInputDisplay.adopt(&layout.input);

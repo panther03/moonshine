@@ -21,6 +21,8 @@ int count();
 const char *label(int entry);
 const char *shortLabel(int entry);
 bool canChooseEpisode(int entry);
+bool choosesPlazaState(int entry);
+const char *plazaStateName(int choice);
 int selectedEpisode(int entry);
 void setEpisode(int entry, int episode);
 void resetEpisodeChoices();

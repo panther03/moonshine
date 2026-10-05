@@ -6846,6 +6846,7 @@ void SusamuneCfgInit(void)
 	BuildSectionName(QftDisplaySection, SUSAMUNE_INI_SECTION_QFT_DISPLAY, region);
 	BuildSectionName(CreationSection, SUSAMUNE_INI_SECTION_CREATION, region);
 
+	cfg->flags |= SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
 	for (i = 0; i < SUSAMUNE_CFG_TOTAL_SETTINGS; i++)
 		SusamuneCfgSetSetting(cfg, i, SUSAMUNE_CFG_UNSET);
 	for (i = 0; i < SUSAMUNE_CFG_MAX_BINDS; i++)
@@ -6913,7 +6914,7 @@ void SusamuneCfgInit(void)
 	                 SUSAMUNE_CFG_FLAG_MARIO_COLORS |
 	                 SUSAMUNE_CFG_FLAG_FLUDD_COLORS |
 	                 SUSAMUNE_CFG_FLAG_IL_EPISODES |
-	                 SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE |
+	                 SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE | SUSAMUNE_CFG_FLAG_SETTINGS_TAIL |
 	                 SUSAMUNE_CFG_FLAG_STATE_POOL_EXPANSION |
 	                 SUSAMUNE_CFG_FLAG_STATE_CODEC_RELOCATED |
 	                 MOONSHINE_LAYOUT_CFG_FLAG;
@@ -7009,6 +7010,7 @@ void SusamuneCfgInit(void)
 	sync_after_write(fluddColors, sizeof(*fluddColors));
 	sync_after_write(SUSAMUNE_IL_EPISODES_PHYS_PTR, sizeof(struct SusamuneILEpisodesCfg));
 	sync_after_write(SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR, sizeof(struct SusamunePracticeDisplayStyleCfg));
+	sync_after_write((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
 	sync_after_write(progress, sizeof(struct SusamuneProgressCfg));
 	sync_after_write(playlists, sizeof(struct SusamuneStagePlaylistsCfg));
 	sync_after_write(targets, sizeof(struct SusamuneStageTargetsCfg));
@@ -7052,6 +7054,7 @@ void SusamuneCfgService(void)
 	sync_before_read(FluddColorsBlock(), sizeof(struct SusamuneFluddColorsCfg));
 	sync_before_read(SUSAMUNE_IL_EPISODES_PHYS_PTR, sizeof(struct SusamuneILEpisodesCfg));
 	sync_before_read(SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR, sizeof(struct SusamunePracticeDisplayStyleCfg));
+	sync_before_read((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
 	seq = cfg->saveSeq;
 
 	ret = WriteIniFile(cfg);

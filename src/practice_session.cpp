@@ -345,6 +345,7 @@ bool findTakeStart() {
 }
 
 bool replayPresentationSetting(SettingId id) {
+    if (id >= SETTING_SYSTEM_MESSAGES && id < SETTING_COUNT) return true;
     if (id >= SETTING_FAVORITES_0 && id <= SETTING_FAVORITES_10) return true;
     if (id >= SETTING_FAVORITES_EXTRA_0 && id <= SETTING_FAVORITES_EXTRA_7) return true;
     switch (id) {

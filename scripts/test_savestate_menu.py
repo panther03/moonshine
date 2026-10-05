@@ -32,6 +32,7 @@ class SavestateMenuTests(unittest.TestCase):
         state_fields = state_class[state_class.rindex("    u8 mSel;"):state_class.rindex("};")]
         extras = (ROOT / "src/creation_extras.cpp").read_text()
         keyboard = "\n".join(line for line in extras.splitlines() if line.startswith("const char gCreation"))
+        keyboard += function(extras, "bool updateCreationKeyboardButtons(")
         keyboard += function(extras, "bool updateCreationKeyboardText(")
         bind_source = source[source.index("class BindsTab :"):]
         bind_methods = "\n".join(function(bind_source, name) for name in (
@@ -292,9 +293,9 @@ extern "C" __declspec(dllexport) int bindJump(int id,int direction){BindsTab tab
                 self.assertEqual(self.lib.clear(case), 0)
 
     def test_menu_navigation_remains_in_bounds(self):
-        for row in range(7):
-            self.assertEqual(self.lib.navigation(row, 1), (row + 1) % 7)
-            self.assertEqual(self.lib.navigation(row, -1), (row - 1) % 7)
+        for row in range(8):
+            self.assertEqual(self.lib.navigation(row, 1), (row + 1) % 8)
+            self.assertEqual(self.lib.navigation(row, -1), (row - 1) % 8)
 
     def test_sd_import_requires_release_and_pins_file_and_destination(self):
         for case in range(7):

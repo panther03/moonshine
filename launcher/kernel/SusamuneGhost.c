@@ -187,6 +187,7 @@ static u32 ValidationSize;
 static u32 ValidationOffset;
 static u32 ValidationPoseEnd;
 static u32 ValidationInputEnd;
+static u32 ValidationInputStride;
 static u32 ValidationTeachingCrc;
 static u32 ValidationPreviousInputQf;
 static u32 ValidationInputCount;
@@ -477,7 +478,8 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	version = ReadBe16(header + 4);
 	if (version != SUSAMUNE_GHOST_FILE_VERSION_V3 &&
 	    version != SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-	    version != SUSAMUNE_GHOST_FILE_VERSION_V5)
+	    version != SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+	    version != SUSAMUNE_GHOST_FILE_VERSION_V6)
 		return VALIDATE_FORWARD;
 	if (ReadBe16(header + 6) != SUSAMUNE_GHOST_FILE_HEADER_SIZE)
 		return VALIDATE_INVALID;
@@ -492,20 +494,24 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	required = ReadBe32(header + 24);
 	if (!SusamuneGhostRunFlagsValid(ReadBe32(header + 28)))
 		return VALIDATE_INVALID;
-	if ((required & ~(version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	if ((required & ~(version == SUSAMUNE_GHOST_FILE_VERSION_V6
+	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6
+	                    : version == SUSAMUNE_GHOST_FILE_VERSION_V5
 	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5
 	                    : version == SUSAMUNE_GHOST_FILE_VERSION_V4
 	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V4
 	                    : SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V3)) != 0)
 		return VALIDATE_FORWARD;
 	if (version >= SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-	    required != (version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	    required != (version == SUSAMUNE_GHOST_FILE_VERSION_V6
+	        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6
+	        : version == SUSAMUNE_GHOST_FILE_VERSION_V5
 	        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5
 	        : SUSAMUNE_GHOST_REQUIRED_EXTENDED_CODEC))
 		return VALIDATE_INVALID;
 
 	if (sampleCount < SUSAMUNE_GHOST_MIN_SAMPLE_COUNT ||
-	    sampleCount > SUSAMUNE_GHOST_MAX_SAMPLE_COUNT)
+	    sampleCount > SusamuneGhostPoseLimit(version))
 		return VALIDATE_INVALID;
 	segmentCount = ReadBe16(
 		header + SUSAMUNE_GHOST_V4_SEGMENT_COUNT_OFFSET);
@@ -526,7 +532,7 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	             SUSAMUNE_GHOST_V4_SAMPLE_DATA_SIZE_OFFSET) !=
 	        sampleCount * SUSAMUNE_GHOST_POSE_SAMPLE_SIZE ||
 	    payloadSize != fileSize - SUSAMUNE_GHOST_FILE_HEADER_SIZE ||
-	    (version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	    (version >= SUSAMUNE_GHOST_FILE_VERSION_V5
 	        ? fileSize < SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET +
 	            sampleCount * SUSAMUNE_GHOST_POSE_SAMPLE_SIZE +
 	            SUSAMUNE_GHOST_TEACHING_HEADER_SIZE ||
@@ -575,7 +581,7 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	if (startQf > SUSAMUNE_GHOST_QF_MAX || endQf > SUSAMUNE_GHOST_QF_MAX ||
 	    endQf < startQf || ReadBe32(header + 64) == 0 ||
 	    ReadBe32(header + 64) != endQf - startQf ||
-	    ReadBe32(header + 64) > SUSAMUNE_GHOST_MAX_DURATION_QF)
+	    ReadBe32(header + 64) > SusamuneGhostDurationLimit(version))
 		return VALIDATE_INVALID;
 	if (resultQf != SUSAMUNE_GHOST_RESULT_QF_NONE &&
 	    (resultQf < startQf || resultQf > endQf))
@@ -693,14 +699,17 @@ static enum ValidateResult BeginCanonicalValidation(const u8 *bytes,
 	ValidationPreviousInputQf = 0;
 	ValidationPreviousSplitQf = 0;
 	ValidationTeachingCrc = SUSAMUNE_GHOST_CRC32_INIT;
-	if (ReadBe16(bytes + 4) == SUSAMUNE_GHOST_FILE_VERSION_V5)
+	ValidationInputStride = SusamuneGhostInputStride(ReadBe16(bytes + 4));
+	if (ReadBe16(bytes + 4) >= SUSAMUNE_GHOST_FILE_VERSION_V5)
 	{
 		const u8 *teaching = bytes + ValidationPoseEnd;
-		if (!SusamuneGhostTeachingHeaderValid(teaching, size - ValidationPoseEnd))
+		if (!SusamuneGhostTeachingHeaderValid(teaching, size - ValidationPoseEnd) ||
+		    teaching[5] != (ReadBe16(bytes + 4) == SUSAMUNE_GHOST_FILE_VERSION_V6
+		        ? SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION : SUSAMUNE_GHOST_TEACHING_VERSION))
 			return VALIDATE_INVALID;
 		ValidationInputEnd = ValidationPoseEnd +
 		    SUSAMUNE_GHOST_TEACHING_HEADER_SIZE +
-		    ReadBe32(teaching + 8) * SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+		    ReadBe32(teaching + 8) * ValidationInputStride;
 	}
 
 	ValidationBytes = bytes;
@@ -751,7 +760,7 @@ static int ContinueCanonicalValidation(void)
 			stride = SUSAMUNE_GHOST_TEACHING_HEADER_SIZE;
 		} else if (ValidationOffset < ValidationInputEnd) {
 			phaseEnd = ValidationInputEnd;
-			stride = SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+			stride = ValidationInputStride;
 		} else {
 			phaseEnd = ValidationSize;
 			stride = SUSAMUNE_GHOST_SPLIT_SAMPLE_SIZE;
@@ -796,11 +805,13 @@ static int ContinueCanonicalValidation(void)
 			if (ValidationOffset < ValidationInputEnd) {
 				if (!SusamuneGhostTeachingInputValid(sample,
 				        ReadBe32(ValidationBytes + 56), ReadBe32(ValidationBytes + 60),
-				        ValidationPreviousInputQf, ValidationInputCount == 0))
+				        ValidationPreviousInputQf, ValidationInputCount == 0) ||
+				    (ValidationVersion == SUSAMUNE_GHOST_FILE_VERSION_V6 &&
+				     !SusamuneGhostFluddValid(sample + 16)))
 					return VALIDATE_INVALID;
 				ValidationPreviousInputQf = ReadBe32(sample);
 				ValidationInputCount++;
-				ValidationOffset += SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+				ValidationOffset += ValidationInputStride;
 			} else {
 				const u8 *first = ValidationBytes + ValidationInputEnd;
 				if (!SusamuneGhostTeachingSplitValid(sample,
@@ -889,7 +900,7 @@ static int ContinueCanonicalValidation(void)
 	if (ValidationOffset != ValidationSize)
 		return VALIDATE_INVALID;
 
-	if (ValidationVersion == SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+	if (ValidationVersion >= SUSAMUNE_GHOST_FILE_VERSION_V5 &&
 	    ((ValidationTeachingCrc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT) !=
 	        ReadBe32(ValidationBytes + ValidationPoseEnd + 20) ||
 	     ValidationInputCount != ReadBe32(ValidationBytes + ValidationPoseEnd + 8) ||

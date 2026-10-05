@@ -77,7 +77,10 @@ SusamuneMarioColorsCfg liveColors;SusamuneFluddColorsCfg liveFluddColors;Susamun
 #define SUSAMUNE_IL_EPISODES_LIVE_PTR (&liveEpisodes)
 #undef SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR
 #define SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR (&livePracticeDisplays)
-void DCStoreRange(void*p,u32 n){if((p==&liveColors&&n==32)||(p==&liveFluddColors&&n==64)||(p==&liveEpisodes&&n==64)||(p==&livePracticeDisplays&&n==128))flushes++;else mutexErrors++;}
+static u8 liveSettingsTail[SUSAMUNE_CFG_SETTINGS_TAIL_SIZE];
+#undef SUSAMUNE_CFG_SETTINGS_TAIL
+#define SUSAMUNE_CFG_SETTINGS_TAIL(cfg) (liveSettingsTail)
+void DCStoreRange(void*p,u32 n){if((p==&liveColors&&n==32)||(p==&liveFluddColors&&n==64)||(p==&liveEpisodes&&n==64)||(p==&livePracticeDisplays&&n==128)||(p==liveSettingsTail&&n==32))flushes++;else mutexErrors++;}
 '''
         code += keys + records + state + offsets
         code += r'''
@@ -100,7 +103,7 @@ int CARDClose(CARDFileInfo*){return 0;}
         for name in ("initBlank", "migrateLegacyPBs", "validPBValue", "migrateProfilesV1",
                      "migrateRecordCfg", "initMarioColors", "publishMarioColors", "initFluddColors", "publishFluddColors", "initILEpisodes", "publishILEpisodes", "publishPracticeDisplays", "checksum",
                      "valid", "validV1", "validV2", "validV3", "validV4", "validV5", "validV6",
-                     "validV7", "validV8", "validV9", "validV10", "migrateRecordV6", "migrateRecordV7", "newer", "initState",
+                     "validV7", "validV8", "validV9", "validV10", "validV11", "migrateRecordV6", "migrateRecordV7", "newer", "initState",
                      "writeRecordLocked", "loadRecords", "lock", "commit"):
             code += function(emulator, name)
         for name in ("ParseU16", "ParseQftU8", "ParseQftRgb", "InitMarioColorsDefaults",
@@ -138,7 +141,7 @@ API int migrate(){
 }
 void makeRecord(Record*r,unsigned version,unsigned generation,unsigned enabled){
  memset(r,0,sizeof(*r));r->magic=kRecordMagic;r->version=version;
- r->payloadSize=version==7?kCfgSizeV7:version==8?kRecordPayloadSizeV8:version==9?kRecordPayloadSizeV9:version==10?kRecordPayloadSizeV10:kRecordPayloadSize;r->generation=generation;r->gameVersion=1;
+ r->payloadSize=version==7?kCfgSizeV7:version==8?kRecordPayloadSizeV8:version==9?kRecordPayloadSizeV9:version==10?kRecordPayloadSizeV10:version==11?kRecordPayloadSizeV11:kRecordPayloadSize;r->generation=generation;r->gameVersion=1;
  initBlank(&r->cfg);initMarioColors(&r->marioColors);initFluddColors(&r->fluddColors);initILEpisodes(&r->ilEpisodes);SusamunePracticeDisplayStyleInit(&r->practiceDisplays);r->marioColors.enabled=enabled;
  if(version<10)r->cfg.flags&=~SUSAMUNE_CFG_FLAG_IL_EPISODES;
  if(version<11)r->cfg.flags&=~SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE;
@@ -153,7 +156,7 @@ API int cardRead(int test){
  if(test==3){makeRecord(&card[1],kRecordVersion,11,5);card[1].gameVersion=2;card[1].checksum=checksum(&card[1]);}
  if(test==4){makeRecord(&card[1],8,11,5);memset(&card[1].fluddColors,0xa5,64);card[1].checksum=checksum(&card[1]);}
  static Record scratch;if(loadRecords(0,&scratch)!=0)return 1;publishMarioColors();publishFluddColors();
- if(mutexErrors||flushes!=6||state.cfg.values[12]!=37||state.cfg.nativeTimerStyle.scale!=123)return 2;
+ if(mutexErrors||flushes!=7||state.cfg.values[12]!=37||state.cfg.nativeTimerStyle.scale!=123)return 2;
  if(!(state.cfg.flags&SUSAMUNE_CFG_FLAG_MARIO_COLORS))return 3;
  if(test==4){if(state.generation!=11||!state.initialSave||liveColors.enabled!=5||liveColors.rgb[4][1]!=91)return 6;
   if(liveFluddColors.enabled||liveFluddColors.rgb[9][2]!=255||liveFluddColors.magic!=SUSAMUNE_FLUDD_COLORS_MAGIC)return 7;
@@ -170,7 +173,7 @@ API int cardCommit(){
  if(ticket!=1||!copyBeforeUnlock||state.mutex.held||mutexErrors)return 2;
  if(state.fluddColors.enabled!=0x301||state.fluddColors.rgb[9][2]!=83)return 9;
  if(writeRecordLocked()!=0||!valid(&card[0])||card[0].marioColors.enabled!=0x65||card[0].marioColors.rgb[6][2]!=17)return 3;
- if(card[0].version!=11||card[0].payloadSize!=sizeof(SusamuneCfg)+288||card[0].fluddColors.enabled!=0x301||card[0].fluddColors.rgb[9][2]!=83)return 4;
+ if(card[0].version!=12||card[0].payloadSize!=sizeof(SusamuneCfg)+320||card[0].fluddColors.enabled!=0x301||card[0].fluddColors.rgb[9][2]!=83)return 4;
  if(!lock())return 5;liveColors.enabled=2;commit();writeFails=true;
  if(writeRecordLocked()!=CARD_ERROR_IOERROR||state.activeRecord!=0||state.generation!=1||!valid(&card[0]))return 6;
  writeFails=false;if(writeRecordLocked()!=0||state.activeRecord!=1||!valid(&card[1])||card[1].marioColors.enabled!=2)return 7;
@@ -180,7 +183,7 @@ API int cardEpisodes(int legacy){
  mutexErrors=flushes=0;checkCommit=false;writeFails=false;fileExists=true;initState();
  makeRecord(&card[0],kRecordVersion,20,0x45);makeRecord(&card[1],legacy?9:kRecordVersion,21,0x65);
  card[1].fluddColors.enabled=0x301;card[1].fluddColors.rgb[9][2]=17;
- for(unsigned i=0;i<20;i++)card[1].ilEpisodes.episodes[i]=(i%8)+1;
+ for(unsigned i=0;i<21;i++)card[1].ilEpisodes.episodes[i]=(i%8)+1;
  if(legacy)memset(&card[1].ilEpisodes,0xa5,64);
  card[1].checksum=checksum(&card[1]);
  const SusamuneMarioColorsCfg expectedMario=card[1].marioColors;
@@ -195,12 +198,12 @@ API int cardEpisodes(int legacy){
  for(unsigned i=0;i<32;i++)if(((u8*)&state.marioColors)[i]!=((const u8*)&expectedMario)[i])return 4;
  for(unsigned i=0;i<64;i++)if(((u8*)&state.fluddColors)[i]!=((const u8*)&expectedFludd)[i])return 5;
  publishILEpisodes();
- if(liveEpisodes.magic!=SUSAMUNE_IL_EPISODE_MAGIC||liveEpisodes.count!=20)return 6;
- for(unsigned i=0;i<20;i++)if(liveEpisodes.episodes[i]!=(legacy?0:(i%8)+1))return 7;
+ if(liveEpisodes.magic!=SUSAMUNE_IL_EPISODE_MAGIC||liveEpisodes.count!=21)return 6;
+ for(unsigned i=0;i<21;i++)if(liveEpisodes.episodes[i]!=(legacy?0:(i%8)+1))return 7;
  if(!(state.cfg.flags&SUSAMUNE_CFG_FLAG_IL_EPISODES))return 8;
- if(!lock())return 9;for(unsigned i=0;i<20;i++)liveEpisodes.episodes[i]=8-(i%8);commit();
- if(writeRecordLocked()!=0||!valid(&card[0])||card[0].version!=11)return 10;
- for(unsigned i=0;i<20;i++)if(card[0].ilEpisodes.episodes[i]!=8-(i%8))return 11;
+ if(!lock())return 9;for(unsigned i=0;i<21;i++)liveEpisodes.episodes[i]=8-(i%8);commit();
+ if(writeRecordLocked()!=0||!valid(&card[0])||card[0].version!=12)return 10;
+ for(unsigned i=0;i<21;i++)if(card[0].ilEpisodes.episodes[i]!=8-(i%8))return 11;
  card[0].ilEpisodes.episodes[19]^=1;if(valid(&card[0]))return 12;
  return mutexErrors?13:0;
 }
@@ -218,15 +221,15 @@ API int cardPracticeDisplays(unsigned version){
   expected=card[1].practiceDisplays;}
  card[1].checksum=checksum(&card[1]);
  if(sizeof(Record)!=8192||__builtin_offsetof(Record,practiceDisplays)!=32+kRecordPayloadSizeV10)return 1;
- if((version==10&&!validV10(&card[1]))||(version==11&&!valid(&card[1])))return 2;
+ if((version==10&&!validV10(&card[1]))||(version==11&&!validV11(&card[1]))||(version==12&&!valid(&card[1])))return 2;
  static Record scratch;if(loadRecords(0,&scratch)!=0)return 3;publishPracticeDisplays();
- if(state.generation!=21||state.initialSave!=(version<11)||mutexErrors)return 4;
+ if(state.generation!=21||state.initialSave!=(version<12)||mutexErrors)return 4;
  for(unsigned i=0;i<128;++i)if(((u8*)&livePracticeDisplays)[i]!=((u8*)&expected)[i])return 5;
  if(!(state.cfg.flags&SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE)||state.cfg.values[12]!=37)return 6;
  if(version>=10&&state.ilEpisodes.magic!=SUSAMUNE_IL_EPISODE_MAGIC)return 7;
  if(!lock())return 8;livePracticeDisplays.entries[1].textA=91;commit();expected.entries[1].textA=91;
  for(unsigned i=0;i<128;++i)if(((u8*)&state.practiceDisplays)[i]!=((u8*)&expected)[i])return 9;
- if(writeRecordLocked()!=0||!valid(&card[0])||card[0].version!=11||card[0].generation!=22)return 10;
+ if(writeRecordLocked()!=0||!valid(&card[0])||card[0].version!=12||card[0].generation!=22)return 10;
  initState();if(loadRecords(0,&scratch)!=0)return 11;publishPracticeDisplays();
  if(state.initialSave||state.generation!=22)return 12;
  for(unsigned i=0;i<128;++i)if(((u8*)&livePracticeDisplays)[i]!=((u8*)&expected)[i])return 13;
@@ -337,7 +340,7 @@ API int cardPracticeDisplays(unsigned version){
                 self.assertEqual(self.lib.cardEpisodes(legacy), 0)
 
     def test_three_practice_styles_roundtrip_and_legacy_records_ignore_padding(self):
-        for version in (7, 9, 10, 11):
+        for version in (7, 9, 10, 11, 12):
             with self.subTest(version=version):
                 self.assertEqual(self.lib.cardPracticeDisplays(version), 0)
 

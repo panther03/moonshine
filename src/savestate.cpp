@@ -992,11 +992,11 @@ void SavestateManager::feedback(const char *debug, const char *message) {
     SET_STATUS(debug);
     // A failed action must remain visible when routine confirmations are off.
     if (debug[0] == 'E' && debug[1] == ':' && gMenu) {
-        gMenu->toast(message);
+        if (gSettings.getBool(SETTING_SAVESTATE_ERRORS)) gMenu->toast(message);
         mFeedbackFrames = 0;
         return;
     }
-    if (!gSettings.getBool(SETTING_SAVESTATE_FEEDBACK)) {
+    if (!gSettings.getBool(SETTING_SYSTEM_MESSAGES) || !gSettings.getBool(SETTING_SAVESTATE_FEEDBACK)) {
         mFeedbackFrames = 0;
         return;
     }
@@ -2012,6 +2012,6 @@ void SavestateManager::draw(Menu *menu) {
                                JUtility::TColor(255, 200, 0, 255));
 #endif
     if (!menu || menu->shown() || mFeedbackFrames <= 0 ||
-        !gSettings.getBool(SETTING_SAVESTATE_FEEDBACK)) return;
+        !gSettings.getBool(SETTING_SYSTEM_MESSAGES) || !gSettings.getBool(SETTING_SAVESTATE_FEEDBACK)) return;
     gCreationExtras.drawSavestateFeedback(menu, mFeedback);
 }

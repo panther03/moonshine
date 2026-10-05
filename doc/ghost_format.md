@@ -1,8 +1,36 @@
 # Ghost file format
 
-Status: V5 adds recorded controller inputs and existing split endpoints. V3/V4
-remain readable with their original byte semantics; V1/V2 test ghosts remain
-unsupported. Files without teaching data continue to export as V4.
+Status: V6 adds FLUDD observations. V3/V4/V5 remain readable with their original
+byte semantics and 15-minute bounds; V1/V2 test ghosts remain unsupported.
+Files without teaching data continue to export as V4.
+
+## V6 FLUDD extension
+
+V6 keeps the V5 pose/segment/split layout and requires feature bits 7. Its SGTI
+section uses version 2, at most 36,000 inputs, and a 24-byte input stride: the
+unchanged 16-byte controller record followed by `SusamuneGhostFluddSample`.
+New recordings allow 71,928 QF (approximately ten minutes) and 17,983 poses.
+Legacy files retain their own duration, pose, and input bounds. Re-export keeps
+V6 observations; V5 inputs are never reinterpreted at the new stride.
+
+The eight observation bytes are: mode (nozzle 0–5 in bits 0–2, present bit 3,
+actually spraying bit 4), three signed emitter offsets relative to Mario in
+two-unit steps, three bytes packing unsigned 12-bit yaw and signed 12-bit pitch,
+and unsigned emission power. Angles use 4,096 steps per turn; pitch is bounded
+to a quarter-turn in either direction. An absent observation is all zero;
+non-firing observations have zero power. Unknown flags and invalid nozzles,
+angles, section/file pairings, lengths or checksums are rejected before install.
+
+Capture observes successful retail emission without changing its result or RNG.
+Each frame retains one accepted emitter observation (the last jet for multi-jet
+nozzles). Water particles are a bounded, visual recreation with ground splashes;
+they do not reproduce every original droplet, wall collision or sound and never
+interact with gameplay. Old ghosts have no invented FLUDD observations.
+
+Both legacy 54,000 × 16 and V6 36,000 × 24 streams fit the same 864,000-byte
+payload. All physical banks, mailbox extents and state capacity are unchanged.
+Snapshot 17's existing third ghost-prefix span uses the track's checked stride.
+Storage protocol 5 and its acknowledgement/ownership rules remain unchanged.
 
 ## V5 teaching extension
 

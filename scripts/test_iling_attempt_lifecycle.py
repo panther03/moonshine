@@ -126,7 +126,7 @@ API void ready(){sAttemptReady=true;}
         self.assertIn('drawCounter(menu);',compact)
         self.assertIn('sRuntime.mode == MODE_STREAKING',compact)
         self.assertIn('sRuntime.displayFrames > 0',compact)
-        self.assertIn('sRuntime.outcome >= OUTCOME_WRONG_ROUTE',compact)
+        self.assertIn('sRuntime.outcome >= OUTCOME_RESET',compact)
         self.assertIn('drawFullNotice(menu);',compact)
 
 if __name__=='__main__':unittest.main()

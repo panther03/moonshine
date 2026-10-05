@@ -1,4 +1,4 @@
-"""Build or verify the four V2.3.2 downloads from a checked, committed build.
+"""Build or verify the four V2.3.3 downloads from a checked, committed build.
 
 `release` and `verify` require current full-ISO and runtime receipts. `candidate`
 is the CI path without retail ISOs or a live emulator: it checks sources, host
@@ -24,13 +24,14 @@ from gen_japanese_ui import build as build_japanese_ui
 from gen_mod_bin import build_mod_bin, shared_int_define
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "V2.3.2 Frame By Frame"
+VERSION = "V2.3.3 Frame By Frame"
 TIMER_BLOB = "c31dda5ddc9d5b1a0cfc3fd985f8d907fa4f5890"
 HOST_TEST_FLOOR = 1239
 REGIONS = ("jp", "us", "pal")
 GAME_IDS = {"jp": 0x474D534A, "us": 0x474D5345, "pal": 0x474D5350}
 FILES = {
-    "CHANGELOG.md": "doc/release-notes-v2.3.2.md",
+    "CHANGELOG.md": "doc/release-notes-v2.3.3.md",
+    "TESTING.md": "doc/v2.3.3-testing.md",
     "guide-en.md": "doc/guide-en.md",
     "guide-ja.md": "doc/guide-ja.md",
     "tools/decode_crash.py": "scripts/decode_crash.py",
@@ -151,10 +152,10 @@ def checked_iso_row(row, manifest, layout, patch, asset, language):
                 "Full-ISO memory segment differs from the current build")
     if region == "jp":
         ui = row.get("japanese_ui", {})
-        require(ui.get("offset") == 0x4AA8C0 and ui.get("extent") == 0x1B000 and
+        require(ui.get("offset") == 0x4AA8C0 and ui.get("extent") == 0x19000 and
                 ui.get("outside_dol") is True and ui.get("ui_language") == language,
                 "Japanese raw-disc extent was not verified")
-        expected = asset if language == "ja" else bytes(0x1B000)
+        expected = asset if language == "ja" else bytes(0x19000)
         require(ui.get("bytes") == (len(asset) if language == "ja" else 0) and
                 ui.get("sha256") == sha(expected) and ui.get("zeroed") is (language == "en"),
                 "Japanese language asset differs from the selected download")
@@ -348,14 +349,14 @@ def archive_contents(args, report, patches):
         if language == "ja":
             app["Moonshine data/theme/background.png"] = flag
         label = "ENGLISH-MENUS" if language == "en" else "JAPANESE-MENUS"
-        name = f"Moonshine_{label}_Launcher_V2.3.2_US-PAL-JP.zip"
+        name = f"Moonshine_{label}_Launcher_V2.3.3_US-PAL-JP.zip"
         result[name] = (language, "launcher", app)
         selected = {name: data for name, data in patches.items()
                     if (name == "moonshine_jp_ja.bps") == (language == "ja")}
         dolphin = {**common, **selected, "language.txt": (language+"\n").encode("ascii"),
                    "README.md": render_readme("dolphin", language, report["build_checksum"], selected)}
         regions = "US-PAL-JP" if language == "en" else "JP"
-        name = f"Moonshine_{label}_Dolphin_V2.3.2_{regions}.zip"
+        name = f"Moonshine_{label}_Dolphin_V2.3.3_{regions}.zip"
         result[name] = (language, "dolphin", {"moonshine_dolphin/"+n: d for n, d in dolphin.items()})
     return result
 
@@ -392,7 +393,7 @@ def main(argv=None):
     parser.add_argument("--standard-proof", type=Path)
     parser.add_argument("--japanese-proof", type=Path)
     parser.add_argument("--runtime-proof", type=Path)
-    parser.add_argument("--out-dir", type=Path, default=ROOT/"build/release-v2.3.2")
+    parser.add_argument("--out-dir", type=Path, default=ROOT/"build/release-v2.3.3")
     args = parser.parse_args(argv)
     report, patches = validate_build(args)
     contents = archive_contents(args, report, patches)

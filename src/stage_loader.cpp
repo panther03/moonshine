@@ -153,6 +153,7 @@ struct StageLoaderRuntime {
     u8 playlistPbEligible;
     u8 playlistTimeOverflow;
     u8 activeActions[kQueueActionBytes];
+    u8 practiceLoaded;
 };
 
 struct StageLoaderQueues {
@@ -289,6 +290,7 @@ bool shinePublishPending() {
 }
 
 void resetSession() {
+    sRuntime.practiceLoaded = 0;
     sRuntime.totalObservedActiveQf = 0;
     sRuntime.completedQfTotal = 0;
     sRuntime.attemptSerial = 0;
@@ -523,7 +525,7 @@ void observeQf(s32 qf) {
 }
 
 void observeLive() {
-    if (sRuntime.state == STATE_RUNNING &&
+    if (!sRuntime.practiceLoaded && sRuntime.state == STATE_RUNNING &&
         sRuntime.attemptSerial == gQFTTimer.attemptSerial()) {
         observeQf(liveQf());
     }
@@ -606,6 +608,7 @@ bool requestCurrentPostSave() {
 }
 
 void beginAttempt(u32 serial) {
+    sRuntime.practiceLoaded = 0;
     sRuntime.attemptSerial = serial;
     clearShinePublishLatch();
     incrementSaturated(sRuntime.attempts);
@@ -634,7 +637,10 @@ void queueFailure(Outcome outcome, s32 qf) {
         sRuntime.progress = 0;
     }
     sRuntime.retryFrames = waitForSavebox ? 0 : kRetryDelayFrames;
-    sRuntime.displayFrames = kResultDisplayFrames;
+    static const u8 kFailureSecondsHalf[] = {0, 1, 2, 4, 6, 10};
+    sRuntime.displayFrames = sRuntime.mode == StageLoader::MODE_STREAKING
+        ? 15 * kFailureSecondsHalf[gSettings.get(SETTING_STREAK_FAILURE_DURATION)]
+        : kResultDisplayFrames;
     sRuntime.holdingDeparture = 0;
     sRuntime.state = waitForSavebox ? STATE_RETRY_SAVEBOX : STATE_RETRY_DELAY;
 }
@@ -947,6 +953,9 @@ void drawFinalModal(Menu *menu) {
 }
 
 void drawFullNotice(Menu *menu) {
+    const bool failure = sRuntime.mode == StageLoader::MODE_STREAKING &&
+                         sRuntime.outcome >= OUTCOME_RESET;
+    if (failure && !gSettings.getBool(SETTING_STREAK_FAILURE_BANNER)) return;
     char status[96];
     char time[24];
     time[0] = '\0';
@@ -1026,18 +1035,21 @@ void drawFullNotice(Menu *menu) {
         }
     }
 
-    const int x = 150;
-    const int y = 350;
-    const int w = 340;
-    const int h = 58;
+    const int scale = failure ? 50 + gSettings.get(SETTING_STREAK_FAILURE_SIZE) * 10 : 100;
+    const int w = 340 * scale / 100;
+    const int h = 58 * scale / 100;
+    int x = failure ? gSettings.get(SETTING_STREAK_FAILURE_X) * 20 : 150;
+    int y = failure ? gSettings.get(SETTING_STREAK_FAILURE_Y) * 20 : 350;
+    if (x + w > 640) x = 640 - w;
+    if (y + h > 480) y = 480 - h;
     menu->fillBox(x, y, w, h, Color(8, 12, 20, 210));
     menu->fillBox(x, y, 4, h, accentColor());
     const char *name = ILing::label(sRuntime.lastEntry);
-    int size = 15;
+    int size = 15 * scale / 100;
     while (size > 10 && Menu::textWidth(name, size) > w - 22) size--;
-    menu->drawText(name, x + 12, y + 7, size, size,
+    menu->drawText(name, x + 12 * scale / 100, y + 7 * scale / 100, size, size,
                    Color(255, 255, 255, 255));
-    menu->drawText(status, x + 12, y + 32, 13, 13,
+    menu->drawText(status, x + 12 * scale / 100, y + 32 * scale / 100, 13 * scale / 100, 13 * scale / 100,
                    Color(230, 236, 245, 255));
 }
 
@@ -1488,7 +1500,7 @@ void update() {
     requestCurrent();
 }
 
-void onILAttemptStarted(int entry) {
+void onILAttemptStarted(int entry, bool continuation) {
     if (!active() || sRuntime.state == STATE_COMPLETE ||
         sRuntime.state == STATE_BLOCKED) {
         return;
@@ -1496,9 +1508,9 @@ void onILAttemptStarted(int entry) {
 
     const u32 serial = gQFTTimer.attemptSerial();
     if (entry != expectedStartEntry()) {
-        if (sRuntime.state == STATE_RUNNING) {
+        if (sRuntime.state == STATE_RUNNING && !sRuntime.practiceLoaded) {
             queueFailure(OUTCOME_WRONG_ROUTE, -1);
-        } else if (sRuntime.state == STATE_WAITING ||
+        } else if (sRuntime.practiceLoaded || sRuntime.state == STATE_WAITING ||
                    sRuntime.state == STATE_WAITING_POST_SAVE) {
             sRuntime.state = STATE_RETRY_PENDING;
         }
@@ -1507,22 +1519,56 @@ void onILAttemptStarted(int entry) {
 
     if (sRuntime.state == STATE_RUNNING) {
         if (serial == sRuntime.attemptSerial) return;
-        queueFailure(OUTCOME_RESET, -1);
+        // Dying inside a loaded full route is still the loaded attempt. Only
+        // restarting at its true beginning makes the next finish count.
+        if (sRuntime.practiceLoaded && continuation) {
+            sRuntime.attemptSerial = serial;
+            return;
+        }
+        if (!sRuntime.practiceLoaded) queueFailure(OUTCOME_RESET, -1);
     }
     beginAttempt(serial);
 }
 
 void onILAttemptEnded() {
     if (sRuntime.state == STATE_RUNNING) {
-        queueFailure(OUTCOME_ENDED, liveQf());
+        if (sRuntime.practiceLoaded) sRuntime.state = STATE_RETRY_PENDING;
+        else queueFailure(OUTCOME_ENDED, liveQf());
     } else if (sRuntime.state == STATE_WAITING ||
                sRuntime.state == STATE_WAITING_POST_SAVE) {
         sRuntime.state = STATE_RETRY_PENDING;
     }
 }
 
+bool onSavestateLoaded() {
+    if (!active() || sRuntime.mode != MODE_STREAKING ||
+        sRuntime.state == STATE_COMPLETE || sRuntime.state == STATE_BLOCKED)
+        return false;
+    sRuntime.practiceLoaded = 1;
+    sRuntime.attemptSerial = gQFTTimer.attemptSerial();
+    sRuntime.lastObservedQf = -1;
+    sRuntime.state = STATE_RUNNING;
+    sRuntime.outcome = OUTCOME_NONE;
+    sRuntime.displayFrames = sRuntime.retryFrames = 0;
+    sRuntime.modalState = MODAL_NONE;
+    sRuntime.modalWaitForShineDemo = 0;
+    sRuntime.holdingDeparture = 0;
+    clearShinePublishLatch();
+    return true;
+}
+
 void onILResult(int entry, s32 qf, bool eligible) {
     if (sRuntime.state != STATE_RUNNING) return;
+    if (sRuntime.practiceLoaded) {
+        // A loaded finish retries without changing the live streak.
+        clearShinePublishLatch();
+        const bool waitForSavebox = gpMarioOriginal &&
+            gpMarioOriginal->mState == kMarioWinDemoState &&
+            !gSettings.getBool(SETTING_STREAK_AUTO_RESET);
+        sRuntime.retryFrames = waitForSavebox ? 0 : kRetryDelayFrames;
+        sRuntime.state = waitForSavebox ? STATE_RETRY_SAVEBOX : STATE_RETRY_DELAY;
+        return;
+    }
     if (!eligible) invalidatePlaylistBest();
     const int expected = expectedResultEntry();
     const bool episodeShine = sRuntime.mode == MODE_STREAKING &&
@@ -1574,7 +1620,7 @@ void draw(Menu *menu) {
     if (display == 1) {
         drawCounter(menu);
         if (sRuntime.mode == MODE_STREAKING && sRuntime.displayFrames > 0 &&
-            sRuntime.outcome >= OUTCOME_WRONG_ROUTE)
+            sRuntime.outcome >= OUTCOME_RESET)
             drawFullNotice(menu);
     } else if (display == 0 &&
                (sRuntime.displayFrames > 0 ||

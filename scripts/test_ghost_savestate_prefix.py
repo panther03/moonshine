@@ -43,6 +43,8 @@ struct Timer {
  bool consumeCustom(bool d,s32*out){++custom;death=d;*out=qf;stopped=true;return true;}
  bool consumeTransition(s32*out,u16*target){++transition;*out=qf;*target=2;stopped=true;return true;}
 } gQFTTimer;
+namespace GhostFludd {void capture(SusamuneGhostFluddSample& p) {
+ memset(&p,0,sizeof(p));p.mode=SUSAMUNE_GHOST_FLUDD_PRESENT;p.offset[1]=40;}}
 namespace ILing {
 enum { FINISH_SHINE, FINISH_TRANSITION, FINISH_PLANT, FINISH_DEATH };
 enum { SAVED_GHOST_END_NONE, SAVED_GHOST_END_TRANSITION, SAVED_GHOST_END_PLANT,
@@ -116,7 +118,7 @@ u8 captureHeldObject(Track&){return 0;}
 Segment *lastSegment(Track&track){return track.segmentCount?&track.segments[track.segmentCount-1]:0;}
 '''
         for signature in (
-            "void clearTrack(", "void bumpRecordToken()", "void bumpPlaybackToken()",
+            "SusamuneGhostInputSample &inputAt(", "void clearTrack(", "void bumpRecordToken()", "void bumpPlaybackToken()",
             "u32 nextPBToken()", "void clearRecord()", "void failRecording(",
             "void stopAll()", "void rewindPlayback()", "s32 recordQf(",
             "void updateRestoredRecorder()", "bool validRouteTuple(",
@@ -160,6 +162,7 @@ API void frame(s32 qf,s32 x,u32 button){using namespace Ghost;
  gQFTTimer.qf=qf;mario.mTranslation.x=(f32)x;recordQf(qf);appendSample(qf);
  sClockLastQf=qf;SusamunePracticeInput input={};input.buttons=(u16)button;captureInput(input);
 }
+API void legacy(){Ghost::sRecord.formatVersion=5;}
 API int capture(u32 slot){using namespace Ghost;return captureSavestate(states[slot],readSpans);}
 API int destinations(u32 slot){using namespace Ghost;return savestateRestoreSpans(states[slot],writeSpans);}
 API const void *source(u32 i){return Ghost::readSpans[i].data;}
@@ -181,8 +184,8 @@ API u32 get(u32 key){using namespace Ghost;switch(key){
  case 21:return sRestoredEndpoint;
  }return 0;}
 API s32 x(u32 index){return Ghost::sampleX(Ghost::sRecord.samples[index]);}
-API u32 inputQf(u32 index){return Ghost::sRecord.inputs[index].qf;}
-API u32 inputButton(u32 index){return Ghost::sRecord.inputs[index].input.buttons;}
+API u32 inputQf(u32 index){return Ghost::inputAt(Ghost::sRecord,index).qf;}
+API u32 inputButton(u32 index){return Ghost::inputAt(Ghost::sRecord,index).input.buttons;}
 API int pb(s32 qf){return Ghost::markCurrentRecordingPB(qf);}
 API void switchBanks(){using namespace Ghost;
  Sample*s=sRecord.samples;sRecord.samples=sPlayback.samples;sPlayback.samples=s;
@@ -270,6 +273,26 @@ API void continuation(){using namespace Ghost;
         self.assertEqual([self.lib.inputButton(i) for i in range(3)], [0x100, 0x200, 0x800])
         self.assertEqual([self.lib.get(i) for i in (2, 3, 4, 6, 9)], [0, 12, 12, 1, 1])
         self.assertEqual(self.lib.get(5) & 0x21, 0x21)
+
+    def test_old_and_new_input_prefixes_keep_their_own_stride(self):
+        for legacy, stride in ((False, 24), (True, 16)):
+            with self.subTest(legacy=legacy):
+                self.lib.reset()
+                if legacy:
+                    self.lib.legacy()
+                self.lib.frame(4, 10, 0x100)
+                self.lib.frame(8, 20, 0x200)
+                self.capture(0)
+                self.assertEqual(len(self.payloads[0][2]), 2 * stride)
+                if not legacy:
+                    for offset in (16, 40):
+                        self.assertEqual(self.payloads[0][2][offset:offset+8],
+                                         bytes((8, 0, 40, 0, 0, 0, 0, 0)))
+                self.lib.frame(12, 99, 0x400)
+                self.restore(0, 8)
+                self.lib.frame(12, 30, 0x800)
+                self.assertEqual([self.lib.inputButton(i) for i in range(3)],
+                                 [0x100, 0x200, 0x800])
         self.assertEqual(self.lib.get(5) & 0x80000000, 0)
         self.assertEqual(self.lib.pb(12), 0)
         self.assertEqual([self.lib.get(i) for i in (10, 11)], [0, 0])

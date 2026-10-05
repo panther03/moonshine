@@ -25,11 +25,11 @@ class FastAnyRouteTests(unittest.TestCase):
         code = r'''
 #include "susamune/stage_loader.hxx"
 typedef unsigned long long u64;
-namespace Assist {enum {OTHER=1};}
+namespace Assist {enum {OTHER=1,KING_BOO_FRUIT=2,PETEY_NO_TORNADO=4,PETEY_ROUTE=8};}
 struct TGameSequence {
 ''' + sequence[sequence.index("    enum Area {"):sequence.index("    void set(")] + r'''
 u8 mAreaID,mEpisodeID;u16 mFlags;};
-namespace LevelWarp {struct Dest{u8 area,episode,gameInt3;};
+namespace LevelWarp {struct Dest {enum {POST_CORONA=0x80};u8 area,episode,gameInt3;};
 ''' + parents + function(wheel, "LevelWarp::parentArea").replace("LevelWarp::", "") + "}\n"
         code += il[il.index("enum FinishKind {"):il.index("const int kSecretOnlyPbSlotFirst")]
         for name in ("kSecretOnlyPbSlotFirst", "kSecretOnlyPbSlotLast", "kEntryPinnaEyg",
@@ -46,7 +46,7 @@ bool sPinnaEygRestart,sRunning,sAttemptReady,sAwaitingStageSetup,sTransitionPend
 bool sChildRetryContinuation,sSecretOnly,sRecordsEligible,sNativeIgt;
 bool sBowserNozzleShieldActive,sBowserNozzleShieldPending;
 s32 sSavedBowserNozzleFlag;LevelWarp::Dest sAttemptStart;
-u8 sFinishKind,sAssistReasons,sEpisodeChoices[20];int sSelectedEntry;u32 sAttemptSerial;
+u8 sFinishKind,sAssistReasons,sEpisodeChoices[21];int sSelectedEntry;u32 sAttemptSerial;
 u8 liveReasons;int recordStarts,recordInvalid,pbWrites,recordResults,splitResults,splitInvalid;
 namespace Records {
 enum GhostRaceSource{GHOST_RACE_NONE,GHOST_RACE_PERSONAL,GHOST_RACE_IMPORTED};
@@ -74,7 +74,12 @@ bool recordPB(int,s32){++pbWrites;return true;}
 namespace ILing{bool sameEpisodeShine(int,int){return false;}}
 namespace StageLoader{
 ''' + loader[loader.index("enum SessionState {"):loader.index("enum ModalState {")] + r'''
-struct Runtime{u8 mode,activePlaylistId,activeCount,activeIndex,state;u32 attemptSerial;
+const int kMarioWinDemoState=0x1302,kRetryDelayFrames=15;
+struct Mario{int mState;}*gpMarioOriginal;
+enum {SETTING_STREAK_AUTO_RESET};
+struct Settings{bool getBool(int){return true;}}gSettings;
+void clearShinePublishLatch(){}
+struct Runtime{bool practiceLoaded;int retryFrames;u8 mode,activePlaylistId,activeCount,activeIndex,state;u32 attemptSerial;
 u32 eligibleCompletes;u64 completedQfTotal;int targetQf;bool playlistPbEligible;}sRuntime;
 struct Queues{u8 active[120];}sQueues;
 int successes,failures,lastOutcome;bool finalEligible;

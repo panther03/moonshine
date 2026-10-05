@@ -2,10 +2,12 @@
 #define SUSAMUNE_GHOST_TEACHING_H
 
 #include "susamune/practice_input.h"
+#include "susamune/ghost_fludd.h"
 
 /* V5 appends this bounded section after the unchanged V4 pose payload. */
 #define SUSAMUNE_GHOST_TEACHING_MAGIC 0x53475449u
 #define SUSAMUNE_GHOST_TEACHING_VERSION 1u
+#define SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION 2u
 #define SUSAMUNE_GHOST_TEACHING_HEADER_SIZE 32u
 #define SUSAMUNE_GHOST_INPUT_MAX_COUNT 54000u
 #define SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE 16u
@@ -48,22 +50,27 @@ static unsigned int SusamuneGhostReadBe32(const unsigned char *p) {
 
 static int SusamuneGhostTeachingHeaderValid(const unsigned char *p,
                                            unsigned int size) {
-    unsigned int inputs, splits;
+    unsigned int inputs, splits, stride, maximum;
     if (size < SUSAMUNE_GHOST_TEACHING_HEADER_SIZE ||
         SusamuneGhostReadBe32(p) != SUSAMUNE_GHOST_TEACHING_MAGIC ||
-        p[4] != 0 || p[5] != SUSAMUNE_GHOST_TEACHING_VERSION ||
+        p[4] != 0 || (p[5] != SUSAMUNE_GHOST_TEACHING_VERSION &&
+                     p[5] != SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION) ||
         p[6] != 0 || p[7] != SUSAMUNE_GHOST_TEACHING_HEADER_SIZE)
         return 0;
     inputs = SusamuneGhostReadBe32(p + 8);
     splits = SusamuneGhostReadBe32(p + 12);
-    return inputs <= SUSAMUNE_GHOST_INPUT_MAX_COUNT &&
+    stride = p[5] == SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION
+        ? SUSAMUNE_GHOST_V6_INPUT_SAMPLE_SIZE : SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+    maximum = p[5] == SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION
+        ? SUSAMUNE_GHOST_V6_INPUT_MAX_COUNT : SUSAMUNE_GHOST_INPUT_MAX_COUNT;
+    return inputs <= maximum &&
            splits <= SUSAMUNE_GHOST_SPLIT_MAX_COUNT &&
            !(SusamuneGhostReadBe32(p + 16) &
              ~SUSAMUNE_GHOST_TEACHING_INPUT_TRUNCATED) &&
            !SusamuneGhostReadBe32(p + 24) &&
            !SusamuneGhostReadBe32(p + 28) &&
            size == SUSAMUNE_GHOST_TEACHING_HEADER_SIZE +
-               inputs * SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE +
+               inputs * stride +
                splits * SUSAMUNE_GHOST_SPLIT_SAMPLE_SIZE;
 }
 

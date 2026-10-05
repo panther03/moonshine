@@ -10,31 +10,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RngIlWarningTests(unittest.TestCase):
-    def test_only_boss_controls_invalidate(self) -> None:
+    def test_boss_controls_do_not_invalidate_or_enable_red_warning(self) -> None:
         source = (ROOT / "src/rng_control.cpp").read_text(encoding="utf-8")
-        helper = re.search(
-            r"bool rngControlInvalidatesIl\(\)\s*\{(.*?)\n\}",
-            source,
-            re.DOTALL,
-        )
+        helper = re.search(r"bool rngControlInvalidatesIl\(\)\s*\{(.*?)\}", (ROOT / "include/susamune/rng_control.hxx").read_text(), re.S)
         self.assertIsNotNone(helper)
-        assert helper is not None
-        body = helper.group(1)
-        self.assertIn("SETTING_KING_BOO_ALWAYS_FRUIT", body)
-        self.assertIn("SETTING_PETEY_NO_TORNADO", body)
-        self.assertIn("SETTING_PETEY_ROUTE", body)
-        self.assertNotIn("SETTING_RICCO_CRANE_SPEED", body)
-        self.assertNotIn("SETTING_RICCO_FRUIT_MACHINE", body)
-        self.assertNotIn("SETTING_BIANCO_SKEETER_ROUTE", body)
-        apply = source.split("void rngControlApply()", 1)[1].split(
-            "bool rngControlInvalidatesIl()", 1
-        )[0]
-        self.assertIn("reasons |= Assist::KING_BOO_FRUIT", apply)
-        self.assertIn("reasons |= Assist::PETEY_NO_TORNADO", apply)
-        self.assertIn("reasons |= Assist::PETEY_ROUTE", apply)
-        self.assertIn("if (reasons) ILing::invalidateForAssist(reasons);", apply)
-        self.assertNotIn("SETTING_RICCO_CRANE_SPEED", apply)
-        self.assertNotIn("SETTING_RICCO_FRUIT_MACHINE", apply)
+        self.assertRegex(helper.group(1), r"return false;\s*$")
+        self.assertNotIn("ILing::invalidateForAssist", source)
+        self.assertIn("applyPeteyTornadoControl();", source)
 
     def test_native_hud_red_is_snapshotted_and_reversible(self) -> None:
         source = (ROOT / "src/creation_extras.cpp").read_text(encoding="utf-8")
@@ -57,45 +39,16 @@ class RngIlWarningTests(unittest.TestCase):
         savestate = (ROOT / "src/savestate.cpp").read_text(encoding="utf-8")
         self.assertIn("gCreationExtras.onSavestateLoaded();", savestate)
 
-    def test_creation_is_locked_and_overlays_are_red(self) -> None:
+    def test_rng_does_not_lock_editors_or_recolour_mod_overlays(self) -> None:
         source = (ROOT / "src/menu.cpp").read_text(encoding="utf-8")
-        self.assertIn(
-            "bool available() const override { return !rngControlInvalidatesIl(); }",
-            source,
-        )
-        self.assertIn('available ? nullptr : "Disabled"', source)
-        self.assertIn('toast("Disable boss RNG controls first")', source)
-        self.assertIn("color.r = 255;", source)
-        self.assertIn("color.g = 0;", source)
-        self.assertIn("color.b = 0;", source)
-        self.assertIn("color = warningText(color, mShown);", source)
-        self.assertIn("warningForeground(color, mShown)", source)
-        self.assertIn('const char *text = "INVALID IL";', source)
-        self.assertIn(
-            "if (invalidBefore != rngControlInvalidatesIl())", source
-        )
-
-    def test_invalid_label_is_the_last_overlay(self) -> None:
-        source = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
-        after_draw = source.split('extern "C" void afterDraw()', 1)[1]
-        self.assertLess(
-            after_draw.index("WarpWheel::draw();"),
-            after_draw.index("gMenu->drawInvalidIlWarning();"),
-        )
-
-    def test_invalid_label_stays_inside_sunshines_efb(self) -> None:
-        source = (ROOT / "src/menu.cpp").read_text(encoding="utf-8")
-        warning = source.split("void Menu::drawInvalidIlWarning()", 1)[1].split(
-            "// =====================================================================", 1
-        )[0]
-        self.assertIn("const int visibleBottom = 448;", warning)
-        self.assertIn(
-            "const int y = visibleBottom - size - bottomInset;", warning
-        )
-        self.assertIn(
-            'static_assert(bottomInset >= 2, "INVALID IL warning exceeds the EFB")',
-            warning,
-        )
+        self.assertNotIn("rngControlInvalidatesIl", source)
+        self.assertNotIn("Disable boss RNG controls first", source)
+        self.assertNotIn("drawInvalidIlWarning", source)
+        self.assertNotIn("drawInvalidIlWarning", (ROOT / "src/main.cpp").read_text())
+        settings = (ROOT / "src/settings.cpp").read_text()
+        blockers = settings.split("const IlPbSetting kIlPbSettings[] =", 1)[1].split("};", 1)[0]
+        for name in ("KING_BOO_ALWAYS_FRUIT", "PETEY_NO_TORNADO", "PETEY_ROUTE"):
+            self.assertNotIn("SETTING_" + name, blockers)
 
     def test_successful_spawn_and_regrab_invalidate(self) -> None:
         source = (ROOT / "src/actions.cpp").read_text(encoding="utf-8")

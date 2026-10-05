@@ -157,7 +157,8 @@ extern "C" __declspec(dllexport) void nameClose(int mask,int rename,int accept,i
         cls.tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.tmp.cleanup)
         source = Path(cls.tmp.name) / 'menu.cpp'
-        keyboard = function((ROOT / 'src/creation_extras.cpp').read_text(),
+        keyboard = function((ROOT / 'src/creation_extras.cpp').read_text(), 'bool updateCreationKeyboardButtons(')
+        keyboard += function((ROOT / 'src/creation_extras.cpp').read_text(),
                             'bool updateCreationKeyboardText(')
         source.write_text(shim + keyboard + raw + text + menu_update + body)
         dll = source.with_suffix('.dll')
