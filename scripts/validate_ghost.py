@@ -416,7 +416,7 @@ def validate_ghost(data: bytes) -> dict:
     version = struct.unpack_from(">H", data, 4)[0]
     if version not in (GHOST_VERSION_V3, GHOST_VERSION_V4, GHOST_VERSION_V5, GHOST_VERSION_V6):
         raise UnsupportedVersion(
-            f"unsupported ghost version {version}; reader supports 3, 4 and 5"
+            f"unsupported ghost version {version}; reader supports 3, 4, 5 and 6"
         )
     _require(len(data) >= GHOST_HEADER_SIZE, "truncated ghost header")
     fields = _GHOST_PREFIX.unpack_from(data)

@@ -21,7 +21,7 @@ IMPORT = "/Moonshine data/ghosts/import/"
 EXPORTS = r'''
 __declspec(dllexport) void reset(void) {
  testStoragePrefix=MOONSHINE_DATA_ROOT;
- testCount=writeCount=readBytes=readCalls=dirCalls=maxRead=writeBytes=0;
+ testCount=writeCount=readBytes=readCalls=dirCalls=maxRead=writeBytes=openCalls=0;
  failWriteAfter=0xFFFFFFFFu; failSync=false; directoryResult=FR_OK;
  memset(testFiles,0,sizeof(testFiles)); memset(&CatalogStorage,0,sizeof(CatalogStorage));
  memset(testPayload,0,sizeof(testPayload)); SusamuneGhostInit();
@@ -46,8 +46,9 @@ __declspec(dllexport) void submit(u32 command,u32 profile,u32 slot,const u8 *pay
  testMailbox.request.slot=slot; testMailbox.request.payloadSize=size;
  testMailbox.request.expectedGeneration=generation; testMailbox.request.requestSeq=GhostAckSeq+1;
  if(size) memcpy(testPayload,payload,size);
- readBytes=readCalls=dirCalls=maxRead=0;
+ readBytes=readCalls=dirCalls=maxRead=openCalls=0;
 }
+__declspec(dllexport) void requestFlags(u32 flags) { testMailbox.request.flags=flags; }
 __declspec(dllexport) int run(u32 limit) {
  for(u32 i=0;i<limit;++i) {
   u32 before=readBytes,dirs=dirCalls;
@@ -61,6 +62,9 @@ __declspec(dllexport) const void *response(void) { return &testMailbox.response;
 __declspec(dllexport) const void *payload(void) { return testPayload; }
 __declspec(dllexport) u32 maximumRead(void) { return maxRead; }
 __declspec(dllexport) u32 bytesRead(void) { return readBytes; }
+__declspec(dllexport) u32 reads(void) { return readCalls; }
+__declspec(dllexport) u32 opens(void) { return openCalls; }
+__declspec(dllexport) u32 directoryReads(void) { return dirCalls; }
 __declspec(dllexport) u32 filesWritten(void) { return writeCount; }
 __declspec(dllexport) void missingDirectory(void) { directoryResult=FR_NO_PATH; }
 __declspec(dllexport) void writeFailure(u32 after,u32 sync) { failWriteAfter=after; writeBytes=0; failSync=sync!=0; }
@@ -85,7 +89,8 @@ class GhostKernelPagingTests(unittest.TestCase):
         source = (ROOT / "launcher/kernel/SusamuneGhost.c").read_text()
         source = re.sub(r'^#include .*$', '', source, flags=re.M)
         (path / "kernel.c").write_text(
-            '#include "ghost_kernel_fixture.h"\n' + source + EXPORTS)
+            '#include "ghost_kernel_fixture.h"\n' + source + EXPORTS +
+            getattr(cls, "bridge_source", ""))
         result = subprocess.run([
             str(compiler), "--target=x86_64-pc-windows-msvc", "-shared", "-O1",
             "-fno-builtin", "-nostdlib", "-fuse-ld=lld", "-Xlinker", "/noentry",
@@ -121,9 +126,11 @@ class GhostKernelPagingTests(unittest.TestCase):
         ptr = self.dll.fileBytes(path.encode(), ctypes.byref(size))
         return ctypes.string_at(ptr, size.value) if ptr else None
 
-    def request(self, command, slot=0, *, profile=0, payload=b"", generation=0):
+    def request(self, command, slot=0, *, profile=0, payload=b"", generation=0, flags=0):
         self.dll.submit(command, profile, slot, payload, len(payload), generation)
-        self.assertGreaterEqual(self.dll.run(1000000), 0, "state machine stalled or exceeded its per-pass I/O budget")
+        self.dll.requestFlags(flags)
+        self.passes = self.dll.run(1000000)
+        self.assertGreaterEqual(self.passes, 0, "state machine stalled or exceeded its per-pass I/O budget")
         result = struct.unpack("<IHHIiIIIHH", ctypes.string_at(self.dll.response(), 32))
         self.assertEqual(result[1], 5)
         self.assertEqual(result[2] & 2, 0)
@@ -134,8 +141,8 @@ class GhostKernelPagingTests(unittest.TestCase):
         return {"status": result[4], "size": result[5], "generation": result[6],
                 "slot": result[7], "count": result[8]}
 
-    def page(self, offset=0, *, profile=0):
-        result = self.request(4 if profile == 0 else 6, offset, profile=profile)
+    def page(self, offset=0, *, profile=0, cached=False):
+        result = self.request(4, offset, profile=profile, flags=int(cached))
         self.assertEqual(result["status"], 0)
         raw = ctypes.string_at(self.dll.payload(), result["size"])
         self.assertEqual(len(raw), 3680)
@@ -163,7 +170,7 @@ class GhostKernelPagingTests(unittest.TestCase):
             rows, total, duration, _ = self.page(offset)
             self.assertEqual(total, len(ids))
             self.assertEqual(duration, len(ids) * 4)
-            self.assertLessEqual(self.dll.maximumRead(), 256)
+            self.assertLessEqual(self.dll.maximumRead(), 320)
             seen.extend(row[0] for row in rows)
         self.assertEqual(seen, ids)
         self.assertEqual(self.page(0)[0][0][1], 2)
@@ -341,6 +348,95 @@ class GhostKernelPagingTests(unittest.TestCase):
         self.add(PERSONAL + "g00a.sgh", envelope(build_ghost(), generation=0))
         self.assertEqual(self.page()[0][0][1], 0)
         self.assertEqual(self.request(2, generation=0)["status"], 0)
+
+    def test_adjacent_pages_use_no_disk_reads_and_do_not_limit_library(self):
+        ghost = build_ghost()
+        ids = list(range(45)) + list(range(48, 83))
+        for slot in ids:
+            self.add(PERSONAL + f"g{slot:02}a.sgh", envelope(ghost, slot=slot))
+        self.page()
+        self.assertEqual(self.dll.reads(), len(ids))
+        self.assertEqual(self.dll.bytesRead(), len(ids) * 320)
+        for offset in (16, 32, 48, 0):
+            rows, total, _, _ = self.page(offset, cached=True)
+            self.assertEqual([row[0] for row in rows], ids[offset:offset+16])
+            self.assertEqual(total, len(ids))
+            self.assertEqual((self.dll.reads(), self.dll.opens(), self.dll.directoryReads()), (0, 0, 0))
+            self.assertEqual(self.passes, 1)
+        self.assertEqual([row[0] for row in self.page(64, cached=True)[0]], ids[64:])
+        self.assertGreater(self.dll.reads(), 0)
+        self.assertEqual(self.page(64, cached=True)[1], len(ids))
+        self.assertEqual(self.dll.reads(), 0)
+        self.page(48, cached=True)
+        self.assertGreater(self.dll.reads(), 0)
+
+    def test_personal_and_import_cache_are_independent_but_profile_is_checked(self):
+        ghost = build_ghost()
+        for slot in range(35):
+            self.add(PERSONAL + f"g{slot:02}a.sgh", envelope(ghost, slot=slot))
+            self.add(IMPORT + f"ghost{slot}.smsghost", ghost)
+        self.page()
+        self.page(profile=4)
+        for profile in (0, 4):
+            self.assertEqual(self.page(16, profile=profile, cached=True)[1], 35)
+            self.assertEqual(self.dll.opens(), 0)
+        self.assertEqual(self.page(0, profile=1, cached=True)[1], 0)
+        self.assertGreater(self.dll.directoryReads(), 0)
+        self.assertEqual(self.page(16, cached=True)[1], 35)
+        self.assertGreater(self.dll.opens(), 0)
+        self.page(16, profile=4, cached=True)
+        self.assertEqual(self.dll.opens(), 0)
+
+    def test_refresh_and_mutations_invalidate_cached_metadata(self):
+        ghost = build_ghost()
+        self.add(PERSONAL + "g00a.sgh", envelope(ghost))
+        self.page()
+        self.add(PERSONAL + "g01a.sgh", envelope(ghost, slot=1))
+        self.assertEqual(self.page(cached=True)[1], 1)
+        self.assertEqual(self.dll.reads(), 0)
+        self.assertEqual(self.page()[1], 2)
+        self.assertGreater(self.dll.reads(), 0)
+        self.assertEqual(self.request(1, AUTO, payload=ghost)["status"], 0)
+        self.assertEqual(self.page(cached=True)[1], 3)
+        self.assertGreater(self.dll.reads(), 0)
+        self.assertEqual(self.request(3, 1, generation=1)["status"], 0)
+        self.assertEqual(self.page(cached=True)[1], 2)
+        self.assertGreater(self.dll.reads(), 0)
+
+    def test_failed_mutation_and_scan_never_publish_a_stale_or_partial_cache(self):
+        ghost = build_ghost()
+        self.add(PERSONAL + "g00a.sgh", envelope(ghost))
+        self.page()
+        self.dll.writeFailure(64+100, 0)
+        self.assertNotEqual(self.request(1, AUTO, payload=ghost)["status"], 0)
+        rows, total, _, _ = self.page(cached=True)
+        self.assertEqual(total, 2)
+        self.assertTrue(rows[1][3] & 2)
+        self.assertGreater(self.dll.reads(), 0)
+        self.dll.missingDirectory()
+        self.assertEqual(self.request(4)["status"], -7)
+        self.assertEqual(self.request(4, flags=1)["status"], -7)
+
+    def test_cached_import_identity_cannot_authorize_loading_or_deleting_a_replacement(self):
+        ghost = build_ghost()
+        self.add(IMPORT + "example.smsghost", ghost)
+        rows, _, _, _ = self.page(profile=4)
+        changed = build_ghost(ghost_id=123)
+        self.add(IMPORT + "example.smsghost", changed)
+        leaf = b"example.smsghost".ljust(96, b"\0")
+        for command in (2, 3):
+            self.assertEqual(self.request(command, profile=4, payload=leaf,
+                generation=rows[0][1])["status"], -4)
+            self.assertEqual(self.file(IMPORT + "example.smsghost"), changed)
+        self.assertEqual(self.page(profile=4, cached=True)[0][0][1],
+            struct.unpack_from(">I", changed, 12)[0])
+        self.assertGreater(self.dll.reads(), 0)
+
+    def test_cache_hint_is_list_only_and_unknown_flags_are_rejected(self):
+        self.assertEqual(self.request(4, flags=2)["status"], -1)
+        self.assertEqual(self.request(6, profile=4, flags=1)["status"], -1)
+        for command in (1, 2, 3, 5):
+            self.assertEqual(self.request(command, flags=1)["status"], -1)
 
 
 if __name__ == "__main__":

@@ -59,11 +59,12 @@ static int _sprintf(char *dst,const char *fmt,...) {
 struct TestFile { char path[128]; const u8 *bytes; u32 size; int live; int writable; };
 static struct TestFile testFiles[FIXTURE_FILES];
 static u8 writePool[FIXTURE_WRITES][FIXTURE_FILE_BYTES];
-static u32 testCount,writeCount,readBytes,readCalls,dirCalls,maxRead,failWriteAfter,writeBytes;
+static u32 testCount,writeCount,readBytes,readCalls,dirCalls,maxRead,failWriteAfter,writeBytes,openCalls;
 static bool failSync;
 static int directoryResult;
 static int lookup(const char *path) { for(u32 i=0;i<testCount;++i) if(testFiles[i].live && !strcmp(testFiles[i].path,path)) return (int)i; return -1; }
 static int f_open_char(FIL *f,const char *path,u32 flags) {
+ ++openCalls;
  int i=lookup(path);
  if(flags&(FA_CREATE_ALWAYS|FA_CREATE_NEW)) {
   if(i>=0 && (flags&FA_CREATE_NEW)) return FR_EXIST;

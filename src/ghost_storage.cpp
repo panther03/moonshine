@@ -74,7 +74,7 @@ u32 sOffsets[2];
 u16 sPendingCommand, sPendingProfile;
 u8 sPendingLoadDestination, sProfile;
 Identity sPendingIdentity, sLoadedIdentity;
-bool sLoadedValid, sAvailable, sReady[2], sRefreshQueued[2];
+bool sLoadedValid, sAvailable, sReady[2], sRefreshQueued[2], sCachedRefresh[2];
 bool sImportScanQueued, sTimedOut;
 
 void notify(const char *status) {
@@ -107,6 +107,7 @@ void observeProfile() {
     sOffsets[0] = 0;
     clearCatalog(false);
     sRefreshQueued[0] = sAvailable;
+    sCachedRefresh[0] = false;
 }
 
 const char *statusForCode(s32 status) {
@@ -245,9 +246,11 @@ bool sanitizeSlot(const SusamuneGhostSlotInfo &raw,
         raw.requiredFeatures ==
             SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V4 &&
         raw.sampleCodec == SUSAMUNE_GHOST_CODEC_POSE_ATTACHMENTS;
-    const bool canonicalV5 =
-        raw.canonicalVersion == SUSAMUNE_GHOST_FILE_VERSION_V5 &&
-        raw.requiredFeatures == SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5 &&
+    const bool canonicalTeaching =
+        ((raw.canonicalVersion == SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+          raw.requiredFeatures == SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5) ||
+         (raw.canonicalVersion == SUSAMUNE_GHOST_FILE_VERSION_V6 &&
+          raw.requiredFeatures == SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6)) &&
         raw.sampleCodec == SUSAMUNE_GHOST_CODEC_POSE_ATTACHMENTS;
     const bool foreign = raw.gameId != kGameId;
     const bool namespaceSane = imported
@@ -261,14 +264,14 @@ bool sanitizeSlot(const SusamuneGhostSlotInfo &raw,
     const bool sane = raw.status == 0 &&
         namespaceSane &&
         raw.discRevision == SUSAMUNE_GHOST_DISC_REVISION &&
-        (canonicalV3 || canonicalV4 || canonicalV5) &&
+        (canonicalV3 || canonicalV4 || canonicalTeaching) &&
         raw.recordingMode == SUSAMUNE_GHOST_RECORDING_POSE_QF &&
         raw.sampleIntervalQf == SUSAMUNE_GHOST_TRANSFORM_INTERVAL_QF &&
         raw.sampleCount >= SUSAMUNE_GHOST_MIN_SAMPLE_COUNT &&
-        raw.sampleCount <= SUSAMUNE_GHOST_MAX_SAMPLE_COUNT &&
+        raw.sampleCount <= SusamuneGhostPoseLimit(raw.canonicalVersion) &&
         raw.durationQf > 0 &&
-        raw.durationQf <= SUSAMUNE_GHOST_MAX_DURATION_QF &&
-        (canonicalV5 ? raw.payloadSize >= expectedCanonicalSize +
+        raw.durationQf <= SusamuneGhostDurationLimit(raw.canonicalVersion) &&
+        (canonicalTeaching ? raw.payloadSize >= expectedCanonicalSize +
                                           SUSAMUNE_GHOST_TEACHING_HEADER_SIZE
                      : raw.payloadSize == expectedCanonicalSize) &&
         raw.payloadSize <= SUSAMUNE_GHOST_MAX_FILE_SIZE &&
@@ -374,9 +377,11 @@ bool adoptCatalog(const SusamuneGhostStorageResponse &response) {
         sOffsets[imported] = ((page->totalCount - 1) /
             SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES) * SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES;
         sRefreshQueued[imported] = sAvailable;
+        sCachedRefresh[imported] = false;
     } else if (!page->totalCount && page->first) {
         sOffsets[imported] = 0;
         sRefreshQueued[imported] = sAvailable;
+        sCachedRefresh[imported] = false;
     }
     return true;
 #endif
@@ -409,7 +414,7 @@ bool responseShapeIsValid(const SusamuneGhostStorageResponse &response,
 #if !IS_EMULATOR
 void beginRequest(u16 command, u16 profile, u32 slot, u32 payloadSize,
                   u32 recordToken, const char *status, u32 durationQf = 0,
-                  u32 expectedGeneration = 0) {
+                  u32 expectedGeneration = 0, u32 flags = 0) {
     volatile SusamuneGhostStorageMailbox *mailbox = SUSAMUNE_GHOST_STORAGE_PPC_PTR;
     if (++sSequence == 0) sSequence++;
     CrashReport::note(SUSAMUNE_CRASH_EVENT_STORAGE, command, slot);
@@ -421,7 +426,7 @@ void beginRequest(u16 command, u16 profile, u32 slot, u32 payloadSize,
     mailbox->request.reserved = 0;
     mailbox->request.slot = slot;
     mailbox->request.payloadSize = payloadSize;
-    mailbox->request.flags = 0;
+    mailbox->request.flags = flags;
     mailbox->request.expectedGeneration = expectedGeneration;
     DCFlushRange((void *)&mailbox->request, sizeof(mailbox->request));
     sPendingCommand = command;
@@ -437,16 +442,19 @@ void beginRequest(u16 command, u16 profile, u32 slot, u32 payloadSize,
 }
 #endif
 
-bool beginRefresh(bool imported, u16 command = SUSAMUNE_GHOST_CMD_LIST) {
+bool beginRefresh(bool imported, u16 command = SUSAMUNE_GHOST_CMD_LIST,
+                  bool cached = false) {
     if (!sAvailable || sPendingCommand != SUSAMUNE_GHOST_CMD_NONE) return false;
     clearCatalog(imported);
 #if !IS_EMULATOR
     beginRequest(command, imported ? SUSAMUNE_GHOST_IMPORTED_PROFILE : sProfile,
                  sOffsets[imported], 0, 0,
-                 command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN ? kImportingShare : kRefreshing);
+                 command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN ? kImportingShare : kRefreshing,
+                 0, 0, cached ? SUSAMUNE_GHOST_REQUEST_CACHED_LIST : 0);
     return true;
 #else
     (void)command;
+    (void)cached;
     return false;
 #endif
 }
@@ -460,6 +468,7 @@ __attribute__((noinline)) bool requestImportedRefresh(u16 command) {
     if (command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN) sOffsets[1] = 0;
     clearCatalog(true);
     sRefreshQueued[1] = true;
+    sCachedRefresh[1] = false;
     sImportScanQueued = command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN;
     if (busy()) return true;
     sRefreshQueued[1] = false;
@@ -472,6 +481,7 @@ void queueNamespaceRefresh(u16 profile) {
     if (!imported && profile != sProfile) return;
     clearCatalog(imported);
     sRefreshQueued[imported] = sAvailable;
+    sCachedRefresh[imported] = false;
 }
 
 bool observerLoadDestination(u8 destination) {
@@ -723,6 +733,7 @@ void init() {
     sProfile = activeProfile();
     sOffsets[0] = sOffsets[1] = 0;
     sReady[0] = sReady[1] = sRefreshQueued[0] = sRefreshQueued[1] = false;
+    sCachedRefresh[0] = sCachedRefresh[1] = false;
     sLoadedValid = sAvailable = sImportScanQueued = sTimedOut = false;
     sStatus = IS_EMULATOR ? kDolphinUnavailable : kUnavailable;
 #if !IS_EMULATOR
@@ -762,8 +773,10 @@ void update() {
         sRefreshQueued[imported] = false;
         const u16 command = imported && sImportScanQueued
             ? SUSAMUNE_GHOST_CMD_IMPORT_SCAN : SUSAMUNE_GHOST_CMD_LIST;
+        const bool cached = sCachedRefresh[imported];
+        sCachedRefresh[imported] = false;
         if (imported) sImportScanQueued = false;
-        beginRefresh(imported != 0, command);
+        beginRefresh(imported != 0, command, cached);
         return;
     }
 }
@@ -787,13 +800,17 @@ bool refreshPage(bool imported, u32 offset) {
         sStatus = kBadSlot;
         return false;
     }
+    const bool cached = offset != sOffsets[imported] &&
+        (!sRefreshQueued[imported] || sCachedRefresh[imported]);
     sOffsets[imported] = offset;
     if (imported) sImportScanQueued = false;
     clearCatalog(imported);
     sRefreshQueued[imported] = true;
+    sCachedRefresh[imported] = cached;
     if (busy()) return true;
     sRefreshQueued[imported] = false;
-    return beginRefresh(imported);
+    sCachedRefresh[imported] = false;
+    return beginRefresh(imported, SUSAMUNE_GHOST_CMD_LIST, cached);
 }
 
 bool refresh() { return refreshPage(false, sOffsets[0]); }

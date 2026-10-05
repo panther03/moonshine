@@ -2,6 +2,8 @@
 
 ## Ghosts with FLUDD
 
+- Fixed the ghost library staying on **Not scanned** after saving a new ghost. Existing saved files do not need replacing.
+- Faster ghost-list loading and page changes: file headers are read together, and nearby pages reuse the checked list. Refresh still reads the SD again.
 - New ghosts record the selected nozzle, spray direction and when water actually fires. Ghosts show FLUDD and visual spray, with droplets and ground splashes that cannot affect gameplay.
 - The droplets are a visual recreation, not a recording of every original particle or collision.
 - New recordings last up to **10 minutes**. Existing ghosts remain readable, including older recordings over 10 minutes. Older files keep their original appearance and inputs; missing FLUDD data is not guessed.

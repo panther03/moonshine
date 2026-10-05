@@ -72,7 +72,8 @@ def rechecksum_ghost(raw: bytes) -> bytes:
 class StorageEnvelopeTests(unittest.TestCase):
     def test_old_and_future_canonical_versions_are_not_parsed(self) -> None:
         for version in (ghost_format.GHOST_VERSION_V1,
-                        ghost_format.GHOST_VERSION_V2, 6):
+                        ghost_format.GHOST_VERSION_V2,
+                        ghost_format.GHOST_VERSION_V6 + 1):
             with self.subTest(version=version), mock.patch.object(
                 ghost_format,
                 "validate_ghost",
@@ -94,10 +95,15 @@ class StorageEnvelopeTests(unittest.TestCase):
         )
         self.assertIsNone(parsed["ghost"])
 
-    def test_storage_and_share_accept_v3_and_v4(self) -> None:
+    def test_storage_share_and_import_accept_v3_through_v6(self) -> None:
+        from test_ghost_teaching import teaching_file
+
         for version in (ghost_format.GHOST_VERSION_V3,
-                        ghost_format.GHOST_VERSION_V4):
-            payload = build_ghost(version=version)
+                        ghost_format.GHOST_VERSION_V4,
+                        ghost_format.GHOST_VERSION_V5,
+                        ghost_format.GHOST_VERSION_V6):
+            payload = (build_ghost(version=version) if version < 5 else
+                       teaching_file(fludd=[bytes(8)] * 3 if version == 6 else None))
             parsed = storage.validate_slot_file(
                 envelope(payload),
                 game_id=ghost_format.REGION_GAME_IDS[0], profile=0, slot=0,
@@ -107,6 +113,8 @@ class StorageEnvelopeTests(unittest.TestCase):
                 payload, game_id=ghost_format.REGION_GAME_IDS[0], profile=0,
             )
             self.assertEqual(shared["version"], version)
+            imported = storage.validate_import_file(payload, running_region=2)
+            self.assertEqual(imported["version"], version)
 
         payload = build_ghost()
         for version in (ghost_format.GHOST_VERSION_V1,
@@ -127,6 +135,70 @@ class StorageEnvelopeTests(unittest.TestCase):
                         game_id=ghost_format.REGION_GAME_IDS[0],
                         profile=0,
                     )
+
+    def test_storage_retains_legacy_bounds_and_enforces_v6_bounds(self) -> None:
+        from test_ghost_teaching import teaching_file
+
+        for version in (3, 4, 5, 6):
+            limit = (ghost_format.V6_MAX_DURATION_QF if version == 6
+                     else ghost_format.MAX_DURATION_QF)
+            samples = [(0, 0, 0, 0, 0, 0, 0)] + [
+                (0, 0, 0, 0, 4, 0, 0)
+            ] * (limit // 4)
+            for extra in (False, True):
+                with self.subTest(version=version, over_limit=extra):
+                    base = build_ghost(
+                        version=min(version, 4), start_qf=0,
+                        samples=samples + ([(0, 0, 0, 0, 4, 0, 0)] if extra else []),
+                    )
+                    payload = (base if version < 5 else teaching_file(
+                        inputs=[], splits=[], base=base,
+                        fludd=[] if version == 6 else None,
+                    ))
+                    if extra:
+                        with self.assertRaises(storage.StorageError):
+                            storage.validate_slot_file(
+                                envelope(payload), game_id=0x474D534A,
+                                profile=0, slot=0,
+                            )
+                    else:
+                        parsed = storage.validate_slot_file(
+                            envelope(payload), game_id=0x474D534A,
+                            profile=0, slot=0,
+                        )
+                        self.assertEqual(parsed["duration_qf"], limit)
+
+    def test_v6_storage_validates_teaching_and_fludd_payload(self) -> None:
+        from test_ghost_teaching import mutate_section, teaching_file
+
+        payload = teaching_file(fludd=[bytes(8)] * 3)
+        for malformed in (
+            mutate_section(payload, 4, struct.pack(">H", 1)),
+            mutate_section(payload, 8, struct.pack(">I", 36_001)),
+            mutate_section(payload, 32 + 16, bytes([0, 1, 0, 0, 0, 0, 0, 0])),
+        ):
+            with self.assertRaises(storage.StorageError):
+                storage.validate_slot_file(
+                    envelope(malformed), game_id=0x474D534A, profile=0, slot=0,
+                )
+
+    def test_new_v6_bank_supersedes_legacy_but_corruption_falls_back(self) -> None:
+        from test_ghost_teaching import teaching_file
+
+        old = envelope(teaching_file(), generation=18)
+        new = envelope(teaching_file(fludd=[bytes(8)] * 3), generation=19)
+        selected = storage.choose_slot(
+            (new, old), game_id=0x474D534A, profile=0, slot=0,
+        )
+        self.assertEqual(selected[0], 0)
+        self.assertEqual(selected[1]["ghost"]["version"], 6)
+        corrupt = bytearray(new)
+        corrupt[-1] ^= 1
+        selected = storage.choose_slot(
+            (bytes(corrupt), old), game_id=0x474D534A, profile=0, slot=0,
+        )
+        self.assertEqual(selected[0], 1)
+        self.assertEqual(selected[1]["ghost"]["version"], 5)
 
     def test_storage_rejects_malformed_v3_pose_samples(self) -> None:
         base = build_ghost(version=ghost_format.GHOST_VERSION_V3)
@@ -280,8 +352,12 @@ class StorageEnvelopeTests(unittest.TestCase):
                 "InvalidateRequestCatalog();",
                 source_function(kernel, function),
             )
+        start = source_function(kernel, "StartRequest")
         self.assertIn(
-            "Request.flags != 0", source_function(kernel, "StartRequest")
+            "(Request.flags & ~SUSAMUNE_GHOST_REQUEST_CACHED_LIST) != 0", start
+        )
+        self.assertIn(
+            "Request.flags != 0 && Request.command != SUSAMUNE_GHOST_CMD_LIST", start
         )
         self.assertNotIn(
             "ALLOW_OVERWRITE",
@@ -291,17 +367,13 @@ class StorageEnvelopeTests(unittest.TestCase):
             ),
         )
 
-    def test_kernel_and_ppc_catalog_accept_v3_and_v4_pose_files(self) -> None:
+    def test_kernel_and_ppc_catalog_accept_v3_through_v6_pose_files(self) -> None:
         root = Path(__file__).resolve().parents[1]
         kernel_path = root / "launcher/kernel/SusamuneGhost.c"
         ppc_path = root / "src/ghost_storage.cpp"
         header = source_function(kernel_path, "ValidateCanonicalHeader")
-        self.assertIn(
-            "version != SUSAMUNE_GHOST_FILE_VERSION_V3", header
-        )
-        self.assertIn(
-            "version != SUSAMUNE_GHOST_FILE_VERSION_V4", header
-        )
+        for version in (3, 4, 5, 6):
+            self.assertIn(f"version != SUSAMUNE_GHOST_FILE_VERSION_V{version}", header)
         self.assertNotIn("SUSAMUNE_GHOST_FILE_VERSION_V1", header)
         self.assertNotIn("SUSAMUNE_GHOST_FILE_VERSION_V2", header)
         self.assertLess(
@@ -331,6 +403,8 @@ class StorageEnvelopeTests(unittest.TestCase):
         for required in (
             "SUSAMUNE_GHOST_FILE_VERSION_V3",
             "SUSAMUNE_GHOST_FILE_VERSION_V4",
+            "SUSAMUNE_GHOST_FILE_VERSION_V5",
+            "SUSAMUNE_GHOST_FILE_VERSION_V6",
             "SUSAMUNE_GHOST_RECORDING_POSE_QF",
             "SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET",
             "SUSAMUNE_GHOST_POSE_SAMPLE_SIZE",

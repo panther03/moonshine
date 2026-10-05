@@ -66,9 +66,11 @@ def _validate_canonical_ghost(
     if len(raw) >= 6 and raw[:4] == ghost_format.GHOST_MAGIC:
         version = struct.unpack_from(">H", raw, 4)[0]
         if version not in (ghost_format.GHOST_VERSION_V3,
-                           ghost_format.GHOST_VERSION_V4, ghost_format.GHOST_VERSION_V5):
+                           ghost_format.GHOST_VERSION_V4,
+                           ghost_format.GHOST_VERSION_V5,
+                           ghost_format.GHOST_VERSION_V6):
             raise UnsupportedStorage(
-                f"unsupported ghost version {version}; storage supports 3, 4 and 5"
+                f"unsupported ghost version {version}; storage supports 3, 4, 5 and 6"
             )
     try:
         if running_region is None:

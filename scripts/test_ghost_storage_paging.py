@@ -48,6 +48,8 @@ static u8 payload[SUSAMUNE_GHOST_STORAGE_PAYLOAD_SIZE];
 static int testProfile,playbackImports,observerImports,observerStops,checkpoints;
 static bool pinned,preparing,hasTrack,acceptImport;
 static u32 savedToken,saveDuration,selectedToken;
+static const u8 *canonicalExport;
+static u32 canonicalExportSize;
 void DCInvalidateRange(void*,u32){}
 void DCFlushRange(void*,u32){}
 namespace CrashReport { void note(u32,u32,u32){} }
@@ -68,6 +70,10 @@ namespace Ghost {
         if(size)out[0]=0;*token=selectedToken;return hasTrack;
     }
     bool exportLatest(void *out,u32,u8,const char*,u32 *size,u32 *token){
+        if(canonicalExport) {
+            memcpy(out,canonicalExport,canonicalExportSize);
+            *size=canonicalExportSize;*token=selectedToken;return hasTrack;
+        }
         memset(out,0,SUSAMUNE_GHOST_FILE_HEADER_SIZE);
         ((SusamuneGhostFileHeader*)out)->durationQf=1234;
         *size=SUSAMUNE_GHOST_FILE_HEADER_SIZE;*token=selectedToken;return hasTrack;
@@ -88,6 +94,7 @@ static void reset() {
     testProfile=playbackImports=observerImports=observerStops=checkpoints=0;
     pinned=false;preparing=hasTrack=acceptImport=true;
     savedToken=saveDuration=0;selectedToken=42;
+    canonicalExport=nullptr;canonicalExportSize=0;
     mailbox.response.responseMagic=SUSAMUNE_GHOST_STORAGE_MAGIC;
     mailbox.response.protocolVersion=SUSAMUNE_GHOST_STORAGE_VERSION;
     mailbox.response.flags=SUSAMUNE_GHOST_RESPONSE_READY;
@@ -150,6 +157,111 @@ static void ack(s32 status=0,u32 generation=17,u32 resolved=800) {
 static void ready(bool imported=false,u32 offset=0,u32 total=64,u32 firstId=800) {
     refreshPage(imported,offset);makePage(total,firstId);ack();
 }
+static void versionInfo(SusamuneGhostSlotInfo *out,u16 version,bool atLimit=false) {
+    out->canonicalVersion=version;
+    out->requiredFeatures=version==3?SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V3:
+        version==4?SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V4:
+        version==5?SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5:
+                   SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6;
+    out->sampleCodec=version==3?SUSAMUNE_GHOST_CODEC_RAW:
+                               SUSAMUNE_GHOST_CODEC_POSE_ATTACHMENTS;
+    if(atLimit) {
+        out->sampleCount=version==6?SUSAMUNE_GHOST_V6_MAX_SAMPLE_COUNT:
+                                   SUSAMUNE_GHOST_MAX_SAMPLE_COUNT;
+        out->durationQf=version==6?SUSAMUNE_GHOST_V6_MAX_DURATION_QF:
+                                  SUSAMUNE_GHOST_MAX_DURATION_QF;
+    }
+    out->payloadSize=SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET+
+        out->sampleCount*SUSAMUNE_GHOST_POSE_SAMPLE_SIZE;
+    if(version>=5)out->payloadSize+=SUSAMUNE_GHOST_TEACHING_HEADER_SIZE+
+        2*(version==6?SUSAMUNE_GHOST_V6_INPUT_SAMPLE_SIZE:SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE);
+}
+EXPORT versioned_catalog(int version,int imported,int atLimit) {
+    reset();CHECK(refreshPage(imported,0));
+    makePage(1,800,SUSAMUNE_GHOST_MAX_DURATION_QF);
+    versionInfo(&((SusamuneGhostCatalogPage*)payload)->entries[0].info,version,atLimit);
+    ack();CHECK((imported?importedCatalogReady():catalogReady())&&!busy());
+    Identity selected;CHECK(copyIdentity(imported,0,&selected));
+    CHECK(load(selected));ack();CHECK(playbackImports==1&&isLoaded(selected));
+    return 0;
+}
+EXPORT mixed_versions(int imported) {
+    reset();CHECK(refreshPage(imported,0));makePage(4);
+    for(u16 i=0;i<4;i++)
+        versionInfo(&((SusamuneGhostCatalogPage*)payload)->entries[i].info,3+i);
+    ack();CHECK((imported?importedCatalogReady():catalogReady())&&pageCount(imported)==4);
+    for(int i=0;i<4;i++) {
+        const SusamuneGhostSlotInfo *row=imported?importedSlot(i):slot(i);
+        CHECK(row&&row->canonicalVersion==3+i);
+    }
+    return 0;
+}
+EXPORT malformed_v6(int test) {
+    reset();CHECK(refreshPage(false,0));makePage(1,800,SUSAMUNE_GHOST_MAX_DURATION_QF);
+    SusamuneGhostSlotInfo *raw=&((SusamuneGhostCatalogPage*)payload)->entries[0].info;
+    versionInfo(raw,6);
+    switch(test) {
+        case 0:raw->requiredFeatures=SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5;break;
+        case 1:raw->sampleCodec=SUSAMUNE_GHOST_CODEC_RAW;break;
+        case 2:raw->payloadSize=SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET+
+            raw->sampleCount*SUSAMUNE_GHOST_POSE_SAMPLE_SIZE+SUSAMUNE_GHOST_TEACHING_HEADER_SIZE-1;break;
+        case 3:versionInfo(raw,6,true);raw->sampleCount++;raw->payloadSize+=SUSAMUNE_GHOST_POSE_SAMPLE_SIZE;break;
+        case 4:raw->durationQf=SUSAMUNE_GHOST_V6_MAX_DURATION_QF+1;break;
+        case 5:raw->canonicalVersion=7;break;
+    }
+    ack();CHECK(!catalogReady()&&!busy());
+    CHECK(!memcmp(statusText(),"Ghost catalog failed validation",32));
+    CHECK(refresh());makePage(1);versionInfo(&((SusamuneGhostCatalogPage*)payload)->entries[0].info,6);
+    ack();CHECK(catalogReady()&&!busy());return 0;
+}
+EXPORT saved_v6_refresh() {
+    reset();ready(false,0,1);CHECK(saveNew(42));ack(0,1,801);
+    CHECK(savedToken==42&&!catalogReady()&&!busy());
+    update();CHECK(busy()&&mailbox.request.command==SUSAMUNE_GHOST_CMD_LIST&&mailbox.request.flags==0);
+    makePage(2);versionInfo(&((SusamuneGhostCatalogPage*)payload)->entries[1].info,6);
+    ack();CHECK(catalogReady()&&!busy()&&pageCount(false)==2);
+    CHECK(refresh()&&mailbox.request.flags==0);makePage(2);
+    versionInfo(&((SusamuneGhostCatalogPage*)payload)->entries[1].info,6);
+    ack();CHECK(catalogReady()&&!busy()&&pageCount(false)==2);
+    Identity selected;CHECK(copyIdentity(false,1,&selected)&&selected.id==801);
+    CHECK(load(selected));ack();CHECK(playbackImports==1&&isLoaded(selected));return 0;
+}
+EXPORT cached_page_flow(int imported) {
+    reset();ready(imported);CHECK(mailbox.request.flags==0);
+    CHECK(refreshPage(imported,16));
+    CHECK(mailbox.request.flags==SUSAMUNE_GHOST_REQUEST_CACHED_LIST);
+    makePage(64);ack();CHECK(refreshPage(imported,0));
+    CHECK(mailbox.request.flags==SUSAMUNE_GHOST_REQUEST_CACHED_LIST);
+    makePage(64);ack();CHECK(imported?refreshImported():refresh());
+    CHECK(mailbox.request.flags==0);makePage(64);ack();
+    CHECK(refreshPage(imported,0)&&mailbox.request.flags==0);return 0;
+}
+EXPORT queued_explicit_refresh(int imported) {
+    reset();ready(imported);CHECK(refreshPage(imported,16));
+    CHECK(refreshPage(imported,32));CHECK(imported?refreshImported():refresh());
+    CHECK(mailbox.request.slot==16&&mailbox.request.flags==SUSAMUNE_GHOST_REQUEST_CACHED_LIST);
+    makePage(64);ack();update();CHECK(mailbox.request.slot==32&&mailbox.request.flags==0);
+    makePage(64);ack();CHECK(imported?importedCatalogReady():catalogReady());return 0;
+}
+EXPORT queued_explicit_then_page(int imported) {
+    reset();ready(imported);CHECK(refreshPage(imported,16));
+    CHECK(imported?refreshImported():refresh());CHECK(refreshPage(imported,32));
+    makePage(64);ack();update();CHECK(mailbox.request.slot==32&&mailbox.request.flags==0);
+    makePage(64);ack();CHECK(imported?importedCatalogReady():catalogReady());return 0;
+}
+EXPORT mutation_discards_queued_cache(int operation) {
+    reset();ready();
+    if(operation==0)CHECK(saveNew(42));
+    else {Identity selected;CHECK(copyIdentity(false,0,&selected));CHECK(remove(selected));}
+    CHECK(mailbox.request.flags==0&&refreshPage(false,16));ack();update();
+    CHECK(mailbox.request.command==SUSAMUNE_GHOST_CMD_LIST&&mailbox.request.slot==16&&mailbox.request.flags==0);
+    return 0;
+}
+EXPORT profile_refresh_is_uncached() {
+    reset();ready(false,16);testProfile=1;update();
+    CHECK(mailbox.request.profile==1&&mailbox.request.slot==0&&mailbox.request.flags==0);
+    return 0;
+}
 EXPORT wide_catalog() {
     reset();CHECK(refreshPage(false,48));makePage(50000,70000,0x100000010ull);ack();
     CHECK(catalogReady()&&totalCount(false)==50000&&pageCount(false)==16);
@@ -181,7 +293,7 @@ EXPORT queued_page() {
     payload[0]=0xCA;CHECK(refreshPage(false,32));
     CHECK(!memcmp(&request,&mailbox.request,sizeof(request))&&payload[0]==0xCA);
     makePage(64);ack();CHECK(!busy()&&!catalogReady()&&pageOffset(false)==32);
-    update();CHECK(busy()&&mailbox.request.slot==32);
+    update();CHECK(busy()&&mailbox.request.slot==32&&mailbox.request.flags==SUSAMUNE_GHOST_REQUEST_CACHED_LIST);
     makePage(64,900);ack();CHECK(catalogReady()&&slot(0)&&pageOffset(false)==32);
     return 0;
 }
@@ -224,12 +336,12 @@ EXPORT import_scan(int queued) {
     CHECK(scanImports());
     if(queued) {makePage(0);ack();update();}
     CHECK(mailbox.request.command==SUSAMUNE_GHOST_CMD_IMPORT_SCAN);
-    CHECK(mailbox.request.profile==SUSAMUNE_GHOST_IMPORTED_PROFILE&&mailbox.request.slot==0);
+    CHECK(mailbox.request.profile==SUSAMUNE_GHOST_IMPORTED_PROFILE&&mailbox.request.slot==0&&mailbox.request.flags==0);
     makePage(100);ack();CHECK(importedCatalogReady()&&totalCount(true)==100);return 0;
 }
 EXPORT empty_final_page() {
     reset();CHECK(refreshPage(false,32));makePage(32);ack();
-    CHECK(pageOffset(false)==16);update();CHECK(mailbox.request.slot==16);
+    CHECK(pageOffset(false)==16);update();CHECK(mailbox.request.slot==16&&mailbox.request.flags==0);
     makePage(32);ack();CHECK(pageCount(false)==16);return 0;
 }
 EXPORT zero_generation(int imported) {
@@ -257,6 +369,7 @@ EXPORT identity_integrity() {
     CHECK(!memcmp(name,"Unnamed ghost",14));return 0;
 }
 '''
+        source += getattr(cls, "bridge_source", "")
         cfile = work / "paging.cpp"
         cfile.write_text(source, encoding="ascii")
         library = work / "paging.dll"
@@ -275,6 +388,35 @@ EXPORT identity_integrity() {
 
     def test_catalogs_page_beyond_old_counts_and_ten_hour_quota(self):
         self.assertEqual(self.dll.wide_catalog(), 0)
+
+    def test_supported_formats_load_at_normal_and_version_specific_limits(self):
+        for version in range(3, 7):
+            for imported in range(2):
+                for at_limit in range(2):
+                    with self.subTest(version=version, imported=imported, at_limit=at_limit):
+                        self.assertEqual(self.dll.versioned_catalog(version, imported, at_limit), 0)
+
+    def test_mixed_legacy_and_v6_pages_are_published(self):
+        self.check_cases("mixed_versions", range(2))
+
+    def test_malformed_v6_metadata_is_rejected_and_refresh_can_recover(self):
+        self.check_cases("malformed_v6", range(6))
+
+    def test_saving_v6_refreshes_a_loadable_catalog(self):
+        self.assertEqual(self.dll.saved_v6_refresh(), 0)
+
+    def test_only_page_changes_request_cached_catalogs(self):
+        self.check_cases("cached_page_flow", range(2))
+
+    def test_queued_explicit_refresh_overrides_page_cache_permission(self):
+        self.check_cases("queued_explicit_refresh", range(2))
+        self.check_cases("queued_explicit_then_page", range(2))
+
+    def test_save_and_delete_discard_queued_page_cache_permission(self):
+        self.check_cases("mutation_discards_queued_cache", range(2))
+
+    def test_profile_change_starts_with_a_fresh_scan(self):
+        self.assertEqual(self.dll.profile_refresh_is_uncached(), 0)
 
     def test_malformed_pages_are_never_published(self):
         self.check_cases("invalid_catalog", range(8))
