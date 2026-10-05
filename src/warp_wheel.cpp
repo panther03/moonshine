@@ -1824,6 +1824,24 @@ u8 guardExitArea(u8 nextState) {
     return nextState;
 }
 
+// Native pause/save states do not call updateGameMode(), where ordinary warps
+// are serviced. Keep the same departure guards, then run the retail transition
+// cleanup instead of leaving a menu-selected destination armed indefinitely.
+static bool servicePausedWarp(TMarDirector *director) {
+    if (!director || !director->_260) return false;
+    const u8 state = director->mCurState;
+    if (state != TMarDirector::STATE_PAUSE_MENU &&
+        state != TMarDirector::STATE_SAVE_CARD) return false;
+    const u8 next = LevelWarp::kick(director, state);
+    if (next == state) return false;
+    if (state == TMarDirector::STATE_PAUSE_MENU && director->mPauseMenu)
+        director->mPauseMenu->setDrawEnd();
+    director->currentStateFinalize(next);
+    director->nextStateInitialize(next);
+    director->mCurState = next;
+    return true;
+}
+
 void update(TMarioGamePad *pad) {
     if (!gpMarDirector) {
         clearPrompt();
@@ -1849,6 +1867,8 @@ void update(TMarioGamePad *pad) {
         }
         return;
     }
+
+    if (servicePausedWarp(gpMarDirector)) return;
 
     const u8 state = gpMarDirector->mCurState;
     const bool enteringDeath = state == TMarDirector::STATE_DEATH &&

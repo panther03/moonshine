@@ -13,6 +13,7 @@
 
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ciso_reader.h"
+#include "susamune/data_paths.h"
 
 #define SHADOW_INPUT_SIZE         0x8000u
 #define SHADOW_CACHE_SIZE         0x1000u
@@ -762,93 +763,12 @@ static bool OpenExtractedArchive(ShadowReader *reader, const char *device,
 	return true;
 }
 
-static void StageAsset(const AssetSpec *spec, const char *gameDevice,
-	const char *gamePath, u32 discCommand, u32 isoShift, bool wiiVcInternal)
+static int ValidatePayload(const AssetSpec *spec)
 {
-	ShadowReader reader;
-	ShadowDecoder *decoder = NULL;
-	u64 archiveOffset = 0;
-	u32 archiveSize = 0;
-	int status = SUSAMUNE_GHOST_SHADOW_STATUS_SOURCE_UNSUPPORTED;
+	int status = 0;
 	uLong checksum;
 	uLong bmdChecksum;
 	uLong btkChecksum;
-
-	PublishStatus(spec, status);
-	memset(&reader, 0, sizeof(reader));
-	if (wiiVcInternal || gameDevice == NULL || gamePath == NULL)
-		goto done;
-
-	if (discCommand != 0)
-	{
-		reader.kind = SHADOW_SOURCE_REAL_DISC;
-		reader.discCommand = discCommand;
-		status = FindArchiveInDisc(&reader, (u64)isoShift << 2, spec,
-			&archiveOffset, &archiveSize);
-	}
-	else if (IsSupportedFileExt(gamePath))
-	{
-		u8 magic[8];
-		if (!OpenGameFile(&reader, gameDevice, gamePath))
-		{
-			status = SUSAMUNE_GHOST_SHADOW_STATUS_OPEN_FAILED;
-			goto done;
-		}
-		if (!ReaderRead(&reader, 0, magic, sizeof(magic)))
-		{
-			status = SUSAMUNE_GHOST_SHADOW_STATUS_READ_FAILED;
-			goto done;
-		}
-		if (memcmp(magic, "CISO", 4) == 0)
-		{
-			u8 header[8u + SUSAMUNE_CISO_MAP_COUNT];
-			if (!ReaderRawRead(&reader, 0, header, sizeof(header)) ||
-			    !SusamuneCisoMapInit(sCisoMap, header, sizeof(header), reader.size))
-			{
-				status = SUSAMUNE_GHOST_SHADOW_STATUS_SOURCE_UNSUPPORTED;
-				goto done;
-			}
-			reader.ciso = true;
-			reader.cacheSize[0] = reader.cacheSize[1] = 0;
-		}
-		status = FindArchiveInDisc(&reader, (u64)isoShift << 2, spec,
-			&archiveOffset, &archiveSize);
-	}
-	else
-	{
-		if (!OpenExtractedArchive(&reader, gameDevice, gamePath, spec))
-		{
-			status = SUSAMUNE_GHOST_SHADOW_STATUS_OPEN_FAILED;
-			goto done;
-		}
-		if (reader.size == 0 || reader.size > SHADOW_COMPRESSED_MAX_SIZE)
-		{
-			status = SUSAMUNE_GHOST_SHADOW_STATUS_BAD_YAZ0;
-			goto done;
-		}
-		archiveSize = (u32)reader.size;
-		status = 0;
-	}
-	if (status != 0)
-		goto done;
-
-	decoder = memalign(32, sizeof(*decoder));
-	if (decoder == NULL)
-	{
-		status = SUSAMUNE_GHOST_SHADOW_STATUS_READ_FAILED;
-		goto done;
-	}
-	{
-		const struct mallinfo info = mallinfo();
-		gprintf("Susamune %s decode heap: live=%u free=%u transient=%u\n",
-			spec->label,
-			(unsigned int)info.uordblks, (unsigned int)info.fordblks,
-			(unsigned int)sizeof(*decoder));
-	}
-	if (!DecodeArchive(&reader, archiveOffset, archiveSize, spec, decoder,
-		&status))
-		goto done;
-
 	if (memcmp((const void *)spec->payload, "J3D2bmd3", 8) != 0 ||
 	    ReadBE32((const u8 *)spec->payload + 8) != spec->bmdSize ||
 	    (spec->btkSize != 0 &&
@@ -877,11 +797,210 @@ static void StageAsset(const AssetSpec *spec, const char *gameDevice,
 	if ((u32)checksum != spec->payloadChecksum ||
 	    (u32)bmdChecksum != spec->bmdChecksum ||
 	    (u32)btkChecksum != spec->btkChecksum)
-	{
 		status = SUSAMUNE_GHOST_SHADOW_STATUS_BAD_CHECKSUM;
+done:
+	return status;
+}
+
+// Disposable loader-only cache. The exact disc ID/revision and compiled asset
+// identity are checked before any cached bytes can become a staged model.
+typedef struct AssetCacheHeader {
+	u32 magic, version, game[2], assetMagic, bmdSize, btkSize, payloadChecksum;
+} AssetCacheHeader;
+
+static bool BuildAssetCachePath(char *path, u32 capacity, const char *device,
+	const u8 *discHeader, const AssetSpec *spec, AssetCacheHeader *header)
+{
+	int length;
+	if (memcmp(discHeader, "GMS", 3) ||
+	    (discHeader[3] != 'J' && discHeader[3] != 'E' && discHeader[3] != 'P') ||
+	    memcmp(discHeader + 4, "01", 2) ||
+	    ReadBE32(discHeader + 0x1c) != 0xC2339F3Du)
+		return false;
+	*header = (AssetCacheHeader){0x4D474143u, 1,
+		{ReadBE32(discHeader), ReadBE32(discHeader + 4)}, spec->magic,
+		spec->bmdSize, spec->btkSize, spec->payloadChecksum};
+	length = snprintf(path, capacity, "%s:" MOONSHINE_DATA_ROOT
+		"/cache/ghost_%08lx_%08lx_%08lx.bin", device,
+		(unsigned long)header->game[0], (unsigned long)header->game[1],
+		(unsigned long)header->payloadChecksum);
+	if (length > 0 && (u32)length < capacity) return true;
+	if (capacity) path[0] = 0;
+	return false;
+}
+
+static bool ReadAssetCache(const char *path, const AssetCacheHeader *expected,
+	const AssetSpec *spec, bool load)
+{
+	FIL file;
+	AssetCacheHeader header;
+	UINT got = 0;
+	u32 offset = 0, size = spec->bmdSize + spec->btkSize;
+	bool valid = false;
+	if (f_open_char(&file, path, FA_READ | FA_OPEN_EXISTING) != FR_OK)
+		return false;
+	if (file.obj.objsize != sizeof(header) + size ||
+	    f_read(&file, &header, sizeof(header), &got) != FR_OK ||
+	    got != sizeof(header) || memcmp(&header, expected, sizeof(header)))
+		goto done;
+	while (offset < size)
+	{
+		const u32 count = size - offset < SHADOW_INPUT_SIZE ?
+			size - offset : SHADOW_INPUT_SIZE;
+		void *destination = load ? (void *)(spec->payload + offset) : sDiscReadScratch;
+		if (f_read(&file, destination, count, &got) != FR_OK || got != count ||
+		    (!load && memcmp(destination, (const void *)(spec->payload + offset), count)))
+			goto done;
+		offset += count;
+	}
+	valid = !load || ValidatePayload(spec) == 0;
+done:
+	if (f_close(&file) != FR_OK) valid = false;
+	return valid;
+}
+
+static void WriteAssetCache(const char *path, const char *device,
+	const AssetCacheHeader *header, const AssetSpec *spec)
+{
+	FIL file;
+	FILINFO info;
+	char temporary[192], directory[80];
+	UINT wrote = 0;
+	FRESULT result;
+	bool valid;
+	const u32 size = spec->bmdSize + spec->btkSize;
+	int length = snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+	if (length <= 0 || (u32)length >= sizeof(temporary)) return;
+	length = snprintf(directory, sizeof(directory), "%s:" MOONSHINE_DATA_ROOT "/cache", device);
+	if (length <= 0 || (u32)length >= sizeof(directory)) return;
+	result = f_mkdir_char(directory);
+	if (result != FR_OK && result != FR_EXIST) return;
+	if (f_open_char(&file, temporary, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) return;
+	valid = f_write(&file, header, sizeof(*header), &wrote) == FR_OK &&
+		wrote == sizeof(*header) &&
+		f_write(&file, (const void *)spec->payload, size, &wrote) == FR_OK &&
+		wrote == size && f_sync(&file) == FR_OK;
+	if (f_close(&file) != FR_OK) valid = false;
+	// Verify the closed temporary against the already validated extraction.
+	// Reading it into scratch preserves that good extraction even on failure.
+	if (!valid || !ReadAssetCache(temporary, header, spec, false)) goto done;
+	result = f_stat_char(path, &info);
+	if (result == FR_OK)
+	{
+		if ((info.fattrib & AM_DIR) || f_unlink_char(path) != FR_OK) goto done;
+	}
+	else if (result != FR_NO_FILE && result != FR_NO_PATH) goto done;
+	if (f_rename_char(temporary, path) == FR_OK) return;
+done:
+	(void)f_unlink_char(temporary);
+}
+
+static void StageAsset(const AssetSpec *spec, const char *gameDevice,
+	const char *gamePath, u32 discCommand, u32 isoShift, bool wiiVcInternal)
+{
+	ShadowReader reader;
+	ShadowDecoder *decoder = NULL;
+	u64 archiveOffset = 0;
+	u32 archiveSize = 0;
+	int status = SUSAMUNE_GHOST_SHADOW_STATUS_SOURCE_UNSUPPORTED;
+	char cachePath[160] = {0};
+	AssetCacheHeader cacheHeader;
+	bool discSource = false;
+	// ApplyToNinCFG retains the already-mounted launcher/data volume even
+	// when GetRootDevice has switched to a game image on the other device.
+	const char *cacheDevice = (ncfg->Config & NIN_CFG_CFG_ON_USB) ? "usb" : "sd";
+
+	PublishStatus(spec, status);
+	memset(&reader, 0, sizeof(reader));
+	if (wiiVcInternal || gameDevice == NULL || gamePath == NULL)
+		goto done;
+
+	if (discCommand != 0)
+	{
+		reader.kind = SHADOW_SOURCE_REAL_DISC;
+		reader.discCommand = discCommand;
+		discSource = true;
+	}
+	else if (IsSupportedFileExt(gamePath))
+	{
+		u8 magic[8];
+		if (!OpenGameFile(&reader, gameDevice, gamePath))
+		{
+			status = SUSAMUNE_GHOST_SHADOW_STATUS_OPEN_FAILED;
+			goto done;
+		}
+		if (!ReaderRead(&reader, 0, magic, sizeof(magic)))
+		{
+			status = SUSAMUNE_GHOST_SHADOW_STATUS_READ_FAILED;
+			goto done;
+		}
+		if (memcmp(magic, "CISO", 4) == 0)
+		{
+			u8 header[8u + SUSAMUNE_CISO_MAP_COUNT];
+			if (!ReaderRawRead(&reader, 0, header, sizeof(header)) ||
+			    !SusamuneCisoMapInit(sCisoMap, header, sizeof(header), reader.size))
+			{
+				status = SUSAMUNE_GHOST_SHADOW_STATUS_SOURCE_UNSUPPORTED;
+				goto done;
+			}
+			reader.ciso = true;
+			reader.cacheSize[0] = reader.cacheSize[1] = 0;
+		}
+		discSource = true;
+	}
+	else
+	{
+		if (!OpenExtractedArchive(&reader, gameDevice, gamePath, spec))
+		{
+			status = SUSAMUNE_GHOST_SHADOW_STATUS_OPEN_FAILED;
+			goto done;
+		}
+		if (reader.size == 0 || reader.size > SHADOW_COMPRESSED_MAX_SIZE)
+		{
+			status = SUSAMUNE_GHOST_SHADOW_STATUS_BAD_YAZ0;
+			goto done;
+		}
+		archiveSize = (u32)reader.size;
+		status = 0;
+	}
+	if (discSource)
+	{
+		u8 identity[32];
+		if (ReaderRead(&reader, (u64)isoShift << 2, identity, sizeof(identity)) &&
+		    BuildAssetCachePath(cachePath, sizeof(cachePath), cacheDevice, identity,
+			spec, &cacheHeader) && ReadAssetCache(cachePath, &cacheHeader, spec, true))
+		{
+			gprintf("Moonshine %s model cache hit\n", spec->label);
+			goto ready;
+		}
+		status = FindArchiveInDisc(&reader, (u64)isoShift << 2, spec,
+			&archiveOffset, &archiveSize);
+	}
+	if (status != 0)
+		goto done;
+
+	decoder = memalign(32, sizeof(*decoder));
+	if (decoder == NULL)
+	{
+		status = SUSAMUNE_GHOST_SHADOW_STATUS_READ_FAILED;
 		goto done;
 	}
+	{
+		const struct mallinfo info = mallinfo();
+		gprintf("Susamune %s decode heap: live=%u free=%u transient=%u\n",
+			spec->label,
+			(unsigned int)info.uordblks, (unsigned int)info.fordblks,
+			(unsigned int)sizeof(*decoder));
+	}
+	if (!DecodeArchive(&reader, archiveOffset, archiveSize, spec, decoder,
+		&status))
+		goto done;
 
+	status = ValidatePayload(spec);
+	if (status != 0) goto done;
+	if (cachePath[0]) WriteAssetCache(cachePath, cacheDevice, &cacheHeader, spec);
+
+ready:
 	DCFlushRange((void *)spec->payload, spec->bmdSize + spec->btkSize);
 	PublishReady(spec);
 	status = SUSAMUNE_GHOST_SHADOW_STATUS_READY;

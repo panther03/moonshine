@@ -17,6 +17,7 @@
 #include "SMS/Player/Watergun.hxx"
 #include "Dolphin/math.h"
 #include "SMS/MoveBG/ResetFruit.hxx"
+#include "SMS/MarioUtil/ShadowUtil.hxx"
 #include "SMS/Strategic/LiveActor.hxx"
 #include "SMS/Strategic/Strategy.hxx"
 #include "SMS/System/MarDirector.hxx"
@@ -37,6 +38,8 @@ public:
 
 extern TScreenTexture *gpScreenTexture;
 extern "C" f32 ghostSquareRoot(f32) asm("sqrtf__3stdFf");
+extern "C" void ghostFluddTransform(const void *, f32, u16, J3DTransformInfo *)
+    asm("calcTransform__18J3DAnmTransformKeyCFfUsP16J3DTransformInfo");
 
 void SMS_InitPacket_MatColor(J3DModel *, u16, GXChannelID,
                              const GXColor *);
@@ -461,15 +464,12 @@ void attachmentPacketCallback(J3DShapePacket *packet, int phase) {
     GXSetChanMatColor(GX_COLOR0A0, state->channelColor);
     if (state->tintTevColor)
         GXSetTevColorS10(GX_TEVREG2, state->tevColor);
-    const bool opaque = state->channelColor.a == 255;
-    if (!opaque) {
-        GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    }
-    GXSetBlendMode(opaque ? GX_BM_NONE : GX_BM_BLEND,
-                   opaque ? GX_BL_ONE : GX_BL_SRCALPHA,
-                   opaque ? GX_BL_ZERO : GX_BL_INVSRCALPHA,
-                   GX_LO_COPY);
-    GXSetZMode(GX_TRUE, GX_LEQUAL, opaque ? GX_TRUE : GX_FALSE);
+    // Full ghost opacity must retain the material's own glass/water blend.
+    if (state->channelColor.a == 255) return;
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA,
+                  GX_LO_COPY);
+    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
 }
 
 void installAttachmentCallbacks(AttachmentModel &attachment) {
@@ -481,18 +481,6 @@ void installAttachmentCallbacks(AttachmentModel &attachment) {
             packet + kShapePacketUserAreaOffset) = &attachment.packetState;
         *reinterpret_cast<void (**)(J3DShapePacket *, int)>(
             packet + kShapePacketCallbackOffset) = attachmentPacketCallback;
-        if (attachment.kind == ATTACHMENT_FLUDD && attachment.data->mMaterialNames) {
-            // These interior tank masks rely on retail's opaque depth/alpha
-            // passes. Forcing ghost transparency exposes their clipping planes.
-            // Keep the tank shell, but omit the unrecorded water-level masks.
-            const char *names[] = {"_mat_waterline", "_mat_froater(2)", "_mat_froater(3)"};
-            for (unsigned n = 0; n < 3; ++n) {
-                const s32 material = attachment.data->mMaterialNames->getIndex(names[n]);
-                if (material >= 0 && material < attachment.data->getMaterialNum() &&
-                    attachment.data->mMaterials[material]->shape == attachment.data->mShapes[i])
-                    packet[0x30] = 0;
-            }
-        }
     }
 }
 
@@ -553,6 +541,28 @@ J3DModel *yoshiSource() {
 
 void restoreHeap(JKRHeap *heap);
 
+void closeFluddPump(J3DModelData *data) {
+    // Borrow the already loaded key table, but evaluate an explicit frame:
+    // neither Mario's animation object nor his model data is changed.
+    const u8 *actor = *reinterpret_cast<u8 **>(
+        reinterpret_cast<u8 *>(gpMarioOriginal->mFludd) + 0x1cd4);
+    if (!actor) return;
+    const u8 *animations = *reinterpret_cast<u8 *const *>(actor);
+    if (!animations) return;
+    const u8 *table = *reinterpret_cast<u8 *const *>(animations + 0x2c);
+    if (!table || *reinterpret_cast<const u32 *>(table) != 7) return;
+    const char *const *names = *reinterpret_cast<const char *const *const *>(table + 8);
+    if (!names || !names[2] || memcmp(names[2], "wg_house", 9)) return;
+    const u8 *const *keys = *reinterpret_cast<const u8 *const *const *>(table + 12);
+    if (!keys) return;
+    const u8 *animation = keys[2];
+    if (!animation || *reinterpret_cast<const u16 *>(animation + 0x22) != data->getJointNum()) return;
+    const f32 frame = *reinterpret_cast<const s16 *>(animation + 2);
+    for (u16 i = 0; i < data->getJointNum(); ++i)
+        ghostFluddTransform(animation, frame, i,
+            reinterpret_cast<J3DTransformInfo *>(reinterpret_cast<u8 *>(data->mJoints[i]) + 0x1c));
+}
+
 AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
                                   AttachmentKind kind, J3DModel *source) {
     memset(&attachment, 0, sizeof(attachment));
@@ -583,6 +593,7 @@ AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
     sAttachmentHeap->becomeCurrentHeap();
     const u32 before = sAttachmentHeap->getTotalFreeSize();
     if (independent) attachment.data = J3DModelLoaderDataBase::load(bmd, 0x10040000u);
+    if (kind == ATTACHMENT_FLUDD && attachment.data) closeFluddPump(attachment.data);
     void *storage = sAttachmentHeap->alloc(sizeof(J3DModel), 32);
     if (storage && attachment.data) {
         attachment.model =
@@ -1016,6 +1027,16 @@ public:
                 slot.model->J3DModel::viewCalc();
                 sPrepared[runner] = modelPacketsReady(slot);
                 if (!sPrepared[runner]) continue;
+                if (gpBindShadowManager) {
+                    TCircleShadowRequest shadow = {};
+                    const Ghost::VisualState &state = sVisualStates[runner];
+                    shadow.mTranslation.set(state.x, state.y, state.z);
+                    shadow.mOffsetY = shadow.mOffsetY2 = 55.0f;
+                    shadow.mNeedsProjection = 1;
+                    // Retail projects and bounds this visual-only request;
+                    // no actor, collision response or gameplay input is added.
+                    gpBindShadowManager->request(shadow, 0);
+                }
                 requests[runner * 3] = desiredAttachment(sVisualStates[runner]);
                 desiredFludd(sVisualStates[runner], requests + runner * 3 + 1);
             }

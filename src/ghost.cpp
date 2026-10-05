@@ -8,6 +8,7 @@
 #include "Dolphin/string.h"
 #include "SMS/Camera/PolarSubCamera.hxx"
 #include "SMS/Manager/FlagManager.hxx"
+#include "SMS/Map/Map.hxx"
 #include "SMS/Player/Mario.hxx"
 #include "SMS/Player/MarioDraw.hxx"
 #include "SMS/System/Application.hxx"
@@ -287,6 +288,9 @@ TVec3f sObserverMarioPrevSpeed;
 f32 sObserverMarioForwardSpeed;
 TVec3s sObserverMarioAngle;
 s16 sObserverMarioModelAngleY;
+const TBGCheckData *sObserverMarioFloor;
+f32 sObserverMarioFloorBelow;
+u32 sObserverMarioState;
 bool sObserverStageReady;
 bool sObserverPastEnd;
 bool sObserverRouteValidated;
@@ -623,11 +627,29 @@ void releaseObserverMario(bool restore) {
         sObserverMario->mForwardSpeed = sObserverMarioForwardSpeed;
         sObserverMario->mAngle = sObserverMarioAngle;
         sObserverMario->mModelAngleY = sObserverMarioModelAngleY;
+        sObserverMario->mFloorTriangle = sObserverMarioFloor;
+        sObserverMario->mFloorBelow = sObserverMarioFloorBelow;
+        sObserverMario->mState = sObserverMarioState;
     }
     sObserverMario = nullptr;
     sObserverCamera = nullptr;
     sObserverCameraYOffset = 0.0f;
     sObserverMarioOwned = false;
+}
+
+__attribute__((noinline)) void captureObserverMarioPose() {
+    sObserverMarioTranslation = sObserverMario->mTranslation;
+    sObserverMarioLastPosition = sObserverMario->mLastPosition;
+    sObserverMarioLastPos = sObserverMario->mLastPos;
+    sObserverMarioLastGroundedPos = sObserverMario->mLastGroundedPos;
+    sObserverMarioSpeed = sObserverMario->mSpeed;
+    sObserverMarioPrevSpeed = sObserverMario->mPrevSpeed;
+    sObserverMarioForwardSpeed = sObserverMario->mForwardSpeed;
+    sObserverMarioAngle = sObserverMario->mAngle;
+    sObserverMarioModelAngleY = sObserverMario->mModelAngleY;
+    sObserverMarioFloor = sObserverMario->mFloorTriangle;
+    sObserverMarioFloorBelow = sObserverMario->mFloorBelow;
+    sObserverMarioState = sObserverMario->mState;
 }
 
 void bindObserverMario() {
@@ -640,15 +662,7 @@ void bindObserverMario() {
     sObserverMarioPerformFlags = sObserverMario->mPerformFlags;
     sObserverMarioVisible = sObserverMario->mAttributes.mIsVisible;
     sObserverMarioPrevVisible = sObserverMario->mPrevAttributes.mIsVisible;
-    sObserverMarioTranslation = sObserverMario->mTranslation;
-    sObserverMarioLastPosition = sObserverMario->mLastPosition;
-    sObserverMarioLastPos = sObserverMario->mLastPos;
-    sObserverMarioLastGroundedPos = sObserverMario->mLastGroundedPos;
-    sObserverMarioSpeed = sObserverMario->mSpeed;
-    sObserverMarioPrevSpeed = sObserverMario->mPrevSpeed;
-    sObserverMarioForwardSpeed = sObserverMario->mForwardSpeed;
-    sObserverMarioAngle = sObserverMario->mAngle;
-    sObserverMarioModelAngleY = sObserverMario->mModelAngleY;
+    captureObserverMarioPose();
     sObserverMarioOwned = true;
     sObserverMarioBaselineFinalized = false;
     sObserverMario->mPerformFlags |= kCueEntry;
@@ -663,15 +677,7 @@ void finalizeObserverMarioBaseline() {
     // gameplay begins, the state we must restore is Sunshine's visible Mario.
     sObserverMarioVisible = true;
     sObserverMarioPrevVisible = true;
-    sObserverMarioTranslation = sObserverMario->mTranslation;
-    sObserverMarioLastPosition = sObserverMario->mLastPosition;
-    sObserverMarioLastPos = sObserverMario->mLastPos;
-    sObserverMarioLastGroundedPos = sObserverMario->mLastGroundedPos;
-    sObserverMarioSpeed = sObserverMario->mSpeed;
-    sObserverMarioPrevSpeed = sObserverMario->mPrevSpeed;
-    sObserverMarioForwardSpeed = sObserverMario->mForwardSpeed;
-    sObserverMarioAngle = sObserverMario->mAngle;
-    sObserverMarioModelAngleY = sObserverMario->mModelAngleY;
+    captureObserverMarioPose();
     sObserverMarioBaselineFinalized = true;
     sObserverMario->mAttributes.mIsVisible = false;
     sObserverMario->mPrevAttributes.mIsVisible = false;
@@ -1719,6 +1725,29 @@ void startObserverClock(s32 liveQf) {
     updateObserverVisual(observerQf(&sObserverPastEnd));
 }
 
+void updateObserverGround() {
+    // Watch 2 uses Mario as its camera midpoint, not either runner's contact
+    // position. It must not press a platform between the two recorded paths.
+    const TBGCheckData *floor = gpMap ? gpMap->getIllegalCheckData()
+                                    : sObserverMarioFloor;
+    f32 height = -32768.0f;
+    bool standing = false;
+    if (!observerHasTwo() && gpMap && sGhostVisible) {
+        height = gpMap->checkGround(sGhostPosition.x, sGhostPosition.y + 4.0f,
+                                    sGhostPosition.z, &floor);
+        const f32 dx = sGhostPosition.x - sObserverMario->mTranslation.x;
+        const f32 dz = sGhostPosition.z - sObserverMario->mTranslation.z;
+        standing = sGhostPosition.y <= height + 4.0f &&
+                   dx * dx + dz * dz <= 0.0625f;
+    }
+    // Retail rail/tilt blocks read these even while Mario's own movement is
+    // suppressed. Use the recorded contact; never integrate Mario physics.
+    sObserverMario->mFloorTriangle = floor;
+    sObserverMario->mFloorBelow = height;
+    sObserverMario->mState = standing ? TMario::STATE_IDLE
+                                    : sObserverMarioState & ~0x200u;
+}
+
 void anchorObserverMario() {
     if (!sObserverStageReady || !gpMarDirector ||
         gpMarDirector->mCurState != TMarDirector::STATE_NORMAL) return;
@@ -1734,6 +1763,7 @@ void anchorObserverMario() {
     sObserverMario->mSpeed.set(0.0f, 0.0f, 0.0f);
     sObserverMario->mPrevSpeed.set(0.0f, 0.0f, 0.0f);
     sObserverMario->mForwardSpeed = 0.0f;
+    updateObserverGround();
     if (!sGhostVisible && !sSecondaryGhostVisible) return;
 
     TVec3f target;

@@ -1947,11 +1947,18 @@ void SavestateManager::updateHook() {
         SET_STATUS("loading");
     } else if (sAwaitingLoadApproval) {
         return;
+    } else if (gBinds.recording()) {
+        return;
     } else if (!counterOwnsSave &&
-               gBinds.wasPressed(BIND_SAVESTATE_SAVE)) {
+               gBinds.wasPressedSubsetRaw(BIND_SAVESTATE_SAVE)) {
+        // Menu/modal ownership is checked by onUpdate. A fresh shortcut may
+        // accompany held gameplay buttons, including after a paused Step.
+        // Silence overlapping ordinary binds (notably B+Left fast-forward).
+        gBinds.suppressUntilRelease();
         saveState();
     } else if (!counterOwnsLoad &&
-               gBinds.wasPressed(BIND_SAVESTATE_LOAD)) {
+               gBinds.wasPressedSubsetRaw(BIND_SAVESTATE_LOAD)) {
+        gBinds.suppressUntilRelease();
         PracticeSession::armLoadHold(gBinds.get(BIND_SAVESTATE_LOAD));
         // Pin before the unsaved-ghost prompt; changing selection cannot
         // redirect a confirmation or a card-busy load to another state.

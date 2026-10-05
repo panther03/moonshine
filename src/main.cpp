@@ -541,13 +541,17 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     // Runs every frame like the gecko handler; no-ops when nothing changed.
     featuresApply();
 
+    // State shortcuts accept held gameplay buttons. Keep the entire opening,
+    // editing and dismissal frame owned by modals, and let a paused Step win.
+    // Dispatch before ordinary action binds so a state shortcut can silence
+    // a larger overlapping combo without consuming the held Mario buttons.
+    if (gSavestateMgr && !observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy &&
+        !practiceModal && !practiceStepConsumed) {
+        gSavestateMgr->updateHook();
+    }
     actionsApply(!observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy &&
                  !PracticeSession::ownsGameplayInput());
     gCreationExtras.update();
-
-    if (gSavestateMgr && !observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy) {
-        gSavestateMgr->updateHook();
-    }
     const bool allowExistingMenuToClose =
         StageLoader::resultOwnsInput() && !StageLoader::modal() &&
         menuOpenBeforeDirect;

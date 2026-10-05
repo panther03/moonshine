@@ -57,7 +57,9 @@ class Menu {public:u32 navigationInput(TMarioGamePad*p){return p->mButtons.mRapi
  void toast(const char*){}void factoryReset(){} };
 void CreationEditor::draw(Menu*,const char*,const char*)const{}
 '''
-        code = prelude + raw + re.sub(r"^#include[^\n]*", "", (ROOT / "src/creation_color.cpp").read_text(), flags=re.M)
+        shared = (ROOT / "include/susamune/model_color_editor.hxx").read_text()
+        shared = re.sub(r"^#(?:include|ifndef|define|endif)[^\n]*", "", shared, flags=re.M)
+        code = prelude + raw + shared + re.sub(r"^#include[^\n]*", "", (ROOT / "src/creation_color.cpp").read_text(), flags=re.M)
         code += creation[creation.index("enum EditOption"):creation.index("inline int clampi")]
         code += function(creation, "clampi")
         code += "namespace LayoutEditor {" + function(layout, "updatePositionScale") + "}\n"

@@ -38,6 +38,8 @@ bool keepWord(const void*p){if(keptCount==failAt)return false;kept[keptCount]=p;
 void clearKept(){keptCount=0;failAt=32;}
 void restoreKept(){for(unsigned i=0;i<keptCount;i++)*(unsigned long long*)kept[i]=values[i];}
 '''
+        shared = (ROOT / "include/susamune/model_color_draw.hxx").read_text()
+        code += "namespace ModelColorDraw {" + function(shared, "live") + "}\n"
         for namespace, filename, count in (
             ("MarioColors", "mario_colors_draw.cpp", "packetCount"),
             ("FluddColors", "fludd_colors_draw.cpp", "count"),

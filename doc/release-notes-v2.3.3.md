@@ -6,6 +6,8 @@
 - Faster ghost-list loading and page changes: file headers are read together, and nearby pages reuse the checked list. Refresh still reads the SD again.
 - New ghosts record the selected nozzle, spray direction and when water actually fires. Ghosts show FLUDD and visual spray, with droplets and ground splashes that cannot affect gameplay.
 - Corrected FLUDD's attachment to the ghost's chest and replaced the diamond-shaped water with Sunshine's own water textures. Individual droplet paths and splashes are still visual approximations; they do not reproduce every original particle or collision.
+- Restored FLUDD's closed tank and resting pump shape. Spray is larger and uses separate water and highlight passes, and ghosts now cast ground shadows.
+- Watching one ghost can activate platforms that start when Mario stands still on them. Racing remains visual only; Watch 2 does not simulate two separate riders.
 - Added **Mario** as a ghost appearance alongside Shadow Mario and Piantissimo, using the existing model memory.
 - New recordings last up to **10 minutes**. Existing ghosts remain readable, including older recordings over 10 minutes. Older files keep their recorded movement and inputs; missing FLUDD data is not guessed.
 
@@ -16,6 +18,8 @@
 - Savestates work during streak practice. Loading a state lets you practise the attempt without adding to, or breaking, the streak; restart normally to resume counting clean attempts.
 - Added **Gelato Enter (GE)** under Plaza movement: start at the Noki Bay exit and finish when entering Gelato Beach. Choose the Plaza state using its State selector, including the Yoshi Plaza introduction. Fast Any% keeps its own route.
 - Warps, level selection and RAM/SD state loads are available while the save box is open. An actual memory-card write still has to finish first.
+- Fixed IL launches remaining stuck in native pause/save screens. Save/load shortcuts also accept other held gameplay buttons, including A+B during frame advance.
+- Gelato Enter shows its chosen Plaza state by name, such as **Peaceful** or **Yoshi unlock**, instead of an ambiguous episode number.
 - Rejected streak finishes now explain the reason, such as intro skip, frame advance or restarting inside a full-level route. The reported Full Reds streak misses have not been reproduced yet; these messages should help identify the cause.
 
 ## Displays and menus
@@ -31,6 +35,7 @@
 ## Loading and memory
 
 - Read-speed unlocking now applies to the early boot reads too. The disc cache retains unaffected data when it wraps instead of discarding everything; console loading-time gains still need measurement.
+- The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.
 - Removed unused compression paths without changing savestate output or reducing the space available for states.
 
 ## Updating

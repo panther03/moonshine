@@ -93,8 +93,8 @@ public:
     bool wasPressedSubset(BindId id) const {
         return live() && wasPressedSubsetRaw(id);
     }
-    // Practice pause/step can accompany a gameplay button still held after
-    // menu dismissal. The caller must exclude modals and bind recording.
+    // Practice pause/step and state shortcuts can accompany gameplay buttons
+    // held after menu dismissal. Callers exclude modals and bind recording.
     bool wasPressedSubsetRaw(BindId id) const {
         const u16 m = mMask[id];
         return m != 0 && (mHeld & m) == m && (mPrevHeld & m) != m;

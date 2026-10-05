@@ -14,6 +14,7 @@
 
 extern "C" void *gpModelWaterManager;
 extern "C" void GXGetProjectionv(f32 *projection);
+extern "C" GXColor gModelWaterManagerWaterColor[4];
 
 #pragma clang section text=".foxtrot.text" rodata=".foxtrot.rodata" data=".foxtrot.data" bss=".foxtrot.bss"
 
@@ -91,7 +92,7 @@ void advance(Water &water, const Ghost::VisualState &state) {
     }
 }
 
-void setup() {
+void setup(bool highlight) {
     Mtx identity;
     MTXIdentity(identity);
     // The late water pass can receive a reused TGraphics. Use the same
@@ -121,11 +122,17 @@ void setup() {
     (*reinterpret_cast<JUTTexture **>(manager + 0x5d3c))->load(GX_TEXMAP0);
     (*reinterpret_cast<JUTTexture **>(manager + 0x5d40))->load(GX_TEXMAP1);
     GXSetTevColor(GX_TEVREG0, *reinterpret_cast<GXColor *>(manager + 0x5d20));
-    GXSetTevColor(GX_TEVREG1, *reinterpret_cast<GXColor *>(manager + 0x5d24));
+    GXSetTevColor(GX_TEVREG1, highlight
+        ? *reinterpret_cast<GXColor *>(manager + 0x5d24)
+        : gModelWaterManagerWaterColor[0]);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR0A0);
-    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_C1);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO,
+        highlight ? GX_CC_C0 : GX_CC_ZERO, GX_CC_TEXC, GX_CC_C1);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO);
+    // Retail draws a faint blue base, then adds the specular highlight at its
+    // own coverage. Multiplying both by the base alpha makes the spray dark.
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA,
+        highlight ? GX_CA_TEXA : GX_CA_A1, GX_CA_ZERO);
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
@@ -134,7 +141,8 @@ void setup() {
     GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
     GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP0);
-    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA,
+        highlight ? GX_BL_ONE : GX_BL_INVSRCALPHA, GX_LO_COPY);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
     GXSetColorUpdate(GX_TRUE);
@@ -155,53 +163,57 @@ void draw(JDrama::TGraphics *graphics) {
     if (!*reinterpret_cast<JUTTexture *const *>(manager + 0x5d3c) ||
         !*reinterpret_cast<JUTTexture *const *>(manager + 0x5d40)) return;
     Ghost::prepareVisual();
-    bool configured = false;
+    bool anyDraw = false;
     f32 savedProjection[7];
-    for (unsigned runner = 0; runner < 2; ++runner) {
-        Ghost::VisualState state;
-        const bool visible = runner ? Ghost::secondaryVisualState(&state) : Ghost::visualState(&state);
-        Water &water = sWater.runner[runner];
-        // The water pass can precede the player's model-entry cue. Availability
-        // must not depend on a submitted latch that is cleared each frame.
-        if (!visible || !state.visible || !GhostModel::available() ||
-            !gSettings.getBool(SETTING_GHOST_DISPLAY) ||
-            !(state.fludd.mode & SUSAMUNE_GHOST_FLUDD_PRESENT)) {
-            water.ready = false;
-            continue;
-        }
-        advance(water, state);
-        for (unsigned i = 0; i < kDrops; ++i) {
-            const Drop &drop = water.drops[i];
-            if (drop.life <= 0) continue;
-            if (!configured) {
-                GXGetProjectionv(savedProjection);
-                setup();
-                configured = true;
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        bool configured = false;
+        for (unsigned runner = 0; runner < 2; ++runner) {
+            Ghost::VisualState state;
+            const bool visible = runner ? Ghost::secondaryVisualState(&state) : Ghost::visualState(&state);
+            Water &water = sWater.runner[runner];
+            // The water pass can precede the player's model-entry cue. Availability
+            // must not depend on a submitted latch that is cleared each frame.
+            if (!visible || !state.visible || !GhostModel::available() ||
+                !gSettings.getBool(SETTING_GHOST_DISPLAY) ||
+                !(state.fludd.mode & SUSAMUNE_GHOST_FLUDD_PRESENT)) {
+                water.ready = false;
+                continue;
             }
-            TVec3f camera;
-            // Retail preserves the active water view here during cue 8.
-            const Mtx &view = *reinterpret_cast<Mtx *>(reinterpret_cast<u8 *>(gpModelWaterManager) + 0x5e10);
-            // Scalar MEM2 data never enters retail paired-single helpers.
-            const TVec3f &p = drop.position;
-            camera.set(view[0][0] * p.x + view[0][1] * p.y + view[0][2] * p.z + view[0][3],
-                       view[1][0] * p.x + view[1][1] * p.y + view[1][2] * p.z + view[1][3],
-                       view[2][0] * p.x + view[2][1] * p.y + view[2][2] * p.z + view[2][3]);
-            const f32 radius = drop.splash ? (8 - drop.life) * 3 : 7;
-            const f32 height = drop.splash ? radius * 0.3f : radius;
-            const u8 opacity[] = {64, 128, 192, 255};
-            const u8 choice = gSettings.get(SETTING_GHOST_OPACITY);
-            const u32 alpha = (u32)((drop.life < 4 ? drop.life * 0.25f : 1) *
-                opacity[choice < 4 ? choice : 1]);
-            GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-            const u32 color = 0xffffff00u | alpha;
-            vertex(camera.x - radius, camera.y + height, camera.z, color, 0, 0);
-            vertex(camera.x + radius, camera.y + height, camera.z, color, 1, 0);
-            vertex(camera.x + radius, camera.y - height, camera.z, color, 1, 1);
-            vertex(camera.x - radius, camera.y - height, camera.z, color, 0, 1);
+            advance(water, state);
+            for (unsigned i = 0; i < kDrops; ++i) {
+                const Drop &drop = water.drops[i];
+                if (drop.life <= 0) continue;
+                if (!configured) {
+                    if (!anyDraw) GXGetProjectionv(savedProjection);
+                    setup(pass != 0);
+                    configured = true;
+                    anyDraw = true;
+                }
+                TVec3f camera;
+                // Retail preserves the active water view here during cue 8.
+                const Mtx &view = *reinterpret_cast<Mtx *>(reinterpret_cast<u8 *>(gpModelWaterManager) + 0x5e10);
+                // Scalar MEM2 data never enters retail paired-single helpers.
+                const TVec3f &p = drop.position;
+                camera.set(view[0][0] * p.x + view[0][1] * p.y + view[0][2] * p.z + view[0][3],
+                           view[1][0] * p.x + view[1][1] * p.y + view[1][2] * p.z + view[1][3],
+                           view[2][0] * p.x + view[2][1] * p.y + view[2][2] * p.z + view[2][3]);
+                const f32 radius = drop.splash ? (8 - drop.life) * 5 : 25;
+                const f32 height = drop.splash ? radius * 0.3f : radius;
+                const u8 opacity[] = {64, 128, 192, 255};
+                const u8 choice = gSettings.get(SETTING_GHOST_OPACITY);
+                const u32 alpha = (u32)((drop.life < 4 ? drop.life * 0.25f : 1) *
+                    opacity[choice < 4 ? choice : 1]);
+                GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+                const u32 color = 0xffffff00u | alpha;
+                vertex(camera.x - radius, camera.y + height, camera.z, color, 0, 0);
+                vertex(camera.x + radius, camera.y + height, camera.z, color, 1, 0);
+                vertex(camera.x + radius, camera.y - height, camera.z, color, 1, 1);
+                vertex(camera.x - radius, camera.y - height, camera.z, color, 0, 1);
+            }
         }
     }
     // Later HUD consumers can reuse the active projection without setting it.
-    if (configured) {
+    if (anyDraw) {
         Mtx44 projection = {};
         const u8 type = savedProjection[0] == 0 ? GX_PERSPECTIVE : GX_ORTHOGRAPHIC;
         projection[0][0] = savedProjection[1];

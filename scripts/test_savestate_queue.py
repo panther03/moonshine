@@ -57,6 +57,9 @@ struct Binds {
     u32 pressed, values[BIND_COUNT];
     u32 get(int id) { return values[id]; }
     bool wasPressed(int id) { return (pressed & (1u << id)) != 0; }
+    bool wasPressedSubsetRaw(int id) { return wasPressed(id); }
+    bool recording() { return false; }
+    void suppressUntilRelease() {}
 } gBinds;
 struct Card {
     bool busy;

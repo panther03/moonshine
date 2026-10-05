@@ -687,7 +687,7 @@ public:
             const int entry = ILing::menuEntryAt(position);
             const bool selected = !isOption() &&
                                   position == selectedPosition();
-            char pb[40];
+            char pb[64];
             const char *value = "(PB: --)";
             const s32 qf = ILing::pbQf(entry);
             if (qf >= 0) {
@@ -699,8 +699,12 @@ public:
                 char time[24];
                 if (qf >= 0) ILing::formatTime(qf, time, sizeof(time));
                 else snprintf(time, sizeof(time), "--");
-                snprintf(pb, sizeof(pb), "E%d  (PB: %s)",
-                         ILing::selectedEpisode(entry) + 1, time);
+                if (ILing::choosesPlazaState(entry))
+                    snprintf(pb, sizeof(pb), "%s  (PB: %s)",
+                             JapaneseUi::text(ILing::plazaStateName(ILing::selectedEpisode(entry))), time);
+                else
+                    snprintf(pb, sizeof(pb), "E%d  (PB: %s)",
+                             ILing::selectedEpisode(entry) + 1, time);
                 value = pb;
             }
             drawValueRow(menu, x, ry, w, ILing::label(entry), value, selected,
@@ -710,13 +714,19 @@ public:
         }
 
         drawScrollHints(menu, x, y, w, listH, start, end, rows);
+        const bool plazaChoice = !isOption() && ILing::choosesPlazaState(selectedEntry());
         const char *hint = mChoosingEpisode
-            ? SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select episode"
+            ? (plazaChoice
+                ? SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select Plaza state"
+                : SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select episode")
             : isOption()
             ? SUSAMUNE_GLYPH_A " Toggle" SUSAMUNE_GLYPH_SLASH "Edit  "
               SUSAMUNE_GLYPH_X " Shine  " SUSAMUNE_GLYPH_C
               " U" SUSAMUNE_GLYPH_SLASH "D Select L"
               SUSAMUNE_GLYPH_SLASH "R Section"
+            : plazaChoice
+            ? SUSAMUNE_GLYPH_A " Start  " SUSAMUNE_GLYPH_Z " Plaza state  "
+              SUSAMUNE_GLYPH_Y " Stats  " SUSAMUNE_GLYPH_X " Delete"
             : ILing::canChooseEpisode(selectedEntry())
             ? SUSAMUNE_GLYPH_A " Start  " SUSAMUNE_GLYPH_Z " Episode  "
               SUSAMUNE_GLYPH_Y " Stats  " SUSAMUNE_GLYPH_X " Delete"

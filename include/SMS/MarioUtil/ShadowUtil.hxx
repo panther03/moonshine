@@ -13,7 +13,12 @@ struct TCircleShadowRequest {
     f32 mRotationY;
     f32 _18;
     u8 mShadowType;
+    u8 mNeedsProjection;
+    u16 mPadding;
+    u32 mActorType;
 };
+
+static_assert(sizeof(TCircleShadowRequest) == 0x24, "retail shadow request ABI");
 
 class TMBindShadowBody {};
 
