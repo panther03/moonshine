@@ -25,7 +25,8 @@ class MenuOpeningHoldTests(unittest.TestCase):
         program = Path(cls.folder.name) / "menu_open.cpp"
         program.write_text(r'''
 struct TMarDirector {enum {STATE_NORMAL=4}; unsigned mCurState; unsigned _260;};
-static bool menuShown,menuPressed,wheelShown,practiceHold;
+static bool menuShown,menuPressed,wheelShown,practiceHold,saveDialog;
+struct SavestateManager{static bool saveDialogOpen(){return saveDialog;}};
 struct Menu {bool shown(){return menuShown;}};
 struct Binds {bool wasPressedRaw(int){return menuPressed;}} gBinds;
 const int BIND_MENU_TOGGLE=0;
@@ -34,7 +35,7 @@ namespace PracticeSession {bool freezeRequested(){return practiceHold;}}
 extern "C" __declspec(dllexport) unsigned opening(unsigned flags,unsigned state) {
     Menu menu;Menu *gMenu=(flags&128)?nullptr:&menu;
     TMarDirector director={state,1};TMarDirector *stageDirector=(flags&1)?&director:nullptr;
-    menuShown=flags&2;menuPressed=flags&4;wheelShown=flags&8;practiceHold=flags&32;
+    menuShown=flags&2;menuPressed=flags&4;wheelShown=flags&8;practiceHold=flags&32;saveDialog=flags&512;
     const bool sessionModalBeforeDirect=flags&16,stateDiskBusy=flags&64;
     const bool stepOverridesShortcut=flags&256,tasCinematic=false;
 ''' + "\n".join(expressions) + r'''
@@ -67,6 +68,14 @@ extern "C" __declspec(dllexport) unsigned opening(unsigned flags,unsigned state)
     def test_paused_advance_overrides_a_new_menu_chord_but_never_an_open_menu(self):
         self.assertEqual(self.lib.opening(1 | 4 | 256, 4), 0)
         self.assertEqual(self.lib.opening(1 | 2 | 4 | 256, 4), 1)
+
+    def test_sd_load_holds_save_box_until_transfer_finishes(self):
+        for state in (5,11):
+            self.assertEqual(self.lib.opening(1 | 64 | 512, state), 1)
+            self.assertEqual(self.lib.opening(1 | 512, state), 0)
+            self.assertEqual(self.lib.opening(1 | 64, state), 0)
+        source=(ROOT/'src/main.cpp').read_text()
+        self.assertIn('gpMarDirector->mCurState = heldDirectorState;',source)
 
 
 if __name__ == "__main__":

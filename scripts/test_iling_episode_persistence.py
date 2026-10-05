@@ -31,6 +31,8 @@ class EpisodePersistenceTests(unittest.TestCase):
                              (ROOT / "include/susamune/iling_episodes.h").read_text())
         code = r'''
 #include "susamune/susamune_cfg.h"
+#include "susamune/failure_banner_style.h"
+#include "susamune/layout_profile.h"
 typedef unsigned char u8;typedef unsigned short u16;typedef unsigned u32;typedef int s32;
 typedef unsigned UINT;typedef unsigned FSIZE_t;
 #define API extern "C" __declspec(dllexport)
@@ -89,7 +91,7 @@ unsigned DeviceForName(const char*){return 0;}void RemountDevice(unsigned){}
         code += kernel[kernel.index("#define SUSAMUNE_SETTING_KEY"):kernel.index("// Same, for the running disc") ]
         code += function(kernel, "FindSettingKey")
         for name in re.findall(r"\b(Apply\w+)\(", function(kernel, "ParseIni")):
-            if name not in ("ApplyILEpisodeKey", "ApplyPracticeDisplayStyleKey", "ApplyWallkickStyleKey"):
+            if name not in ("ApplyILEpisodeKey", "ApplyPracticeDisplayStyleKey", "ApplyWallkickStyleKey", "ApplyFailureBannerStyleKey"):
                 code += f"template<class... T>void {name}(T...){{}}\n"
         code += kernel[kernel.index("enum IniSection {"):kernel.index("static enum IniSection ClassifySection")]
         code += kernel[kernel.index("#define IL_EPISODE_KEY"):kernel.index("static void ApplyILEpisodeKey")]
@@ -97,8 +99,8 @@ unsigned DeviceForName(const char*){return 0;}void RemountDevice(unsigned){}
         code += keys[:keys.index("};") + 2]
         code += kernel[kernel.index("static const char *const PracticeDisplayKeys"):kernel.index("static u8 ApplyPracticeDisplayStyleKey")]
         for name in ("BuildSectionName", "IsSpace", "Trim", "ParseU8", "ParseU16", "ParseQftU8", "ParseQftRgb", "ClassifySection",
-                     "ApplyILEpisodeKey", "ApplyWallkickStyleKey", "ApplyMovementOverlayStyleKey", "ApplyPracticeDisplayStyleKey", "InheritPracticeDisplayStyles",
-                     "ParseIni", "Emit", "EmitStr", "EmitILEpisodes", "EmitMovementOverlayStyle", "EmitPracticeDisplayStyles"):
+                     "ApplyILEpisodeKey", "ApplyWallkickStyleKey", "ApplyMovementOverlayStyleKey", "ApplyPracticeDisplayStyleKey", "InheritPracticeDisplayStyles", "ApplyFailureBannerStyleKey",
+                     "ParseIni", "Emit", "EmitStr", "EmitILEpisodes", "EmitMovementOverlayStyle", "EmitPracticeDisplayStyles", "EmitFailureBannerStyle"):
             code += function(kernel, name)
         for name in ("EmitNativeTimerStyle", "EmitMarioColors", "EmitFluddColors"):
             code += f"template<class... T>void {name}(T...){{}}\n"
@@ -122,6 +124,7 @@ API void selectRegion(const char*region){
  resetEpisodeChoices();stageEpisodes(&episodes);memset(&cfg,0,sizeof(cfg));
  SusamunePracticeDisplayStyleInit(&practiceStyles);
  cfg.wallkickStyle.magic=SUSAMUNE_WALLKICK_STYLE_MAGIC;cfg.wallkickStyle.version=SUSAMUNE_WALLKICK_STYLE_VERSION;
+ cfg.flags|=SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
  cfg.count=SETTING_KEY_COUNT;for(unsigned i=0;i<SUSAMUNE_CFG_TOTAL_SETTINGS;i++)SusamuneCfgSetSetting(&cfg,i,SUSAMUNE_CFG_UNSET);
  attrPoison=0xa5;realAttr=0x20;statError=closeError=0;tempOpens=sourceCloses=commits=0;
 }
@@ -131,6 +134,15 @@ API void settingCount(unsigned count){cfg.count=count;}
 API void getEpisodes(SusamuneILEpisodesCfg*out){*out=episodes;}
 API const void*styles(){return &practiceStyles;}
 API const void*unrelated(){return &cfg.movementStyle;}
+API void failure(MoonshineFailureStyle*out){MoonshineFailureStyleRead(out,&cfg.wallkickStyle,&practiceStyles);}
+API int layoutFailure(unsigned old,MoonshineFailureStyle*out){
+ MoonshineLayoutFile file={};file.magic=MOONSHINE_LAYOUT_MAGIC;file.version=old?1:MOONSHINE_LAYOUT_VERSION;
+ file.bytes=old?MOONSHINE_LAYOUT_V1_FILE_SIZE:sizeof(file);file.generation=1;
+ file.layout.wallkick=cfg.wallkickStyle;file.layout.practiceDisplays=practiceStyles;
+ file.checksum=MoonshineLayoutChecksum(&file);if(!MoonshineLayoutValid(&file))return 0;
+ MoonshineLayoutUpgrade(&file);MoonshineFailureStyleRead(out,&file.layout.wallkick,&file.layout.practiceDisplays);
+ return MoonshineLayoutValid(&file);
+}
 API void setEpisodes(const SusamuneILEpisodesCfg*in){episodes=*in;}
 API void adopt(const SusamuneILEpisodesCfg*in,SusamuneILEpisodesCfg*out){adoptEpisodes(in);stageEpisodes(out);}
 API const char*rewrite(const char*input){originalLength=strlen(input);memcpy(original,input,originalLength+1);return WriteIniFile(&cfg)?0:original;}

@@ -2472,6 +2472,9 @@ int main(int argc, char **argv)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*14, "Init DI... Done! %35s", " ");
 			if(STATUS_LOADING == 10)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*15, "Init CARD...");
+			if(STATUS_LOADING == -10 && STATUS_ERROR == (u32)-5)
+				PrintFormat(DEFAULT_SIZE, MAROON, MENU_POS_X, MENU_POS_Y + 20*15,
+					"Memory cards exceed 3 MiB. Files were not changed.");
 			if(abs(STATUS_LOADING) > 10 && abs(STATUS_LOADING) < 20)
 				PrintFormat(DEFAULT_SIZE, BLACK, MENU_POS_X, MENU_POS_Y + 20*15, "Init CARD... Done!");
 			GRRLIB_RenderPreserve();

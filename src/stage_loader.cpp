@@ -154,6 +154,7 @@ struct StageLoaderRuntime {
     u8 playlistTimeOverflow;
     u8 activeActions[kQueueActionBytes];
     u8 practiceLoaded;
+    u8 rejectionCause;
 };
 
 struct StageLoaderQueues {
@@ -989,7 +990,9 @@ void drawFullNotice(Menu *menu) {
                      item, (unsigned)sRuntime.activeCount);
             break;
         case OUTCOME_INELIGIBLE:
-            snprintf(status, sizeof(status), "Ineligible - retry %u/%u",
+            snprintf(status, sizeof(status), "%s - retry %u/%u",
+                     sRuntime.lastQf < 0 ? "Timer unavailable" :
+                         ILing::rejectionText(sRuntime.rejectionCause),
                      item, (unsigned)sRuntime.activeCount);
             break;
         case OUTCOME_WARPS_DISABLED:
@@ -1019,7 +1022,9 @@ void drawFullNotice(Menu *menu) {
                      (unsigned)sRuntime.goal);
             break;
         case OUTCOME_INELIGIBLE:
-            snprintf(status, sizeof(status), "Ineligible - streak 0/%u",
+            snprintf(status, sizeof(status), "%s - streak 0/%u",
+                     sRuntime.lastQf < 0 ? "Timer unavailable" :
+                         ILing::rejectionText(sRuntime.rejectionCause),
                      (unsigned)sRuntime.goal);
             break;
         case OUTCOME_TARGET_MISS:
@@ -1035,11 +1040,15 @@ void drawFullNotice(Menu *menu) {
         }
     }
 
-    const int scale = failure ? 50 + gSettings.get(SETTING_STREAK_FAILURE_SIZE) * 10 : 100;
+    if (failure) {
+        gCreationExtras.drawFailureBanner(menu, ILing::label(sRuntime.lastEntry), status);
+        return;
+    }
+    const int scale = 100;
     const int w = 340 * scale / 100;
     const int h = 58 * scale / 100;
-    int x = failure ? gSettings.get(SETTING_STREAK_FAILURE_X) * 20 : 150;
-    int y = failure ? gSettings.get(SETTING_STREAK_FAILURE_Y) * 20 : 350;
+    int x = 150;
+    int y = 350;
     if (x + w > 640) x = 640 - w;
     if (y + h > 480) y = 480 - h;
     menu->fillBox(x, y, w, h, Color(8, 12, 20, 210));
@@ -1578,6 +1587,7 @@ void onILResult(int entry, s32 qf, bool eligible) {
         return;
     }
     if (!eligible || qf < 0) {
+        sRuntime.rejectionCause = ILing::rejectionCause();
         queueFailure(OUTCOME_INELIGIBLE, qf);
         return;
     }

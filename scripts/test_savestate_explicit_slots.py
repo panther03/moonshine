@@ -36,7 +36,7 @@ static bool valid,admitted,transportAccept;static u32 calls,notices;
 static u32 archiveGameId(){return 0x474D5345;}static u32 archiveBuildId(){return 12;}static u32 archiveSceneKey(){return 13;}
 static bool archiveBuildCompatible(u32 build){return build==12;}
 static u32 poolCapacity(){return 250000;}static bool validStore(){return valid;}
-static bool admitArchiveStage(){return admitted;}static OSTime OSGetTime(){return 101;}
+static bool admitArchiveStage(bool=false){return admitted;}static OSTime OSGetTime(){return 101;}
 struct Menu{void toast(const char*){++notices;}}menu;static Menu*gMenu=&menu;
 namespace StateArchiveProfile{static bool valid(u32 p){return p==19;}static bool reidentify(u32&p,u32 b){return valid(p)&&b==12;}}
 namespace StateStorage{

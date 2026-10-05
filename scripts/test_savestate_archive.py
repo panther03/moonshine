@@ -50,7 +50,9 @@ static SusamuneStateCatalogEntry sSelectedSD;
 static const char*sDiskStatus;
 static bool candidateMatches,transportBusy,ready;static u32 scene,rebased,cleared,notified,stores;
 static bool muted,interrupts;
-struct TMarDirector {enum{STATE_NORMAL=4};u32 mCurState;};
+struct TPauseMenu2 {enum {MENU_SAVING=3};u32 mState;};
+struct TMarDirector {enum{STATE_NORMAL=4,STATE_PAUSE_MENU=5,STATE_SAVE_CARD=11};u32 mCurState;TPauseMenu2*mPauseMenu;};
+static TPauseMenu2 pauseMenu;
 static TMarDirector director;static TMarDirector*gpMarDirector=&director;static bool loading;
 static bool inLoadTransition(){return loading||!gpMarDirector;}
 static u32 archiveSceneKey(){return scene;}
@@ -91,7 +93,7 @@ bool busy(){return transportBusy;}
 class SavestateManager{public:enum{kSlotCount=3};bool mLoadPending;u32 mLoadWaitFrames;
  struct TransferResult {u32 command,status,id,slot,generation;SusamuneStateArchiveHeader header;};
  bool takeTransferResult(TransferResult&);
- static bool diskBusy();void updateDisk();}manager;
+ static bool diskBusy();static bool saveDialogOpen();void updateDisk();}manager;
 static u32 sProjectStartKey[2],sProjectFrames,sProjectRole;
 static bool sExplicitTransfer,sTransferReady;static SavestateManager::TransferResult sTransferResult;
 '''
@@ -167,6 +169,10 @@ __declspec(dllexport) void slotBytes(u32 slot,void*out){StatePoolMemoryCopyOut(&
 __declspec(dllexport) u32 slotSize(u32 slot){return sPool.slots[slot].size;}
 __declspec(dllexport) u32 admitted(u32 state,u32 busy){director.mCurState=state;loading=busy;
  return admitArchiveStage();}
+__declspec(dllexport) u32 admittedRestore(u32 state,u32 pauseState,u32 busy){
+ director.mCurState=state;pauseMenu.mState=pauseState;
+ director.mPauseMenu=pauseState==99?0:&pauseMenu;loading=busy;
+ return admitArchiveStage(true);}
 }
 '''
 
@@ -180,7 +186,8 @@ class SavestateArchiveTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         source=FIXTURE+'\nnamespace PracticeSession {\n'+function_source(ROOT/'src/practice_session.cpp','bool projectSavestateMatches(')+'\n}\n'
         for name in ('void poolWriteSpans(', 'void poolReadSpans(', 'u32 packedChecksum(',
-                     'bool archiveStageReady()', 'bool admitArchiveStage()',
+                     'bool SavestateManager::saveDialogOpen()',
+                     'bool archiveStageReady(', 'bool admitArchiveStage(',
                      'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
                      'bool SavestateManager::diskBusy()', 'void SavestateManager::updateDisk()',
                      'bool SavestateManager::takeTransferResult('):
@@ -484,14 +491,24 @@ extern "C" __declspec(dllexport) u32 restorePayload(u32 slot,u32 direct,void*out
         for state in range(13):
             self.assertEqual(self.lib.admitted(state,0),int(state==4))
             self.assertEqual(self.lib.admitted(state,1),0)
-        admission=function_source(SOURCE,'bool admitArchiveStage()')
+        admission=function_source(SOURCE,'bool admitArchiveStage(')
         self.assertIn('Return to normal play before using SD states',admission)
         self.assertIn('gMenu->toast(sDiskStatus)',admission)
         self.assertIn('beginSDLoad(id, crc, packed, false)',
                       function_source(SOURCE,'bool SavestateManager::loadFromSD('))
         for action in ('beginSDExport','beginSDLoad','refreshSD','renameSD','deleteSD'):
             code=function_source(SOURCE,f'bool SavestateManager::{action}(')
-            self.assertLess(code.index('admitArchiveStage()'),code.index('StateStorage::'))
+            self.assertLess(code.index('admitArchiveStage('),code.index('StateStorage::'))
+
+    def test_direct_sd_restore_accepts_save_boxes_but_not_other_cutscenes(self):
+        for state in range(13):
+            for pause in (0,1,3,4,5,99):
+                with self.subTest(state=state,pause=pause):
+                    expected=state in (4,11) or (state==5 and pause==3)
+                    self.assertEqual(self.lib.admittedRestore(state,pause,0),int(expected))
+                    self.assertEqual(self.lib.admittedRestore(state,pause,1),0)
+        begin=function_source(SOURCE,'bool SavestateManager::beginSDLoad(')
+        self.assertIn('admitArchiveStage(restore)',begin)
 
 
 if __name__=='__main__':unittest.main()

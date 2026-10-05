@@ -92,7 +92,7 @@ const char kChoiceLabels[] =
     "0.25x\0" "0.5x\0" "1x\0" "2x\0" "4x\0"
     "0.1 s\0" "0.2 s\0" "0.3 s\0" "0.4 s\0" "0.6 s\0" "0.7 s\0"
     "0.8 s\0" "0.9 s\0" "1.1 s\0" "1.2 s\0" "1.3 s\0" "1.4 s\0" "1.5 s\0"
-    "Landing\0Buttslide";
+    "Landing\0Buttslide\0Mario";
 
 const u8 kChoiceMap[] = {
     0, 1,              // bool
@@ -105,7 +105,7 @@ const u8 kChoiceMap[] = {
     0, 20, 21,          // Piantissimo pattern
     22, 23, 24, 25,     // ghost opacity
     26, 9, 27,          // appearance: Default, Always, Never
-    28, 29,             // ghost appearance
+    28, 29, 77,         // ghost appearance: original values remain unchanged
     30, 31, 0,          // stage session: Full notification, Counter, Off
     32, 33, 34,         // PB ghost save
     35, 36,              // Petey route
@@ -123,11 +123,11 @@ const u8 kChoiceMap[] = {
     0, 75, 76, 45, // jump display: Off, Landing, Buttslide, Both
 };
 const u8 kChoiceFirst[CHOICES_COUNT + 1] = {
-    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 36, 39, 42, 44, 50, 52, 57,
-    61, 65, 67, 70, 74, 107, 132, 143, 148, 164, 168
+    0, 2, 5, 9, 12, 15, 21, 24, 27, 31, 34, 37, 40, 43, 45, 51, 53, 58,
+    62, 66, 68, 71, 75, 108, 133, 144, 149, 165, 169
 };
 
-static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 168,
+static_assert(sizeof(kChoiceMap) / sizeof(kChoiceMap[0]) == 169,
               "choice map size changed");
 static_assert(SETTING_FREE_CAMERA_SMOOTHING == SETTING_TAS_BANNER + 1 &&
               SETTING_COUNT <= SUSAMUNE_CFG_TOTAL_SETTINGS,

@@ -47,7 +47,7 @@ class GelatoGbsContracts(unittest.TestCase):
             "const int kPbSlotCount = SUSAMUNE_ILING_PB_SLOT_COUNT;",
             iling,
         )
-        self.assertIn('"SE\\0NE\\0CE\\0GGBS"', iling)
+        self.assertIn('"SE\\0NE\\0CE\\0GGBS\\0GE"', iling)
         self.assertIn("if (i == kEntryGelatoGbs) continue;", iling)
         self.assertRegex(
             iling,

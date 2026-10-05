@@ -69,6 +69,18 @@ enum EntryFlags {
     ENTRY_FLAG_MASK     = 0x3F,
 };
 
+enum RejectionCause {
+    REJECT_PRACTICE,
+    REJECT_INTRO_SKIP,
+    REJECT_FAST_FORWARD,
+    REJECT_TAS,
+    REJECT_SECRET_FLUDD,
+    REJECT_POSITION_LOAD,
+    REJECT_GHOST_WATCH,
+    REJECT_CHILD_RETRY,
+    REJECT_DIFFERENT_START,
+};
+
 struct Entry {
     LevelWarp::Dest start;
     u8 result;
@@ -352,7 +364,7 @@ const char kLiteralEntryLabels[] =
 constexpr char kLiteralShortLabels[] =
     "AS1\0ASR\0CM\0BOW\0DCS\0PAC\0DSL\0LIL\0GRS\0LHS\0BG1\0BG2\0LB\0RB\0"
     "CHK\0SG\0D100\0UB\0BS\0GB\0BP\0DSM\0TS\0GP\0PE\0HS\0RE\0B2E\0"
-    "SE\0NE\0CE\0GGBS";
+    "SE\0NE\0CE\0GGBS\0GE";
 
 constexpr int packedLabelCount(const char *pool, u32 bytes) {
     int count = 1;
@@ -531,7 +543,8 @@ static_assert(kGroupFirst[GROUP_AIRSTRIP] == kGeneratedLabelCount,
               "generated IL label range changed");
 static_assert(packedLabelCount(kLiteralShortLabels,
                               sizeof(kLiteralShortLabels)) ==
-                  kEntryFullRedsFirst - kGeneratedLabelCount,
+                  kEntryCount - kGeneratedLabelCount -
+                      (kEntryFullRedsLast - kEntryFullRedsFirst + 1),
               "short IL label table changed");
 
 struct AttemptState {
@@ -551,6 +564,7 @@ struct AttemptState {
     LevelWarp::Dest start;
     u8 finish;
     bool secretOnly;
+    u8 rejectionCause;
     int selectedEntry;
     u32 serial;
 };
@@ -662,6 +676,7 @@ static_assert(sizeof(ILingRuntime) <= SUSAMUNE_ILING_RUNTIME_SIZE,
 #define sAttemptStart sAttemptState.start
 #define sFinishKind sAttemptState.finish
 #define sSecretOnly sAttemptState.secretOnly
+#define sRejectionCause sAttemptState.rejectionCause
 #define sSelectedEntry sAttemptState.selectedEntry
 #define sAttemptSerial sAttemptState.serial
 #define sCustomPbProfileNames sRuntime.customProfileNames
@@ -1314,7 +1329,8 @@ bool plazaOverlayRunsLive(int entry) {
         return false;
     }
     const u8 scenario = sAttemptStart.episode;
-    return scenario == 0 || scenario == 1 || scenario == 5 || scenario == 7;
+    return scenario == 0 || scenario == 1 || scenario == 5 || scenario == 7 ||
+           scenario == 8;
 }
 
 void restorePlazaStoryFlags() {
@@ -1364,6 +1380,7 @@ void clearAttempt() {
     sTransitionPending = false;
     sRecordsEligible = false;
     sAssistReasons = 0;
+    sRejectionCause = REJECT_PRACTICE;
     sChildRetryContinuation = false;
     sNativeIgt = false;
     sSecretOnly = false;
@@ -1403,6 +1420,15 @@ u8 liveGlobalAssistReasons() {
                : 0;
 }
 
+u8 liveRejectionCause() {
+    if (gSettings.getBool(SETTING_STAGE_INTRO_SKIP)) return REJECT_INTRO_SKIP;
+    if (actionsFastForwardActive()) return REJECT_FAST_FORWARD;
+    if (PracticeSession::assisted()) return REJECT_TAS;
+    if (Ghost::observerActive()) return REJECT_GHOST_WATCH;
+    if (gQFTTimer.practiceAssisted()) return REJECT_POSITION_LOAD;
+    return REJECT_PRACTICE;
+}
+
 void armAttempt(const Entry &entry, int selected,
                 const LevelWarp::Dest *start = nullptr) {
     const int entryIndex = (int)(&entry - kEntries);
@@ -1424,6 +1450,7 @@ void armAttempt(const Entry &entry, int selected,
     sSecretOnly = isSecretOnlyPbSlot(pbSlot(identity));
     sAttemptSerial = gQFTTimer.attemptSerial();
     sAssistReasons = 0;
+    sRejectionCause = REJECT_PRACTICE;
     sRecordsEligible = true;
     sNativeIgt = false;
 }
@@ -1433,6 +1460,7 @@ void beginAttemptScene(int entry) {
     sAwaitingStageSetup = false;
     sNativeIgt = false;
     sAssistReasons = liveGlobalAssistReasons();
+    sRejectionCause = sAssistReasons ? liveRejectionCause() : REJECT_PRACTICE;
     sRecordsEligible = sAssistReasons == 0 && !sessionStartChanged();
     Records::onILAttemptStarted(entry);
     if (!sRecordsEligible) {
@@ -1690,7 +1718,10 @@ const char *label(int entry) {
         return sGeneratedLabel;
     }
 
-    return PackedText::at(kLiteralEntryLabels, entry - kGeneratedLabelCount);
+    const int skipped = entry > kEntryFullRedsLast
+        ? kEntryFullRedsLast - kEntryFullRedsFirst + 1 : 0;
+    return PackedText::at(kLiteralEntryLabels,
+                          entry - kGeneratedLabelCount - skipped);
 }
 
 const char *shortLabel(int entry) {
@@ -1702,8 +1733,10 @@ const char *shortLabel(int entry) {
                               entry - kEntryFullRedsFirst);
     }
     if (entry >= kGeneratedLabelCount) {
+        const int skipped = entry > kEntryFullRedsLast
+            ? kEntryFullRedsLast - kEntryFullRedsFirst + 1 : 0;
         return PackedText::at(kLiteralShortLabels,
-                              entry - kGeneratedLabelCount);
+                              entry - kGeneratedLabelCount - skipped);
     }
 
     const Entry &item = kEntries[entry];
@@ -2178,7 +2211,10 @@ void update() {
     const u8 globalAssistReasons = liveGlobalAssistReasons();
     if (sRunning && !sAwaitingStageSetup && globalAssistReasons)
         invalidateForAssist(globalAssistReasons);
-    if (secretAttemptUsedFludd()) invalidateForAssist(Assist::OTHER);
+    if (secretAttemptUsedFludd()) {
+        sRejectionCause = REJECT_SECRET_FLUDD;
+        invalidateForAssist(Assist::OTHER);
+    }
     if (sRunning && stageObjectsLive() && gpMarDirector->mGCConsole &&
         gpMarDirector->mGCConsole->mIsTimerMoving) {
         sNativeIgt = true;
@@ -2295,6 +2331,7 @@ void update() {
             sAttemptSerial = serial;
             sChildRetryContinuation = sessionChildReset;
             sAssistReasons = liveGlobalAssistReasons();
+            sRejectionCause = sAssistReasons ? liveRejectionCause() : REJECT_PRACTICE;
             sRecordsEligible = !sessionChildReset && !sessionStartChanged() &&
                                sAssistReasons == 0;
             sNativeIgt = false;
@@ -2472,6 +2509,8 @@ void onSavestateLoaded() {
 
 void invalidateForAssist(u8 reasons) {
     if (!sRunning || sAwaitingStageSetup) return;
+    if ((reasons & Assist::OTHER) && sRejectionCause == REJECT_PRACTICE)
+        sRejectionCause = liveRejectionCause();
     const u8 added = reasons & ~sAssistReasons;
     if (!added) return;
     sAssistReasons |= reasons;
@@ -2480,6 +2519,21 @@ void invalidateForAssist(u8 reasons) {
     sRecordsEligible = false;
     StageLoader::invalidatePlaylistBest();
     SplitStats::invalidateAttempt();
+}
+
+u8 rejectionCause() {
+    if (sChildRetryContinuation) return REJECT_CHILD_RETRY;
+    if (sessionStartChanged()) return REJECT_DIFFERENT_START;
+    return sRejectionCause;
+}
+
+const char *rejectionText(u8 cause) {
+    static const char reasons[] = "Practice action used\0Intro skip on\0"
+        "Fast-forward used\0Frame advance / TAS used\0FLUDD used in Secret\0"
+        "Position / state loaded\0Ghost Watch used\0Restarted in subarea\0"
+        "Different route start";
+    return PackedText::at(reasons,
+        cause <= REJECT_DIFFERENT_START ? cause : REJECT_PRACTICE);
 }
 
 u8 savestateGhostEndpoint() {

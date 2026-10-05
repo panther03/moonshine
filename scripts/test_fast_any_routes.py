@@ -46,7 +46,7 @@ bool sPinnaEygRestart,sRunning,sAttemptReady,sAwaitingStageSetup,sTransitionPend
 bool sChildRetryContinuation,sSecretOnly,sRecordsEligible,sNativeIgt;
 bool sBowserNozzleShieldActive,sBowserNozzleShieldPending;
 s32 sSavedBowserNozzleFlag;LevelWarp::Dest sAttemptStart;
-u8 sFinishKind,sAssistReasons,sEpisodeChoices[21];int sSelectedEntry;u32 sAttemptSerial;
+u8 sFinishKind,sAssistReasons,sRejectionCause,sEpisodeChoices[21];int sSelectedEntry;u32 sAttemptSerial;
 u8 liveReasons;int recordStarts,recordInvalid,pbWrites,recordResults,splitResults,splitInvalid;
 namespace Records {
 enum GhostRaceSource{GHOST_RACE_NONE,GHOST_RACE_PERSONAL,GHOST_RACE_IMPORTED};
@@ -60,6 +60,7 @@ namespace Ghost {enum{RACE_SOURCE_PERSONAL,RACE_SOURCE_IMPORTED};
 struct RaceContext{int ilEntry;u32 attemptSerial;int source;s32 targetQf,startingPbQf;};
 bool raceContext(RaceContext*){return false;}}
 u8 liveGlobalAssistReasons(){return liveReasons;}
+u8 liveRejectionCause(){return 0;}
 bool isPlazaEntry(int){return false;}
 void applyPlazaOverlay(int){}void applyEntryOverlay(int){}
 int entryForChildMode(const TGameSequence&,int){return -1;}
@@ -71,7 +72,7 @@ struct Console{int getFinishedTime(){return 0;}};
 struct TMarDirector{Console *mGCConsole;}*gpMarDirector;
 bool stageObjectsLive(){return false;}
 bool recordPB(int,s32){++pbWrites;return true;}
-namespace ILing{bool sameEpisodeShine(int,int){return false;}}
+namespace ILing{bool sameEpisodeShine(int,int){return false;}u8 rejectionCause(){return sRejectionCause;}}
 namespace StageLoader{
 ''' + loader[loader.index("enum SessionState {"):loader.index("enum ModalState {")] + r'''
 const int kMarioWinDemoState=0x1302,kRetryDelayFrames=15;
@@ -79,7 +80,7 @@ struct Mario{int mState;}*gpMarioOriginal;
 enum {SETTING_STREAK_AUTO_RESET};
 struct Settings{bool getBool(int){return true;}}gSettings;
 void clearShinePublishLatch(){}
-struct Runtime{bool practiceLoaded;int retryFrames;u8 mode,activePlaylistId,activeCount,activeIndex,state;u32 attemptSerial;
+struct Runtime{bool practiceLoaded;int retryFrames;u8 mode,activePlaylistId,activeCount,activeIndex,state,rejectionCause;u32 attemptSerial;
 u32 eligibleCompletes;u64 completedQfTotal;int targetQf;bool playlistPbEligible;}sRuntime;
 struct Queues{u8 active[120];}sQueues;
 int successes,failures,lastOutcome;bool finalEligible;
@@ -221,6 +222,23 @@ case 14:return StageLoader::sRuntime.activeIndex;default:return -1;}}
                 self.lib.hop(0x2f, 0, 0); self.lib.hop(0x2f, 0, 1)
                 self.lib.finish(2, assist)
                 self.assertEqual(self.values(6, 9, 10, 11, 14), (0, 0, 0, 0, 0))
+
+    def test_clean_full_reds_keep_their_identity_and_count_for_streaks(self):
+        routes=((122,0x2f,8),(123,0x2e,9),(124,0x30,18),(125,0x20,28),
+                (126,0x32,38),(127,0x29,39),(128,0x33,48),(129,0x28,49),
+                (130,0x1f,58),(131,0x2a,68))
+        for entry,child,shine in routes:
+            with self.subTest(entry=entry):
+                self.lib.reset();self.lib.select(entry,255,1)
+                self.lib.hop(child,0,0);self.lib.finish(shine,0)
+                self.assertEqual(self.values(3,6,7,9),(entry,1,0,1))
+
+    def test_clean_sandbird_full_and_inside_count_for_streaks(self):
+        for entry in (30,31):
+            self.lib.reset();self.lib.select(entry,255,1)
+            if entry==30:self.lib.hop(0x21,0,0)
+            self.lib.finish(23,0)
+            self.assertEqual(self.values(3,6,7,9),(entry,1,0,1))
 
     def test_new_fast_any_route_invalidates_only_its_old_playlist_best(self):
         loader = (ROOT / "src/stage_loader.cpp").read_text()

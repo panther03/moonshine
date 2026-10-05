@@ -38,14 +38,19 @@ class AttemptLifecycleTests(unittest.TestCase):
             code+=re.search(r'const int '+name+r' = \d+;',source).group(0)+'\n'
         code+='''
 struct Application {TGameSequence mCurrentScene,mPrevScene;}gpApplication;
-struct Timer {u32 serial=1;u32 attemptSerial(){return serial;}}gQFTTimer;
+int causeFlags;
+struct Timer {u32 serial=1;u32 attemptSerial(){return serial;}bool practiceAssisted(){return causeFlags&16;}}gQFTTimer;
+enum{SETTING_STAGE_INTRO_SKIP};struct Settings{bool getBool(int){return causeFlags&1;}}gSettings;
+bool actionsFastForwardActive(){return causeFlags&2;}
+namespace PracticeSession{bool assisted(){return causeFlags&4;}}
+namespace Ghost{bool observerActive(){return causeFlags&8;}}
 struct TFlagManager {static TFlagManager *smInstance;void setFlag(u32,s32){}};
 TFlagManager *TFlagManager::smInstance=0;
 bool sPinnaEygRestart,sRunning,sAttemptReady,sAwaitingStageSetup,sTransitionPending;
 bool sChildRetryContinuation,sSecretOnly,sRecordsEligible,sNativeIgt;
 bool sBowserNozzleShieldActive,sBowserNozzleShieldPending;
 s32 sSavedBowserNozzleFlag;LevelWarp::Dest sAttemptStart;
-u8 sFinishKind,sAssistReasons;int sSelectedEntry;u32 sAttemptSerial;
+u8 sFinishKind,sAssistReasons,sRejectionCause;int sSelectedEntry;u32 sAttemptSerial;
 u8 liveReasons;int recordStarts,recordInvalid,playlistInvalid,splitInvalid;
 namespace Records {void onILAttemptStarted(int){++recordStarts;recordInvalid=0;}void invalidateAttempt(u8){++recordInvalid;}}
 namespace StageLoader {void invalidatePlaylistBest(){++playlistInvalid;}bool fastAnyStart(int){return false;}}
@@ -57,14 +62,14 @@ void applyPlazaOverlay(int){}void applyEntryOverlay(int){}
 int entryForChildMode(const TGameSequence&,int){return 26;}
 void clearAttempt(){sRunning=false;sAwaitingStageSetup=false;sSelectedEntry=-1;}
 '''
-        for name in ('validEntry','pbSlot','sameDest','sessionStartChanged','sceneMatches','entryFinish','acceptsAnySelectedOrigin',
+        for name in ('liveRejectionCause','validEntry','pbSlot','sameDest','sessionStartChanged','sceneMatches','entryFinish','acceptsAnySelectedOrigin',
                      'isPinnaOneRouteScene','isPinnaEightReturn','acceptsSelectedOriginScene',
                      'isInternalScene','entryForStartScene','armAttempt','beginAttemptScene',
                      'beforeStageSetup','invalidateForAssist'):
             code+=function(source,name)
         code+='''
 #define API extern "C" __declspec(dllexport)
-API void reset(){liveReasons=0;sRunning=sAttemptReady=sAwaitingStageSetup=false;sSelectedEntry=-1;recordStarts=recordInvalid=playlistInvalid=splitInvalid=0;gpApplication.mCurrentScene={2,0,0};gpApplication.mPrevScene={2,0,0};}
+API void reset(){liveReasons=0;causeFlags=0;sRejectionCause=0;sRunning=sAttemptReady=sAwaitingStageSetup=false;sSelectedEntry=-1;recordStarts=recordInvalid=playlistInvalid=splitInvalid=0;gpApplication.mCurrentScene={2,0,0};gpApplication.mPrevScene={2,0,0};}
 API void reasons(int v){liveReasons=v;}
 API void select(int i){armAttempt(kEntries[i],i);}
 API void invalidate(int v){invalidateForAssist(v);}
@@ -77,6 +82,8 @@ API int rejected(){return recordInvalid;}
 API int playlist(){return playlistInvalid;}
 API int splits(){return splitInvalid;}
 API void ready(){sAttemptReady=true;}
+API void cause(int bits){causeFlags=bits;}
+API int rejection(){return sRejectionCause;}
 '''
         path=Path(cls.temp.name)/'lifecycle.cpp';path.write_text(code)
         proc=subprocess.run([str(ROOT/'toolchain/clang++.exe'),'--target=x86_64-pc-windows-msvc','-shared','-nostdlib','-fuse-ld=lld','-Wl,/noentry','-O2','-I',str(ROOT/'src'),str(path),'-o',str(path.with_suffix('.dll'))],capture_output=True,text=True)
@@ -119,6 +126,16 @@ API void ready(){sAttemptReady=true;}
     def test_natural_entry_initializes_at_setup(self):
         self.lib.setup(4,4)
         self.assertEqual((self.lib.waiting(),self.lib.eligible(),self.lib.starts()),(0,1,1))
+
+    def test_first_specific_rejection_survives_child_hops_and_setting_changes(self):
+        for bits, expected in ((1,1),(2,2),(4,3),(8,6),(16,5),(0,0)):
+            self.lib.reset(); self.lib.select(25); self.lib.setup(4,0)
+            self.lib.ready(); self.lib.cause(bits); self.lib.invalidate(1)
+            self.assertEqual(self.lib.rejection(),expected)
+            self.lib.cause(0); self.lib.setup(0x20,0)
+            self.assertEqual(self.lib.rejection(),expected)
+            self.lib.setup(4,0)
+            self.assertEqual(self.lib.rejection(),0)
 
     def test_compact_streak_rejections_are_visible_but_normal_counter_stays_compact(self):
         source=(ROOT/'src/stage_loader.cpp').read_text();body=function(source,'draw')

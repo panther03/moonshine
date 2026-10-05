@@ -1396,7 +1396,7 @@ private:
         if (mSel == OPACITY_ROW)
             return "Changes how transparent the ghost looks in the stage.";
         if (mSel == APPEARANCE_ROW)
-            return "Chooses Shadow Mario or Piantissimo as the ghost model.";
+            return "Chooses Shadow Mario, Piantissimo or Mario as the ghost model.";
         if (mSel == AUTO_TARGET_ROW)
             return "Chooses whether a restart races the last attempt or success.";
         if (mSel == PB_SAVE_ROW)
@@ -4973,15 +4973,19 @@ public:
 
     const char *title() const override { return mStreaking ? "Streaking" : "Stageloader"; }
     bool favoriteHint() const override { return optionSetting(selectedOption()) != SETTING_COUNT; }
-    bool grabsInput() const override { return mEditor != EDIT_NONE; }
+    bool grabsInput() const override { return mEditor != EDIT_NONE || gCreationExtras.editing(); }
     bool suppressesBinds() const override {
-        if (mEditor != EDIT_NONE) return true;
+        if (mEditor != EDIT_NONE || gCreationExtras.editing()) return true;
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
         return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
     }
-    bool fullScreen() const override { return mEditor != EDIT_NONE; }
+    bool fullScreen() const override { return mEditor != EDIT_NONE || gCreationExtras.editing(); }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
+        if (gCreationExtras.editing()) {
+            gCreationExtras.updateEditor(pad);
+            return;
+        }
         if (mEditor != EDIT_NONE) {
             updateTextEditor(menu);
             return;
@@ -5043,6 +5047,10 @@ public:
     }
 
     void draw(Menu *menu, int x, int y, int w, int h) override {
+        if (gCreationExtras.editing()) {
+            gCreationExtras.drawEditor(menu);
+            return;
+        }
         if (mEditor != EDIT_NONE) {
             drawCreationKeyboard(
                 menu,
@@ -5102,6 +5110,9 @@ public:
             } else if (option == OPTION_BUILTIN) {
                 name = "Built-in preset";
                 value = StageLoader::builtinPlaylistName(mBuiltinPlaylist);
+            } else if (option == OPTION_FAILURE_STYLE) {
+                name = "Failure banner appearance";
+                value = "Edit";
             } else {
                 const int saved =
                     StageLoader::customPlaylistEntryCount(mCustomSlot);
@@ -5226,7 +5237,7 @@ private:
         OPTION_LOAD,
         OPTION_SAVE,
         OPTION_AUTO_RESET,
-        OPTION_FAILURE, OPTION_FAILURE_X, OPTION_FAILURE_Y, OPTION_FAILURE_SIZE, OPTION_FAILURE_DURATION,
+        OPTION_FAILURE, OPTION_FAILURE_STYLE, OPTION_FAILURE_DURATION,
         OPTION_COUNT_MAX,
     };
 
@@ -5239,13 +5250,12 @@ private:
     static SettingId optionSetting(Option option) {
         if (option == OPTION_DISPLAY) return SETTING_STAGE_SESSION_DISPLAY;
         if (option == OPTION_AUTO_RESET) return SETTING_STREAK_AUTO_RESET;
-        return option >= OPTION_FAILURE && option <= OPTION_FAILURE_DURATION
-            ? (SettingId)(SETTING_STREAK_FAILURE_BANNER + option - OPTION_FAILURE)
-            : SETTING_COUNT;
+        return option == OPTION_FAILURE ? SETTING_STREAK_FAILURE_BANNER :
+            option == OPTION_FAILURE_DURATION ? SETTING_STREAK_FAILURE_DURATION : SETTING_COUNT;
     }
 
     int optionCount() const {
-        return mStreaking ? 10 : OPTION_AUTO_RESET;
+        return mStreaking ? 8 : OPTION_AUTO_RESET;
     }
     Option optionAt(int row) const {
         return mStreaking && row >= OPTION_BUILTIN
@@ -5303,6 +5313,10 @@ private:
 
     void activateOption(Menu *menu) {
         const Option option = selectedOption();
+        if (option == OPTION_FAILURE_STYLE) {
+            gCreationExtras.beginFailureBannerEditor();
+            return;
+        }
         const SettingId setting = optionSetting(option);
         if (setting != SETTING_COUNT) {
             gSettings.cycle(setting, 1);

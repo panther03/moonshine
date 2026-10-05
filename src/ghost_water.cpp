@@ -10,6 +10,7 @@
 #include "Dolphin/GX.h"
 #include "Dolphin/MTX.h"
 #include "Dolphin/mem.h"
+#include "JSystem/JUtility/JUTTexture.hxx"
 
 extern "C" void *gpModelWaterManager;
 extern "C" void GXGetProjectionv(f32 *projection);
@@ -27,10 +28,11 @@ static_assert(0x2000u + SUSAMUNE_GHOST_WATER_SIZE <= SUSAMUNE_PRESENTATION_SIZE,
 #define sWater (*reinterpret_cast<Storage *>(SUSAMUNE_GHOST_WATER_PPC_BASE))
 TMarDirector *sDirector;
 
-void vertex(f32 x, f32 y, f32 z, u32 color) {
+void vertex(f32 x, f32 y, f32 z, u32 color, f32 s, f32 t) {
     volatile f32 *fifo = reinterpret_cast<volatile f32 *>(0xCC008000);
     *fifo = x; *fifo = y; *fifo = z;
     *reinterpret_cast<volatile u32 *>(0xCC008000) = color;
+    *fifo = s; *fifo = t;
 }
 
 void advance(Water &water, const Ghost::VisualState &state) {
@@ -100,17 +102,38 @@ void setup() {
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
-    GXSetNumTexGens(0);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0,
+                     GX_IDENTITY, GX_FALSE, 0x7d);
     GXSetNumIndStages(0);
-    GXSetNumTevStages(1);
+    GXSetNumTevStages(2);
     GXSetTevDirect(GX_TEVSTAGE0);
-    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0);
-    GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+    GXSetTevDirect(GX_TEVSTAGE1);
+    // Borrow retail's immutable water mask and highlight; never add particles
+    // to its gameplay pool or mutate its shared quad buffer.
+    u8 *manager = static_cast<u8 *>(gpModelWaterManager);
+    (*reinterpret_cast<JUTTexture **>(manager + 0x5d3c))->load(GX_TEXMAP0);
+    (*reinterpret_cast<JUTTexture **>(manager + 0x5d40))->load(GX_TEXMAP1);
+    GXSetTevColor(GX_TEVREG0, *reinterpret_cast<GXColor *>(manager + 0x5d20));
+    GXSetTevColor(GX_TEVREG1, *reinterpret_cast<GXColor *>(manager + 0x5d24));
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR0A0);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_C1);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
+    GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP0);
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
@@ -128,6 +151,9 @@ void draw(JDrama::TGraphics *graphics) {
     }
     if (!graphics || !director || !gpCamera || !gpModelWaterManager ||
         (gMenu && gMenu->shown())) return;
+    const u8 *manager = static_cast<const u8 *>(gpModelWaterManager);
+    if (!*reinterpret_cast<JUTTexture *const *>(manager + 0x5d3c) ||
+        !*reinterpret_cast<JUTTexture *const *>(manager + 0x5d40)) return;
     Ghost::prepareVisual();
     bool configured = false;
     f32 savedProjection[7];
@@ -160,19 +186,18 @@ void draw(JDrama::TGraphics *graphics) {
             camera.set(view[0][0] * p.x + view[0][1] * p.y + view[0][2] * p.z + view[0][3],
                        view[1][0] * p.x + view[1][1] * p.y + view[1][2] * p.z + view[1][3],
                        view[2][0] * p.x + view[2][1] * p.y + view[2][2] * p.z + view[2][3]);
-            const f32 radius = drop.splash ? (8 - drop.life) * 3 : 5;
+            const f32 radius = drop.splash ? (8 - drop.life) * 3 : 7;
             const f32 height = drop.splash ? radius * 0.3f : radius;
             const u8 opacity[] = {64, 128, 192, 255};
             const u8 choice = gSettings.get(SETTING_GHOST_OPACITY);
             const u32 alpha = (u32)((drop.life < 4 ? drop.life * 0.25f : 1) *
                 opacity[choice < 4 ? choice : 1]);
-            GXBegin(GX_TRIANGLEFAN, GX_VTXFMT0, 6);
-            vertex(camera.x, camera.y, camera.z, 0xc8eeff00u | alpha);
-            vertex(camera.x - radius, camera.y, camera.z, 0x409fff00u);
-            vertex(camera.x, camera.y + height, camera.z, 0x409fff00u);
-            vertex(camera.x + radius, camera.y, camera.z, 0x409fff00u);
-            vertex(camera.x, camera.y - height, camera.z, 0x409fff00u);
-            vertex(camera.x - radius, camera.y, camera.z, 0x409fff00u);
+            GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+            const u32 color = 0xffffff00u | alpha;
+            vertex(camera.x - radius, camera.y + height, camera.z, color, 0, 0);
+            vertex(camera.x + radius, camera.y + height, camera.z, color, 1, 0);
+            vertex(camera.x + radius, camera.y - height, camera.z, color, 1, 1);
+            vertex(camera.x - radius, camera.y - height, camera.z, color, 0, 1);
         }
     }
     // Later HUD consumers can reuse the active projection without setting it.

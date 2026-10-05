@@ -122,8 +122,11 @@ class StateCodecTests(unittest.TestCase):
         cls.addClassCleanup(cls.folder.cleanup)
         shim = Path(cls.folder.name) / "shim.cpp"
         shim.write_text(r'''
-#include "susamune/state_codec.hxx"
+#include "../src/state_codec.cpp"
 extern "C" {
+__declspec(dllexport) int referenceQuick(void *w,const char *source,char *dest,int size,int capacity) {
+ return LZ4_compress_fast_extState(w,source,dest,size,capacity,1);
+}
 void *memcpy(void *d,const void *s,__SIZE_TYPE__ n) {
     unsigned char *o=(unsigned char*)d;const unsigned char *i=(const unsigned char*)s;
     while(n--)*o++=*i++;return d;
@@ -222,10 +225,11 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
         subprocess.run([str(compiler), "--target=x86_64-pc-windows-msvc", "-shared",
                         "-nostdlib", "-fuse-ld=lld", "-Wl,/noentry", "-O2",
                         "-fno-builtin", "-mno-stack-arg-probe", "-I", str(ROOT / "include"),
-                        str(shim), str(ROOT / "src/state_codec.cpp"), "-o", str(library)], check=True)
+                        str(shim), "-o", str(library)], check=True)
         cls.lib = C.CDLL(str(library))
         cls.addClassCleanup(lambda: C.windll.kernel32.FreeLibrary(C.c_void_p(cls.lib._handle)))
         cls.lib.workspace.restype = C.c_uint
+        cls.lib.referenceQuick.argtypes = [C.c_void_p,C.c_void_p,C.c_void_p,C.c_int,C.c_int]
         cls.lib.pack.argtypes = [C.c_void_p, C.c_uint, C.POINTER(Span), C.c_uint,
                                  C.POINTER(Span), C.POINTER(Result)]
         cls.lib.packMany.argtypes = [C.c_void_p, C.c_uint, C.POINTER(Span), C.c_uint,
@@ -250,6 +254,24 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
     def setUp(self):
         self.work = Guarded(self.lib.workspace())
         self.assertLessEqual(self.work.size, 0x50000)
+
+    def test_specialized_quick_compressor_matches_original_exactly(self):
+        rng = random.Random(73)
+        for size in (1, 12, 255, 65545, 65546, 65547, QUICK_BLOCK):
+            for kind in range(3):
+                with self.subTest(size=size,kind=kind):
+                    raw = (bytes(size) if kind == 0 else
+                           (b'Moonshine state 123'*((size+17)//18))[:size] if kind == 1 else
+                           rng.randbytes(size))
+                    source = C.create_string_buffer(raw)
+                    reference = Guarded(QUICK_BLOCK + QUICK_BLOCK//255 + 16)
+                    length = self.lib.referenceQuick(self.work.ptr,source,reference.ptr,size,reference.size)
+                    self.assertGreater(length,0)
+                    result,encoded = self.pack(self.source(raw),[len(raw)+32],quick=True)
+                    self.assertEqual(result.status,SUCCESS)
+                    block = raw if length >= size else C.string_at(reference.ptr,length)
+                    self.assertEqual(encoded[16:result.compressed],block)
+                    self.assertTrue(reference.guards())
 
     def streamed(self, encoded, window, fail_at=None, invalid=None):
         buffer = Guarded(window)

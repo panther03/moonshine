@@ -98,6 +98,8 @@ void onSavestateSaved();
 void onSavestateLoaded();
 // Revoke PB, Records and challenge credit without changing the QFT clock.
 void invalidateForAssist(u8 reasons = Assist::OTHER);
+u8 rejectionCause();
+const char *rejectionText(u8 cause);
 bool achievementChimeBlocked();
 
 // PB result banner, drawn through Menu's shared no-allocation renderer.

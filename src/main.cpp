@@ -457,9 +457,14 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     // one whose own branch does nothing while the fader is up. Any app state it
     // did produce would be a state change we never asked for, so drop it.
     const bool freeze = stageDirector && stageDirector->_260 &&
-                        stageDirector->mCurState == TMarDirector::STATE_NORMAL &&
-                        (menuOwnsRetailPad || WarpWheel::shown() ||
-                         sessionModalBeforeDirect || PracticeSession::freezeRequested() || stateDiskBusy);
+                        ((stageDirector->mCurState == TMarDirector::STATE_NORMAL &&
+                          (menuOwnsRetailPad || WarpWheel::shown() ||
+                           sessionModalBeforeDirect || PracticeSession::freezeRequested() || stateDiskBusy)) ||
+                         (stateDiskBusy && SavestateManager::saveDialogOpen()));
+    // A direct SD load may start from a save box. Keep that box from advancing
+    // into the next area while its state is read, then return to its exact
+    // state if the read fails. The CARD worker remains live throughout.
+    const u8 heldDirectorState = stageDirector ? stageDirector->mCurState : 0;
     const bool marioActive = gpMarDirector &&
                              gpMarDirector->mCurState == TMarDirector::STATE_NORMAL &&
                              !freeze;
@@ -485,7 +490,7 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     if (suppressPad && retailPad)
         restoreRetailPad(retailPad, retailInput);
     if (freeze) {
-        gpMarDirector->mCurState = TMarDirector::STATE_NORMAL;
+        gpMarDirector->mCurState = heldDirectorState;
         state = 0;
     }
     PracticeSession::afterDirect(state, !freeze && !menuOwnsRetailPad && !stateDiskBusy);

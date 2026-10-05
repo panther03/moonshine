@@ -53,6 +53,7 @@ typedef struct
 
 static u32 CacheInited = 0;
 static u32 TempCacheCount = 0;
+static u32 CacheEntryCount = 0;
 static u32 DataCacheOffset = 0;
 static u8 *DCCache = CACHE_START;
 static u32 DCacheLimit = CACHE_SIZE;
@@ -441,13 +442,20 @@ void ISOSetupCache()
 			// Get the total card size from GCNCard.c.
 			MemCardSize = GCNCard_GetTotalSize();
 		}
-		DCCache += MemCardSize; //memcard is before cache
-		DCacheLimit -= MemCardSize;
+		/* Card admission checks this too; never underflow the cache bound. */
+		if (MemCardSize >= DCacheLimit)
+			DCacheLimit = 0;
+		else
+		{
+			DCCache += MemCardSize; //memcard is before cache
+			DCacheLimit -= MemCardSize;
+		}
 	}
 	memset32(DC, 0, sizeof(DataCache)* CACHE_MAX);
 
 	DataCacheOffset = 0;
 	TempCacheCount = 0;
+	CacheEntryCount = 0;
 
 	CacheInited = 1;
 }
@@ -494,54 +502,66 @@ void ISOSeek(u32 Offset)
 
 const u8 *ISORead(u32* Length, u32 Offset)
 {
-	if(CacheInited == 0)
+	const u64 Offset64 = (u64)Offset + ISOShift64;
+	/* A large DVD request must not spill past the cache into state staging.
+	 * DI's existing loop consumes the bounded scratch chunk and asks again. */
+	if(CacheInited == 0 || DCacheLimit == 0 || *Length > DCacheLimit)
 	{
 		if (*Length > DI_READ_BUFFER_LENGTH)
 			*Length = DI_READ_BUFFER_LENGTH;
-		ISOReadDirect(DI_READ_BUFFER, *Length, Offset);
+		ISOReadDirect(DI_READ_BUFFER, *Length, Offset64);
 		return DI_READ_BUFFER;
 	}
+	if (*Length == 0)
+		return DI_READ_BUFFER;
 	u32 i;
 
-	for( i = 0; i < CACHE_MAX; ++i )
+	for( i = 0; i < CacheEntryCount; ++i )
 	{
 		if(DC[i].Size == 0) continue;
-		if( Offset >= DC[i].Offset && Offset + *Length <= DC[i].Offset + DC[i].Size )
+		if( Offset >= DC[i].Offset && Offset - DC[i].Offset <= DC[i].Size &&
+			*Length <= DC[i].Size - (Offset - DC[i].Offset) )
 		{
 			//dbgprintf("DI: Cached Read Offset:%08X Size:%08X Buffer:%p\r\n", DC[i].Offset, DC[i].Size, DC[i].Data );
 			return DC[i].Data + (Offset - DC[i].Offset);
 		}
 	}
 
-	u64 Offset64 = Offset + ISOShift64;
+	u32 cacheLength = *Length;
 	if( (Offset64 == LastOffset64) && (*Length < 0x8000) )
 	{	//pre-load data, guessing
 		u32 OriLength = *Length;
-		while((*Length += OriLength) < 0x10000) ;
+		while((cacheLength += OriLength) < 0x10000) ;
+		if (cacheLength > DCacheLimit) cacheLength = DCacheLimit;
 	}
+	/* Read-ahead belongs to the cache, not the caller's output length. */
 
 	// case we ran out of positions
 	if( TempCacheCount >= CACHE_MAX )
 		TempCacheCount = 0;
 
 	// case we filled up the cache
-	if( (DataCacheOffset + *Length) >= DCacheLimit )
+	if( DataCacheOffset > DCacheLimit - cacheLength )
 	{
-		for( i = 0; i < CACHE_MAX; ++i )
-			DC[i].Size = 0; //quickly delete old cache content
 		DataCacheOffset = 0;
-		TempCacheCount = 0;
 	}
+	/* Retain entries outside the bytes being overwritten on this lap. */
+	u8 *destination = DCCache + DataCacheOffset;
+	for (i = 0; i < CacheEntryCount; ++i)
+		if (DC[i].Size && DC[i].Data < destination + cacheLength &&
+			DC[i].Data + DC[i].Size > destination)
+			DC[i].Size = 0;
 
 	u32 pos = TempCacheCount;
 	TempCacheCount++;
+	if (CacheEntryCount < TempCacheCount) CacheEntryCount = TempCacheCount;
 
-	DC[pos].Data = DCCache + DataCacheOffset;
+	DC[pos].Data = destination;
 	DC[pos].Offset = Offset;
-	DC[pos].Size = *Length;
+	DC[pos].Size = cacheLength;
 
-	ISOReadDirect(DC[pos].Data, *Length, Offset64);
+	ISOReadDirect(DC[pos].Data, cacheLength, Offset64);
 
-	DataCacheOffset += *Length;
+	DataCacheOffset += cacheLength;
 	return DC[pos].Data;
 }

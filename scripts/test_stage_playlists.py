@@ -595,7 +595,7 @@ class PlaylistFormatTests(unittest.TestCase):
         self.assertIn('name = Settings::name(setting);', menu)
         self.assertIn("gSettings.cycle(setting, 1);", menu)
         self.assertIn(
-            "return mStreaking ? 10 : OPTION_AUTO_RESET;",
+            "return mStreaking ? 8 : OPTION_AUTO_RESET;",
             menu,
         )
         self.assertRegex(

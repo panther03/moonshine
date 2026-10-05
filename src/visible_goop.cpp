@@ -53,6 +53,7 @@ enum ApplyPhase : u8 {
 
 bool sApplied = false;
 bool sTarget = false;
+bool sRefreshDL = false;
 ApplyPhase sPhase = APPLY_SCAN;
 u32 sLayerIndex = 0;
 
@@ -181,6 +182,12 @@ bool updateMaterial(J3DMaterial *material, bool reveal) {
     const AlphaComp &fromAlpha = reveal ? kRetailAlpha : kRevealAlpha;
     const AlphaComp &toAlpha = reveal ? kRevealAlpha : kRetailAlpha;
 
+    // A loaded state can contain a material change captured between our
+    // unlock/resetDL frames. Rebuild known materials even if their values
+    // already match the setting; their saved display list may not match yet.
+    if (sRefreshDL && sameStage(*stage, toStage) && sameAlpha(*alpha, toAlpha) &&
+        sameColor2(color2, reveal)) return true;
+
     if (!sameStage(*stage, fromStage) || !sameAlpha(*alpha, fromAlpha) ||
         !sameColor2(color2, !reveal)) {
         return false;
@@ -197,8 +204,15 @@ bool updateMaterial(J3DMaterial *material, bool reveal) {
 void visibleGoopOnStageSetup() {
     sApplied = false;
     sTarget = false;
+    sRefreshDL = false;
     sPhase = APPLY_SCAN;
     sLayerIndex = 0;
+}
+
+void visibleGoopOnSavestateLoaded() {
+    visibleGoopOnStageSetup();
+    sApplied = true;
+    sRefreshDL = true;
 }
 
 void visibleGoopUpdate() {
@@ -207,12 +221,13 @@ void visibleGoopUpdate() {
 
     const bool reveal = gSettings.getBool(SETTING_VISIBLE_GOOP);
     if (sPhase == APPLY_SCAN && sLayerIndex == 0) {
-        if (!reveal && !sApplied) return;
+        if (!sRefreshDL && reveal == sApplied) return;
         sTarget = reveal;
     }
 
     if (sLayerIndex >= gpPollution->mJointModelNum) {
         sApplied = sTarget;
+        sRefreshDL = false;
         sLayerIndex = 0;
         sPhase = APPLY_SCAN;
         return;

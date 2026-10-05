@@ -11,7 +11,9 @@ class RawPromptInput {
 public:
     RawPromptInput() : mMask(0), mPrevious(0), mReady(false) {}
 
-    void begin(u16 mask) {
+    // Shared by modal entry points; keeping setup out of line avoids repeating
+    // the same release gate throughout the menu and colour editors.
+    __attribute__((noinline)) void begin(u16 mask) {
         mMask = mask;
         mPrevious = held();
         mReady = mPrevious == 0;

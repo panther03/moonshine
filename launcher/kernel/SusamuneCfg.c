@@ -60,6 +60,7 @@ still dropped, since those sections are regenerated wholesale.
 #include "susamune/susamune_cfg.h"
 #include "susamune/data_paths.h"
 #include "susamune/layout_profile.h"
+#include "susamune/failure_banner_style.h"
 #include "susamune/mod_bin.h"
 
 // Set by DIinit() from the disc header; SusamuneCfgInit() runs after it.
@@ -5484,7 +5485,7 @@ static void ApplyWallkickStyleKey(struct SusamuneWallkickStyleCfg *cfg,
 	}
 }
 
-static void ApplyMovementOverlayStyleKey(
+static bool ApplyMovementOverlayStyleKey(
 	struct SusamuneMovementOverlayStyleCfg *cfg, const char *prefix,
 	const char *key, const char *text, u32 colors)
 {
@@ -5497,7 +5498,7 @@ static void ApplyMovementOverlayStyleKey(
 	const char *field;
 
 	if (strncmp(key, prefix, prefixLen) != 0 || key[prefixLen] != '_')
-		return;
+		return false;
 	field = key + prefixLen + 1;
 	if (strcmp(field, "x") == 0 && ParseU16(text, &v16)) cfg->x = v16;
 	else if (strcmp(field, "y") == 0 && ParseU16(text, &v16)) cfg->y = v16;
@@ -5525,10 +5526,12 @@ static void ApplyMovementOverlayStyleKey(
 				cfg->rgb[i][0] = rgb[0];
 				cfg->rgb[i][1] = rgb[1];
 				cfg->rgb[i][2] = rgb[2];
-				return;
+				return true;
 			}
 		}
+		return false;
 	}
+	return true;
 }
 
 static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
@@ -5538,6 +5541,24 @@ static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
 	                             SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
 	ApplyMovementOverlayStyleKey(&cfg->dust, "dust", key, text,
 	                             SUSAMUNE_DUST_STYLE_COLOR_COUNT);
+}
+
+static void ApplyFailureBannerStyleKey(struct SusamuneWallkickStyleCfg *wallkick,
+	const char *key, const char *text)
+{
+	struct MoonshineFailureStyle failure;
+	struct SusamuneMovementOverlayStyleCfg style;
+	if (strncmp(key, "streak_failure_", 15) != 0) return;
+	MoonshineFailureStyleRead(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
+	if (!MoonshineFailureStyleValid(&failure))
+		MoonshineFailureStyleInit(&failure);
+	memset(&style, 0, sizeof(style));
+	memcpy(&style, &failure.x, sizeof(failure) - sizeof(failure.magic));
+	if (!ApplyMovementOverlayStyleKey(&style, "streak_failure", key, text, 1)) return;
+	memcpy(&failure.x, &style, sizeof(failure) - sizeof(failure.magic));
+	MoonshineFailureStyleWrite(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
 }
 
 static const char *const PracticeDisplayKeys[SUSAMUNE_PRACTICE_DISPLAY_COUNT] = {
@@ -5787,6 +5808,7 @@ static void ParseIni(char *text, struct SusamuneCfg *cfg)
 			ApplyCreationKey(&cfg->creation, Trim(line), Trim(eq + 1));
 			ApplyWallkickStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
 			ApplyMovementStyleKey(&cfg->movementStyle, Trim(line), Trim(eq + 1));
+			ApplyFailureBannerStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
 			practiceStylesPresent |= ApplyPracticeDisplayStyleKey(Trim(line), Trim(eq + 1));
 			ApplyNativeTimerStyleKey(&cfg->nativeTimerStyle, Trim(line), Trim(eq + 1));
 			ApplyNativeTimerModesKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
@@ -6145,6 +6167,19 @@ static void EmitPracticeDisplayStyles(FIL *f, int *err)
 	}
 }
 
+static void EmitFailureBannerStyle(FIL *f, int *err,
+	const struct SusamuneWallkickStyleCfg *wallkick)
+{
+	struct MoonshineFailureStyle failure;
+	struct SusamuneMovementOverlayStyleCfg style;
+	MoonshineFailureStyleRead(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
+	if (!MoonshineFailureStyleValid(&failure)) return;
+	memset(&style, 0, sizeof(style));
+	memcpy(&style, &failure.x, sizeof(failure) - sizeof(failure.magic));
+	EmitMovementOverlayStyle(f, err, "streak_failure", &style, 1);
+}
+
 static void EmitNativeTimerStyle(FIL *f, int *err,
 	                             const struct SusamuneNativeTimerStyleCfg *cfg)
 {
@@ -6354,6 +6389,7 @@ static void EmitCreationSection(FIL *f, int *err,
 	EmitFluddColors(f, err, FluddColorsBlock());
 	EmitILEpisodes(f, err);
 	EmitPracticeDisplayStyles(f, err);
+	EmitFailureBannerStyle(f, err, &cfg->wallkickStyle);
 	if (cfg->wallkickStyle.nativeTimerModesMagic == SUSAMUNE_NATIVE_TIMER_MODES_MAGIC)
 		Emit(f, err, line, (u32)_sprintf(line, "native_timer_custom_mask = %u\r\n",
 		     (((u32)cfg->wallkickStyle.nativeTimerCustomMask[0] << 8) |

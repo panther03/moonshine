@@ -78,6 +78,7 @@
 #include "susamune/rng_control.hxx"
 #include "susamune/movement_display.hxx"
 #include "susamune/warp_wheel.hxx"
+#include "susamune/visible_goop.hxx"
 #include "susamune/menu.hxx"
 #include "susamune/settings.hxx"
 #include "susamune/state_codec.hxx"
@@ -97,6 +98,7 @@
 #include "JKernel/JKRHeap.hxx"
 #include "JUtility/JUTGamePad.hxx"
 #include "SMS/GC2D/SmplFader.hxx"
+#include "SMS/GC2D/PauseMenu2.hxx"
 #include "SMS/MSound/MSound.hxx"
 #include "SMS/Manager/FlagManager.hxx"
 #include "SMS/Manager/RumbleManager.hxx"
@@ -759,12 +761,14 @@ bool inLoadTransition() {
     return false;
 }
 
-bool archiveStageReady() {
-    return !inLoadTransition() && gpMarDirector->mCurState == TMarDirector::STATE_NORMAL;
+bool archiveStageReady(bool restore = false) {
+    return !inLoadTransition() &&
+        (gpMarDirector->mCurState == TMarDirector::STATE_NORMAL ||
+         (restore && SavestateManager::saveDialogOpen()));
 }
 
-bool admitArchiveStage() {
-    if (archiveStageReady()) return true;
+bool admitArchiveStage(bool restore = false) {
+    if (archiveStageReady(restore)) return true;
     sDiskStatus = "Return to normal play before using SD states";
     if (gMenu) gMenu->toast(sDiskStatus);
     return false;
@@ -1188,7 +1192,7 @@ bool SavestateManager::beginSDLoad(u32 id, u32 crc, u32 packed, bool restore,
     if (slot == kSlotCount) slot = sActiveSlot;
     if (slot >= kSlotCount) return false;
     if (sBusy || diskBusy() || mLoadPending || sAwaitingLoadApproval || !validStore()) return false;
-    if (!admitArchiveStage()) return false;
+    if (!admitArchiveStage(restore)) return false;
     if (!restore && !StateSlotPoolCanCommit(&sPool, poolCapacity(), slot, packed, SUSAMUNE_STATE_STAGING_SIZE)) {
         sDiskStatus = "Not enough state memory - clear a slot";
         if (gMenu) gMenu->toast(sDiskStatus);
@@ -1875,6 +1879,7 @@ bool SavestateManager::loadSlot(u32 slot, u32 expectedGeneration) {
 
     reconcilePauseAudio(previousDirectorState);
     featuresOnSavestateLoaded(h->feature_state);
+    visibleGoopOnSavestateLoaded();
     gQFTTimer.restoreSavestate(saved.timer);
     SplitEvents::onSavestateLoaded();
     SplitStats::onSavestateLoaded();
@@ -1903,6 +1908,14 @@ bool SavestateManager::loadSlot(u32 slot, u32 expectedGeneration) {
         feedback("E:recovered", text);
     }
     return true;
+}
+
+bool SavestateManager::saveDialogOpen() {
+    return gpMarDirector &&
+        (gpMarDirector->mCurState == TMarDirector::STATE_SAVE_CARD ||
+         (gpMarDirector->mCurState == TMarDirector::STATE_PAUSE_MENU &&
+          gpMarDirector->mPauseMenu &&
+          gpMarDirector->mPauseMenu->mState == TPauseMenu2::MENU_SAVING));
 }
 
 void SavestateManager::updateHook() {

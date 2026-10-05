@@ -24,6 +24,7 @@
 #include "susamune/checksum.hxx"
 #include "susamune/ghost.hxx"
 #include "susamune/ghost_fludd.hxx"
+#include "susamune/ghost_mario_model.hxx"
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ghost_storage.h"
 #include "susamune/menu.hxx"
@@ -47,7 +48,8 @@ namespace {
 enum Appearance {
     APPEARANCE_SHADOW = 0,
     APPEARANCE_PIANTA = 1,
-    APPEARANCE_COUNT = 2,
+    APPEARANCE_MARIO = 2,
+    MODEL_SLOT_COUNT = 2,
 };
 
 struct AssetHeader {
@@ -165,6 +167,9 @@ static_assert(SUSAMUNE_GHOST_MODEL_HEAP_SIZE >=
 static_assert(SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE >=
                   kModelAllocationPreflight + kFixedExpHeapOverhead,
               "secondary model heap cannot satisfy its preflight");
+static_assert(SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE >=
+                  GhostMarioModel::kAllocationPreflight + kFixedExpHeapOverhead,
+              "Mario must fit the existing secondary heap");
 static_assert(SUSAMUNE_MOD_ATTACHMENT_HEAP_SIZE >=
                   kAttachmentInstanceMax * 2u + kFixedExpHeapOverhead,
               "attachment heap cannot hold two worst-case instances");
@@ -180,7 +185,8 @@ static_assert(SUSAMUNE_GHOST_MAX_SAMPLE_DATA_SIZE +
                   SUSAMUNE_GHOST_SEGMENT_TABLE_OFFSET,
               "Shadow work copy overlaps the record segment table");
 
-ModelSlot sSlots[APPEARANCE_COUNT];
+ModelSlot sSlots[MODEL_SLOT_COUNT];
+Appearance sLoadedAlternative = APPEARANCE_PIANTA;
 JKRExpHeap *sAttachmentHeap;
 const int kAttachments = 6; // held/Yoshi, body, nozzle for each runner
 AttachmentModel sAttachmentModels[kAttachments];
@@ -639,8 +645,9 @@ bool prepareFludd(AttachmentModel &attachment, int runner,
     Mtx *base = attachment.model->getBaseTRMtx();
     if (attachment.kind == ATTACHMENT_FLUDD) {
         if (!mario.data->mJointNames) return false;
-        const s32 chest = mario.data->mJointNames->getIndex("chn_chest");
+        const s32 chest = mario.data->mJointNames->getIndex("jnt_chest");
         if (chest < 0 || chest >= mario.data->getJointNum()) return false;
+        // Retail attaches to the chest joint, not its unrotated parent chain.
         const Mtx &joint = *mario.model->getAnmMtx(chest);
         Mtx tilt;
         // Same default backpack tilt as retail setBaseTRMtx; no live writes.
@@ -735,18 +742,28 @@ bool modelStorageReady(const ModelSlot &slot) {
 }
 
 bool loadModel(Appearance appearance) {
-    ModelSlot &slot = sSlots[appearance];
+    ModelSlot &slot = sSlots[appearance == APPEARANCE_SHADOW ? 0 : 1];
     clearLiveModel(slot);
     if (!slot.heap) return false;
     slot.heap->freeAll();
     const u32 emptyFree = slot.heap->getTotalFreeSize();
-    if (emptyFree < kModelAllocationPreflight) return false;
+    const u32 preflight = appearance == APPEARANCE_MARIO
+        ? GhostMarioModel::kAllocationPreflight : kModelAllocationPreflight;
+    if (emptyFree < preflight) return false;
 
     const void *resource = appearance == APPEARANCE_SHADOW
         ? shadowResource()
-        : piantaResource();
+        : appearance == APPEARANCE_MARIO
+            ? JKRFileLoader::getGlbResource("/mario/bmd/ma_mdl1.bmd")
+            : piantaResource();
     if (!resource ||
         (appearance == APPEARANCE_SHADOW && !gpScreenTexture)) return false;
+    // Mario's retail pollution replacement edits TEX1 image headers in place.
+    // All allocation-driving sections precede those headers and stay immutable.
+    if (appearance == APPEARANCE_MARIO &&
+        (!validBmdHeader(resource, GhostMarioModel::kResourceSize) ||
+         Checksum::crc32(resource, GhostMarioModel::kImmutablePrefixSize) !=
+             GhostMarioModel::kImmutablePrefixChecksum)) return false;
 
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     slot.heap->becomeCurrentHeap();
@@ -754,6 +771,11 @@ bool loadModel(Appearance appearance) {
         ? kShadowLoadFlags
         : kPiantaLoadFlags;
     slot.data = J3DModelLoaderDataBase::load(resource, loadFlags);
+    if (slot.data && appearance == APPEARANCE_MARIO &&
+        !GhostMarioModel::prepare(slot.data,
+            SUSAMUNE_GHOST_SECONDARY_HEAP_PPC_BASE,
+            SUSAMUNE_GHOST_SECONDARY_HEAP_PPC_BASE +
+                SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE)) slot.data = nullptr;
     if (slot.data && slot.data->getJointNum() == kExpectedJointCount) {
         void *storage = slot.heap->alloc(sizeof(J3DModel), 32);
         if (storage) slot.model = new (storage) J3DModel(slot.data, 0, 1);
@@ -790,20 +812,20 @@ bool loadModel(Appearance appearance) {
     const u32 used = emptyFree >= free ? emptyFree - free : 0;
     restoreHeap(oldHeap);
 
-    if (!slot.model || used > kModelAllocationPreflight) {
+    if (!slot.model || used > preflight) {
         clearLiveModel(slot);
         return false;
     }
     return true;
 }
 
-Appearance selectedAppearance() {
-    return gSettings.get(SETTING_GHOST_APPEARANCE) == 1
-        ? APPEARANCE_PIANTA : APPEARANCE_SHADOW;
+Appearance selectedAlternative() {
+    return gSettings.get(SETTING_GHOST_APPEARANCE) == 2
+        ? APPEARANCE_MARIO : APPEARANCE_PIANTA;
 }
 
 ModelSlot &runnerSlot(int runner) {
-    const int selected = static_cast<int>(selectedAppearance());
+    const int selected = gSettings.get(SETTING_GHOST_APPEARANCE) != 0;
     return sSlots[selected ^ (runner != 0 ? 1 : 0)];
 }
 
@@ -975,7 +997,7 @@ public:
             Ghost::prepareVisual();
             sGhostColor.a = ghostAlpha();
             AttachmentRequest requests[kAttachments] = {};
-            for (int appearance = 0; appearance < APPEARANCE_COUNT;
+            for (int appearance = 0; appearance < MODEL_SLOT_COUNT;
                  ++appearance) {
                 ModelSlot &slot = sSlots[appearance];
                 if (slot.model &&
@@ -1091,9 +1113,10 @@ void loadPendingStage() {
     clearLiveModel(sSlots[APPEARANCE_SHADOW]);
     clearLiveModel(sSlots[APPEARANCE_PIANTA]);
     const bool shadow = loadModel(APPEARANCE_SHADOW);
-    const bool pianta = loadModel(APPEARANCE_PIANTA);
+    sLoadedAlternative = selectedAlternative();
+    const bool alternative = loadModel(sLoadedAlternative);
     const bool registered =
-        (shadow || pianta) && registerView(director) &&
+        (shadow || alternative) && registerView(director) &&
         generation == sPendingGeneration;
     if (!registered) {
         clearLiveModel(sSlots[APPEARANCE_SHADOW]);
@@ -1118,6 +1141,7 @@ void init() {
     sPendingGeneration = 0;
     sQuiescedGeneration = 0;
     sLoadedGeneration = 0;
+    sLoadedAlternative = APPEARANCE_PIANTA;
     sView = new (sViewStorage) GhostView();
     sViewWord = nullptr;
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
@@ -1137,6 +1161,14 @@ void beginFrame() {
     sSubmitted[0] = sSubmitted[1] = false;
     sPrepared[0] = sPrepared[1] = false;
     memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    // Reuse the stage-change barrier when switching the second heap's model,
+    // including after a settings/state restore in the same stage.
+    if (sLoadedGeneration == sPendingGeneration &&
+        sPendingDirector == gpMarDirector &&
+        sLoadedAlternative != selectedAlternative()) {
+        u32 generation = sPendingGeneration + 1u;
+        sPendingGeneration = generation ? generation : 1;
+    }
     loadPendingStage();
 }
 

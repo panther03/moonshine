@@ -32,6 +32,7 @@ class PracticeDisplayFormatTests(unittest.TestCase):
 #define SUSAMUNE_VERSION_JP 1
 #define private public
 #include "susamune/creation_extras.hxx"
+#include "susamune/glyphs.hxx"
 #undef private
 #define API extern "C" __declspec(dllexport)
 extern "C" int _fltused=0;
@@ -61,6 +62,7 @@ void CreationExtras::drawDustDisplay(Menu*,const char*,int)const{}
 void CreationExtras::drawToast(Menu*,const char*)const{}
 void CreationExtras::drawPbBanner(Menu*,const char*)const{}
 void CreationExtras::drawStageSessionCounter(Menu*,const char*)const{}
+void CreationExtras::drawFailureBanner(Menu*,const char*,const char*)const{}
 '''
         code += source[source.index("const char kWallkickNames"):source.index("inline int clampi")]
         code += "\n".join(function(source, name) for name in (

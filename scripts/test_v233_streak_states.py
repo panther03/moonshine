@@ -39,7 +39,7 @@ void incrementSaturated(u32&v){if(v!=0xffffffffu)++v;}
 void addSaturated(u64&v,u32 n){v+=n;}
 void queueFailure(Outcome outcome,s32){++failures;sRuntime.currentStreak=0;sRuntime.outcome=outcome;sRuntime.state=STATE_RETRY_DELAY;}
 void queueSuccess(int,s32){++successes;++sRuntime.currentStreak;}
-namespace ILing {bool sameEpisodeShine(int,int){return false;}}
+namespace ILing {bool sameEpisodeShine(int,int){return false;}u8 rejectionCause(){return 3;}}
 namespace StageLoader {void invalidatePlaylistBest(){++invalidations;}}
 '''
         code += function(source, 'beginAttempt')
@@ -62,7 +62,7 @@ API void loader(){sRuntime.mode=StageLoader::MODE_LOADER;}
 API void savebox(){resetOn=false;mario.mState=kMarioWinDemoState;}
 API int get(int field){switch(field){case 0:return sRuntime.currentStreak;case 1:return sRuntime.practiceLoaded;
  case 2:return sRuntime.state;case 3:return failures;case 4:return successes;case 5:return sRuntime.eligibleCompletes;
- case 6:return sRuntime.progress;default:return observations;}}
+ case 6:return sRuntime.progress;case 8:return sRuntime.rejectionCause;default:return observations;}}
 API int parse(const char*text){s32 result=-9;return parseTarget(text,&result)?result:-2;}
 '''
         path = Path(cls.temp.name)/'streak.cpp'
@@ -111,6 +111,7 @@ API int parse(const char*text){s32 result=-9;return parseTarget(text,&result)?re
     def test_normal_failure_still_breaks_streak(self):
         self.lib.finish(2,0)
         self.assertEqual([self.lib.get(i) for i in (0,3)], [0,1])
+        self.assertEqual(self.lib.get(8),3)
 
     def test_target_parser_matches_exact_conversion_and_rejects_overflow(self):
         self.assertEqual(self.lib.parse(b''),-1)

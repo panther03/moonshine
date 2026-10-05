@@ -33,6 +33,25 @@ struct QuickWorkspace {
     unsigned char raw[kQuickBlock];
     unsigned char packed[LZ4_COMPRESSBOUND(kQuickBlock)];
 };
+
+// This workspace always reserves LZ4's complete worst-case output. Keep the
+// same compressor/table selection as LZ4_compress_fast_extState, without
+// linking its two additional limited-output compressor specializations.
+__attribute__((noinline, section(".text.moonshineQuickLz4")))
+int quickLz4Block(QuickWorkspace *work, const unsigned char *bytes, unsigned int raw) {
+    if (!raw || raw > kQuickBlock) return 0;
+    LZ4_stream_t_internal *ctx =
+        &LZ4_initStream(&work->state, sizeof(work->state))->internal_donotuse;
+    const char *source = reinterpret_cast<const char *>(bytes);
+    char *dest = reinterpret_cast<char *>(work->packed);
+    if (raw < LZ4_64Klimit)
+        return LZ4_compress_generic(ctx, source, dest, raw, NULL, 0,
+            notLimited, byU16, noDict, noDictIssue, 1);
+    const tableType_t table = sizeof(void *) == 4 && (uptrval)source > LZ4_DISTANCE_MAX
+        ? byPtr : byU32;
+    return LZ4_compress_generic(ctx, source, dest, raw, NULL, 0,
+        notLimited, table, noDict, noDictIssue, 1);
+}
 const unsigned int kWorkSize =
     ((sizeof(tdefl_compressor) > sizeof(InflateWorkspace)
         ? sizeof(tdefl_compressor) : sizeof(InflateWorkspace)) + 31u) & ~31u;
@@ -246,9 +265,7 @@ Result quickPack(void *workspace, const ReadSpan *source, unsigned int sourceCou
         const unsigned int raw = rawBytes - done < kQuickBlock ? rawBytes - done : kQuickBlock;
         const unsigned char *bytes = reader.take(raw, work->raw);
         if (!bytes) return {CODEC_ERROR, 0, rawBytes, 0};
-        const int packed = LZ4_compress_fast_extState(&work->state,
-            reinterpret_cast<const char *>(bytes), reinterpret_cast<char *>(work->packed),
-            raw, sizeof(work->packed), 1);
+        const int packed = quickLz4Block(work, bytes, raw);
         if (packed <= 0) return {CODEC_ERROR, 0, rawBytes, 0};
         adler = mz_adler32(adler, bytes, raw);
         const bool plain = static_cast<unsigned int>(packed) >= raw;

@@ -34,6 +34,7 @@ public:
     bool clearSlot(u32 slot, u32 expectedGeneration);
 
     static bool diskBusy();
+    static bool saveDialogOpen();
     void updateDisk();
     struct TransferResult {
         u32 command, status, id, slot, generation;

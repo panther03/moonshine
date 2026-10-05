@@ -33,6 +33,7 @@ class ILSlotSidecarTests(unittest.TestCase):
 #define memcpy __builtin_memcpy
 namespace LevelWarp {struct Dest {u8 area,episode,gameInt3;};}
 static const int kOverlayFlagCount=2;
+enum{REJECT_PRACTICE};
 ''' + definitions + r'''
 static_assert(sizeof(SavedAttemptData)==sizeof(ILing::SavestateData),"sidecar size");
 static AttemptState sAttemptState,sSavedAttemptState;
@@ -58,6 +59,7 @@ struct Timer{u32 attemptSerial(){return 999;}}gQFTTimer;
 #define sAssistReasons sAttemptState.assistReasons
 #define sOverlayFlags sAttemptState.overlayFlags
 #define sSecretOnly sAttemptState.secretOnly
+#define sRejectionCause sAttemptState.rejectionCause
 #define sSelectedEntry sAttemptState.selectedEntry
 static unsigned ended,invalidated;
 namespace Records {void onILAttemptEnded(){}}

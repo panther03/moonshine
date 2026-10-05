@@ -171,8 +171,8 @@ bool QftDisplay::hasAnchor(const char *text) const {
 void QftDisplay::drawTasFallback(Menu *menu) const {
     if (!menu || sAnchorDrawn ||
         (!PracticeSession::assisted() && !gQFTTimer.practiceAssisted())) return;
-    menu->fillBox(8, 446, 35, 18, JUtility::TColor(8, 17, 31, 210));
-    menu->drawText("TAS", 10, 447, 14, 14, JUtility::TColor(130, 225, 255, 255));
+    menu->fillBox(12, 420, 35, 18, JUtility::TColor(8, 17, 31, 210));
+    menu->drawText("TAS", 14, 421, 14, 14, JUtility::TColor(130, 225, 255, 255));
 }
 
 bool QftDisplay::adjacentStyle(const char *anchorText, const char *text,
