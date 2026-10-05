@@ -47,7 +47,7 @@ char*number(char*out,unsigned v){char d[10];unsigned n=0;do{d[n++]='0'+v%10;v/=1
 int _sprintf(char*out,const char*fmt,...){char*start=out;__builtin_va_list a;__builtin_va_start(a,fmt);
  while(*fmt){if(*fmt!='%'){*out++=*fmt++;continue;}fmt++;if(*fmt=='s'){const char*s=__builtin_va_arg(a,const char*);while(*s)*out++=*s++;}
  else if(*fmt=='u')out=number(out,__builtin_va_arg(a,unsigned));fmt++;}__builtin_va_end(a);*out=0;return out-start;}
-#define SUSAMUNE_INI_BUF_SIZE 49152
+#define SUSAMUNE_INI_BUF_SIZE MOONSHINE_INI_BUFFER_LIMIT
 #define SUSAMUNE_SECTION_NAME_MAX 24
 #define SUSAMUNE_INI_TRANSACTION_PATH_MAX 128
 static char SettingsSection[24],BindsSection[24],InputDisplaySection[24],MetadataDisplaySection[24],QftDisplaySection[24],CreationSection[24];
@@ -66,25 +66,30 @@ bool ParseBindMask(const char*,u16*){return false;}
 enum {FR_OK=0,FR_DISK_ERR=1,FR_NOT_READY=3,FR_NO_FILE=4,FR_NO_PATH=5,FR_DENIED=7,FR_NOT_ENOUGH_CORE=17,FR_INVALID_NAME=6,AM_RDO=1,FA_READ=1,FA_WRITE=2,FA_OPEN_EXISTING=0,FA_CREATE_ALWAYS=8};
 struct FIL {struct {unsigned attr;}obj;char*text;unsigned length;};
 struct FILINFO {unsigned fattrib;};
-static char original[65536],output[65536],scratch[65536];static unsigned originalLength,outputLength;
+static char original[131072],output[131072],scratch[65536];static unsigned originalLength,outputLength,allocatedBytes;
 static unsigned attrPoison,realAttr,tempOpens,sourceCloses,commits;static int statError,closeError;
-void*malloca(unsigned,unsigned){return scratch;}void free(void*){}
-void*malloc(unsigned){return scratch;}
+static unsigned failAllocation,shortRead,readRequests,oversizedRead;
+void*malloc(unsigned n){allocatedBytes=n;return failAllocation?0:scratch;}
+void*malloca(unsigned n,unsigned){return malloc(n);}void free(void*){}
 const char*SusamuneCfgIniPath(){return "settings.ini";}
 bool BuildIniSiblingPath(char*out,unsigned,const char*,const char*){out[0]='t';out[1]=0;return true;}
 int RecoverIniFile(const char*){return 0;}
 int f_open_char(FIL*f,const char*,unsigned mode){f->obj.attr=attrPoison;f->text=mode&FA_WRITE?output:original;f->length=mode&FA_WRITE?0:originalLength;if(mode&FA_WRITE)tempOpens++;return 0;}
 int f_stat_char(const char*,FILINFO*info){info->fattrib=realAttr;return statError;}
 unsigned f_size(FIL*f){return f->length;}
-int f_read(FIL*f,void*out,unsigned n,UINT*read){*read=f->length<n?f->length:n;memcpy(out,f->text,*read);return 0;}
-int f_write(FIL*f,const void*in,unsigned n,UINT*written){if(f->length+n>=65536)return 1;memcpy(f->text+f->length,in,n);f->length+=n;*written=n;return 0;}
+int f_read(FIL*f,void*out,unsigned n,UINT*read){readRequests++;if(n>=allocatedBytes)oversizedRead++;*read=f->length<n?f->length:n;if(shortRead&&*read)--*read;memcpy(out,f->text,*read);return 0;}
+int f_write(FIL*f,const void*in,unsigned n,UINT*written){if(f->length+n>=sizeof(output))return 1;memcpy(f->text+f->length,in,n);f->length+=n;*written=n;return 0;}
 int f_close(FIL*f){if(f->text==output){outputLength=f->length;output[outputLength]=0;return 0;}sourceCloses++;return closeError;}
 int CommitIniFile(const char*,const char*,const char*,bool){memcpy(original,output,outputLength+1);originalLength=outputLength;commits++;return 0;}
 static const char kIniBanner[]="; test\r\n";
-#define SUSA_INI_BUF_SIZE 32768
+#define SUSA_INI_BUF_SIZE MOONSHINE_INI_BUFFER_LIMIT
 #define SUSA_INI_TRANSACTION_PATH_MAX 128
 #define SUSA_SECTION_NAME_MAX 24
 static bool LoadSafe=true;
+static bool SawSection;
+struct SusamuneIni{unsigned version;};static SusamuneIni gIni,kIniDefaults;
+void ApplyKey(const char*key,const char*value){if(strcmp(key,"version")==0)gIni.version=strcmp(value,"pal")==0?2:1;}
+#define gprintf(...) ((void)0)
 void BuildPath(char*out,unsigned,const char*){memcpy(out,"settings.ini",13);}
 unsigned DeviceForName(const char*){return 0;}void RemountDevice(unsigned){}
 '''
@@ -109,7 +114,14 @@ unsigned DeviceForName(const char*){return 0;}void RemountDevice(unsigned){}
             code += f'void Emit{name}Section(FIL*f,int*e,const SusamuneCfg*){{EmitStr(f,e,"[");EmitStr(f,e,{name}Section);EmitStr(f,e,"]\\r\\n");}}\n'
         code += function(kernel, "EmitCreationSection") + function(kernel, "WriteIniFile")
         code += 'void EmitNintendontSection(FIL*f,int*e){EmitStr(f,e,"[nintendont]\\r\\ngame_version = 2\\r\\n");}\n'
+        code += function(loader, "ParseIni") + function(loader, "SusamuneIniLoad")
         code += function(loader, "SusamuneIniSave")
+        # Execute the real kernel startup's INI read/parse block without
+        # constructing unrelated journals and fixed-address IPC mailboxes.
+        startup = function(kernel, "SusamuneCfgInit")
+        read_block = startup[startup.index("settingsReadSafe = false;"):startup.index("if (settingsReadSafe)")]
+        code += 'bool kernelReadIni(){FIL f;FSIZE_t fileSize;char*buf;UINT read=0;int ret,closeRet;bool settingsReadSafe,noConfig;SusamuneCfg*cfg=&::cfg;\n'
+        code += read_block + '\nreturn settingsReadSafe;}\n'
         code += 'static u8 sEpisodeChoices[SUSAMUNE_IL_EPISODE_COUNT];\n'
         for name in ("resetEpisodeChoices", "adoptEpisodes", "stageEpisodes"):
             code += function(iling, name)
@@ -127,6 +139,7 @@ API void selectRegion(const char*region){
  cfg.flags|=SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
  cfg.count=SETTING_KEY_COUNT;for(unsigned i=0;i<SUSAMUNE_CFG_TOTAL_SETTINGS;i++)SusamuneCfgSetSetting(&cfg,i,SUSAMUNE_CFG_UNSET);
  attrPoison=0xa5;realAttr=0x20;statError=closeError=0;tempOpens=sourceCloses=commits=0;
+ allocatedBytes=failAllocation=shortRead=readRequests=oversizedRead=0;LoadSafe=true;
 }
 API void parse(const char*text){static char input[65536];memcpy(input,text,strlen(text)+1);ParseIni(input,&cfg);}
 API unsigned getSetting(unsigned index){return SusamuneCfgGetSetting(&cfg,index);}
@@ -150,6 +163,11 @@ API void attributes(unsigned poison,unsigned actual,int stat,int close){attrPois
 API int attemptRewrite(unsigned loader,const char*input){originalLength=strlen(input);memcpy(original,input,originalLength+1);return loader?SusamuneIniSave("sd"):WriteIniFile(&cfg);}
 API const char*readOriginal(){return original;}
 API unsigned operations(){return tempOpens|(sourceCloses<<8)|(commits<<16);}
+API unsigned allocation(){return allocatedBytes;}
+API unsigned readStatus(){return readRequests|(oversizedRead<<16);}
+API void faults(unsigned allocation,unsigned read){failAllocation=allocation;shortRead=read;}
+API unsigned load(const char*input){originalLength=strlen(input);memcpy(original,input,originalLength+1);SusamuneIniLoad("sd");return (LoadSafe?1:0)|(SawSection?2:0)|(gIni.version<<8);}
+API unsigned loadKernel(const char*input){originalLength=strlen(input);memcpy(original,input,originalLength+1);return kernelReadIni();}
 '''
         source = Path(cls.temp.name) / "episodes.cpp"
         source.write_text(code, encoding="ascii")
@@ -168,6 +186,8 @@ API unsigned operations(){return tempOpens|(sourceCloses<<8)|(commits<<16);}
         cls.lib.attributes.argtypes = [C.c_uint, C.c_uint, C.c_int, C.c_int]
         cls.lib.attemptRewrite.argtypes = [C.c_uint, C.c_char_p]
         cls.lib.readOriginal.restype = C.c_char_p
+        cls.lib.load.argtypes = [C.c_char_p]
+        cls.lib.loadKernel.argtypes = [C.c_char_p]
         cls.lib.styles.restype = cls.lib.unrelated.restype = C.c_void_p
 
     def test_independent_display_styles_roundtrip_and_leave_other_regions_unchanged(self):
@@ -257,6 +277,75 @@ API unsigned operations(){return tempOpens|(sourceCloses<<8)|(commits<<16);}
                     self.assertEqual(self.lib.attemptRewrite(loader, original), expected)
                     self.assertEqual(self.lib.readOriginal(), original)
                     self.assertEqual(self.lib.operations(), 0x100)
+
+    def test_large_ini_loader_reads_settings_after_old_limits(self):
+        for length in (32899,49160,60000,65535):
+            with self.subTest(length=length):
+                tail=b'\r\n[nintendont]\r\nversion = pal\r\n'
+                source=b';'+b'x'*(length-len(tail)-1)+tail
+                self.assertEqual(self.lib.load(source),0x203)
+                self.assertEqual(self.lib.allocation(),length+1)
+                self.assertEqual(self.lib.readStatus()>>16,0)
+                self.assertEqual(self.lib.readOriginal(),source)
+
+    def test_both_writers_preserve_large_other_region_sections(self):
+        for loader in (0,1):
+            for length in (32899,49160,56000):
+                with self.subTest(loader=loader,length=length):
+                    self.lib.selectRegion(b'pal')
+                    prefix=b'[creation_jp]\r\n;'+b'x'*(length-200)+b'\r\n'
+                    tail=b'[creation_us]\r\nil_episode_pinna_100 = 7\r\n'
+                    source=prefix+tail+b'[nintendont]\r\nversion = pal\r\n[creation_pal]\r\nil_episode_bianco_100 = 4\r\n'
+                    self.assertEqual(self.lib.attemptRewrite(loader,source),0)
+                    self.assertIn(prefix+tail,self.lib.readOriginal())
+                    self.assertEqual(self.lib.allocation(),len(source)+1)
+                    self.assertEqual(self.lib.readStatus()>>16,0)
+
+    def test_large_ini_kernel_reads_tail_and_allocates_only_input_size(self):
+        for length in (32899,49160,60000,65535):
+            with self.subTest(length=length):
+                self.lib.selectRegion(b'pal')
+                tail=b'\r\n[creation_pal]\r\nil_episode_bianco_100 = 8\r\n'
+                source=b';'+b'x'*(length-len(tail)-1)+tail
+                self.assertEqual(self.lib.loadKernel(source),1)
+                self.assertEqual(self.snapshot().episodes[0],8)
+                self.assertEqual(self.lib.allocation(),length+1)
+                self.assertEqual(self.lib.readStatus()>>16,0)
+                self.assertEqual(self.lib.readOriginal(),source)
+
+    def test_oversized_input_never_reads_or_overwrites_original(self):
+        source=b';'+b'x'*65535
+        self.assertEqual(self.lib.load(source),0)
+        self.assertEqual(self.lib.readOriginal(),source)
+        self.assertEqual(self.lib.readStatus(),0)
+        self.assertEqual(self.lib.loadKernel(source),0)
+        self.assertEqual(self.lib.readStatus(),0)
+        for loader in (0,1):
+            self.lib.selectRegion(b'pal')
+            self.assertEqual(self.lib.attemptRewrite(loader,source),17)
+            self.assertEqual(self.lib.readOriginal(),source)
+            self.assertEqual(self.lib.operations(),0x100)
+            self.assertEqual(self.lib.allocation(),0)
+
+    def test_generated_oversized_output_cannot_publish(self):
+        source=b'[other]\r\n;'+b'x'*65500+b'\r\n'
+        for loader in (0,1):
+            self.lib.selectRegion(b'pal')
+            self.assertEqual(self.lib.attemptRewrite(loader,source),17)
+            self.assertEqual(self.lib.readOriginal(),source)
+            self.assertEqual(self.lib.operations()>>16,0)
+
+    def test_failed_allocation_or_short_read_preserves_large_file(self):
+        source=b';'+b'x'*33000+b'\r\n[nintendont]\r\nversion = pal\r\n'
+        for allocation,read in ((1,0),(0,1)):
+            self.lib.selectRegion(b'pal');self.lib.faults(allocation,read)
+            self.assertEqual(self.lib.load(source),0)
+            self.assertEqual(self.lib.readOriginal(),source)
+            for loader in (0,1):
+                self.lib.selectRegion(b'pal');self.lib.faults(allocation,read)
+                self.assertEqual(self.lib.attemptRewrite(loader,source),17 if allocation else 1)
+                self.assertEqual(self.lib.readOriginal(),source)
+                self.assertEqual(self.lib.operations(),0x100)
 
     def setUp(self):
         self.lib.selectRegion(b"pal")

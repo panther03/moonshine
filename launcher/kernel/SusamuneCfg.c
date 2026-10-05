@@ -131,7 +131,7 @@ static const char *const FluddColorKeys[SUSAMUNE_FLUDD_COLORS_COUNT] =
 // Enough for the whole file: the settings plus display payloads for all
 // three versions, section headers, and the comment banner.
 // A file larger than this is refused rather than truncated (see WriteIniFile).
-#define SUSAMUNE_INI_BUF_SIZE 49152
+#define SUSAMUNE_INI_BUF_SIZE MOONSHINE_INI_BUFFER_LIMIT
 
 // Longest section name we build: "settings" + '_' + "pal" + NUL.
 #define SUSAMUNE_SECTION_NAME_MAX 24
@@ -6458,7 +6458,7 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	const char *path = SusamuneCfgIniPath();
 	char  tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
 	char  backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
-	char *buf;
+	char *buf = NULL;
 	char *line;
 	UINT  read = 0;
 	FSIZE_t fileSize = 0;
@@ -6473,11 +6473,6 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	bool  wroteQftDisplay = false;
 	bool  wroteCreation = false;
 	bool  hadOriginal = false;
-
-	buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
-	if (buf == NULL)
-		return FR_NOT_ENOUGH_CORE;
-	buf[0] = '\0';
 
 	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
 	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
@@ -6515,7 +6510,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 			free(buf);
 			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
 		}
-		ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read);
+		buf = (char*)malloca((u32)fileSize + 1, 32);
+		if (buf == NULL)
+		{
+			closeRet = f_close(&f);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, (u32)fileSize, &read);
 		closeRet = f_close(&f);
 		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
 		{
@@ -6530,6 +6531,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	{
 		free(buf);
 		return ret;
+	}
+	else
+	{
+		buf = (char*)malloca(1, 32);
+		if (buf == NULL)
+			return FR_NOT_ENOUGH_CORE;
+		buf[0] = '\0';
 	}
 
 	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);
@@ -6984,7 +6992,7 @@ void SusamuneCfgInit(void)
 		}
 		else
 		{
-			buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
+			buf = (char*)malloca((u32)fileSize + 1, 32);
 			if (buf == NULL)
 			{
 				closeRet = f_close(&f);
@@ -6993,7 +7001,7 @@ void SusamuneCfgInit(void)
 			else
 			{
 				read = 0;
-				ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1,
+				ret = f_read(&f, buf, (u32)fileSize,
 				             &read);
 				closeRet = f_close(&f);
 				if (ret == FR_OK && read == fileSize && closeRet == FR_OK)

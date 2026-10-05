@@ -33,6 +33,7 @@
 
 extern SavestateManager *gSavestateMgr;
 extern "C" f32 retailSquareRoot(f32) asm("sqrtf__3stdFf");
+extern "C" void susamunePracticeHudParticles(JDrama::TViewObj *, u32, JDrama::TGraphics *);
 
 namespace {
 
@@ -42,6 +43,8 @@ const u32 kCameraPerform = SUSAMUNE_MEM1_ADDR(0x80352f70u, 0x80023004u, 0x800230
 const u32 kCameraVtable = SUSAMUNE_MEM1_ADDR(0x803e4820u, 0x803acde8u, 0x803a5168u);
 const u32 kTalkPerform = SUSAMUNE_MEM1_ADDR(0x802130a8u, 0x80151c88u, 0x80146aa4u);
 const u32 kTalkVtable = SUSAMUNE_MEM1_ADDR(0x803d1118u, 0x803c03c8u, 0x803b7948u);
+const u32 kHudEmitterVtable = SUSAMUNE_MEM1_ADDR(0x803b3908u, 0x803ded30u, 0x803d6510u);
+const u32 kHudEmitterPerform = SUSAMUNE_MEM1_ADDR(0x800dc368u, 0x80288db8u, 0x80280b44u);
 const u32 kDirectorMovement = SUSAMUNE_MEM1_ADDR(0x800eda30u, 0x8029a4acu, 0x80292344u);
 const u32 kHitCheck = SUSAMUNE_MEM1_ADDR(0x801151f8u, 0x8021b900u, 0x80213854u);
 const u32 kHitClear = SUSAMUNE_MEM1_ADDR(0x80114dd8u, 0x8021b4e0u, 0x80213434u);
@@ -400,7 +403,9 @@ u32 fingerprint() {
     return hash;
 }
 
-void capturePad(PadHistory &out, TMarioGamePad *pad) {
+// Keep one copy of these snapshots: inlining duplicates their fixed-size
+// copies across modal, pause, replay and state-load paths.
+__attribute__((noinline)) void capturePad(PadHistory &out, TMarioGamePad *pad) {
     memcpy(out.shared, &JUTGamePad::mPadButton[0], 48);
     memcpy(out.shared + 48, &JUTGamePad::mPadMStick[0], 16);
     memcpy(out.shared + 64, &JUTGamePad::mPadSStick[0], 16);
@@ -408,7 +413,7 @@ void capturePad(PadHistory &out, TMarioGamePad *pad) {
     memcpy(out.meaning, &pad->_A4, sizeof(out.meaning));
 }
 
-void restorePad(const PadHistory &in, TMarioGamePad *pad) {
+__attribute__((noinline)) void restorePad(const PadHistory &in, TMarioGamePad *pad) {
     memcpy(&JUTGamePad::mPadButton[0], in.shared, 48);
     memcpy(&JUTGamePad::mPadMStick[0], in.shared + 48, 16);
     memcpy(&JUTGamePad::mPadSStick[0], in.shared + 64, 16);
@@ -611,7 +616,7 @@ void applyCamera() {
 }
 
 #pragma clang section text=""
-void resetCameraMotion() {
+__attribute__((noinline)) void resetCameraMotion() {
     memset(sCameraMotion, 0, sizeof(sCameraMotion));
     sCameraTickValid = false;
 }
@@ -1239,6 +1244,8 @@ void init() {
         reinterpret_cast<void *>(&susamunePracticeChangeState));
     sTalkHookReady = installVtableEntry(reinterpret_cast<u32 *>(kTalkVtable + 0x20u),
         kTalkPerform, reinterpret_cast<void *>(&susamunePracticeTalkPerform));
+    installVtableEntry(reinterpret_cast<u32 *>(kHudEmitterVtable + 0x20u),
+        kHudEmitterPerform, reinterpret_cast<void *>(&susamunePracticeHudParticles));
     u32 *table = reinterpret_cast<u32 *>(kCameraVtable);
     for (u32 i = 0; i < 32; ++i) {
         if (table[i] != kCameraPerform) continue;

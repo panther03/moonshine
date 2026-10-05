@@ -1,5 +1,7 @@
 #pragma once
 
+#include "JSystem/JGeometry/JGMVec.hxx"
+
 class TMarDirector;
 
 namespace GhostModel {
@@ -12,5 +14,6 @@ bool preserveSavestateBindings(bool (*keep)(const void *word));
 void onSavestateLoaded();
 bool available();
 bool submitted(bool secondary = false);
+bool emissionPoint(unsigned runner, unsigned nozzle, unsigned emitter, TVec3f &position);
 
 }  // namespace GhostModel

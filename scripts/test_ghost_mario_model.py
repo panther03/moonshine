@@ -59,10 +59,11 @@ extern "C" __declspec(dllexport) int alternative(int appearance){gSettings.value
                           ((tev[16] << 1) & 6) | (tev[17] >> 7), (tev[17] >> 4) & 7), (7, 4, 5, 7))
         self.assertEqual(tev[11], 8)  # ADD, zero bias, x1, clamp, PREV
         self.assertEqual(tev[15], 8)
-        self.assertEqual(bytes(color[4:12]), b"\xff" * 8)
+        self.assertEqual(bytes(color[4:12]), b"\xa5" * 8)
         self.assertEqual(color[12], 1)
         for n in range(4):
-            self.assertEqual(C.c_ushort.from_buffer(color, 14 + 2 * n).value, 0x400)
+            self.assertEqual(C.c_ushort.from_buffer(color, 14 + 2 * n).value,
+                             0x400 if n == 1 else 0xA5A5)
         for n in range(8):
             self.assertEqual(bytes(texgen[8+4*n:11+4*n]), bytes([1, 4, 60]))
         self.assertEqual(bytes(texgen[0x28:0x48]), bytes(32))
@@ -71,6 +72,18 @@ extern "C" __declspec(dllexport) int alternative(int appearance){gSettings.value
             self.assertEqual(bytes(buffer[:4]), b"\xa5" * 4)
             self.assertEqual(bytes(buffer[start:]), b"\xa5" * 8)
         self.assertEqual(color[22], 0xA5)
+
+    def test_retail_diffuse_lighting_survives_private_conversion(self):
+        tev = (C.c_ubyte * 40)()
+        texgen = (C.c_ubyte * 100)()
+        color = (C.c_ubyte * 32)()
+        # All eleven retail Mario materials use enabled channel 0, two lights,
+        # signed diffuse and spot attenuation, with register ambient/material.
+        native_diffuse = 2 | (3 << 2) | (1 << 7) | (1 << 9) | (1 << 10)
+        C.c_ushort.from_buffer(color, 14).value = native_diffuse
+        self.lib.convert(tev, texgen, color, 0)
+        self.assertEqual(C.c_ushort.from_buffer(color, 14).value, native_diffuse)
+        self.assertEqual(C.c_ushort.from_buffer(color, 16).value, 0x400)
 
     def test_three_appearances_use_only_two_physical_slots(self):
         for appearance, expected in ((0, (0, 1)), (1, (1, 0)), (2, (1, 0))):

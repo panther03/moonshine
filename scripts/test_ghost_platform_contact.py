@@ -23,7 +23,7 @@ struct TVec3f{float x,y,z;void set(float a,float b,float c){x=a;y=b;z=c;}};
 using Vec=TVec3f;struct TVec3s{short x,y,z;};
 struct TBGCheckData{void*owner;void*getActor()const{return owner;}}illegal,originalFloor,platformFloor;
 struct TMario{
-    enum{STATE_IDLE=0x0c400201};
+    enum{STATE_IDLE=0x0c400201,ANIMATION_IDLE=0xc3};
     u16 mPerformFlags;struct{bool mIsVisible;}mAttributes,mPrevAttributes;
     TVec3f mTranslation,mLastPosition,mLastPos,mLastGroundedPos,mSpeed,mPrevSpeed;
     f32 mForwardSpeed;TVec3s mAngle;s16 mModelAngleY;
@@ -36,6 +36,7 @@ struct CPolarSubCamera{void addMoveCameraAndMario(Vec) {}}camera;
 CPolarSubCamera*gpCamera=&camera;
 bool two,sGhostVisible,sSecondaryGhostVisible;
 TVec3f sGhostPosition,sSecondaryGhostPosition;s16 sGhostYaw,sSecondaryGhostYaw;
+u16 sGhostAnimationId;
 constexpr u16 kCueMove=1,kCueEntry=0x200;
 bool observerHasTwo(){return two;}
 struct Map{f32 height;int queries;TBGCheckData*floor;
@@ -89,9 +90,11 @@ API void reset(){
     gpMap=&map;map={20,0,&platformFloor};platformFloor.owner=&platform;platform.flags=2;
     sObserverMario=nullptr;sObserverMarioOwned=false;sObserverMarioBaselineFinalized=false;
     sObserverStageReady=true;sGhostVisible=true;sSecondaryGhostVisible=false;two=false;
-    sGhostPosition=mario.mTranslation;sGhostYaw=44;
+    sGhostPosition=mario.mTranslation;sGhostYaw=44;sGhostAnimationId=0x72;
 }
 API void target(float x,float y,float z){sGhostPosition={x,y,z};}
+API void animation(unsigned id){sGhostAnimationId=id;}
+API void ground(float height){map.height=height;}
 API void option(int k,int v){switch(k){case 0:two=v;sSecondaryGhostVisible=v;break;
  case 1:sGhostVisible=v;break;case 2:director.mCurState=v;break;case 3:sObserverStageReady=v;break;
  case 4:gpMap=v?&map:nullptr;break;case 5:gpMarioOriginal=v?&replacement:&mario;break;}}
@@ -112,6 +115,7 @@ API float coordinate(int n){return n==0?mario.mTranslation.x:n==1?mario.mTransla
         if proc.returncode:raise RuntimeError(proc.stdout+proc.stderr)
         cls.lib=C.CDLL(str(path.with_suffix('.dll')))
         cls.lib.target.argtypes=[C.c_float]*3
+        cls.lib.ground.argtypes=[C.c_float]
         cls.lib.height.restype=cls.lib.coordinate.restype=C.c_float
         cls.lib.state.restype=C.c_uint
         cls.addClassCleanup(lambda:C.windll.kernel32.FreeLibrary(C.c_void_p(cls.lib._handle)))
@@ -130,6 +134,32 @@ API float coordinate(int n){return n==0?mario.mTranslation.x:n==1?mario.mTransla
         self.assertEqual(self.lib.riding(),0)
         self.lib.tick()
         self.assertEqual(self.lib.riding(),1)
+
+    def test_quick_landing_starts_rail_without_a_stationary_sample(self):
+        # Exact adjacent poses from the reported PAL S4 20.020 ghost. Its
+        # landing crosses almost 30 units while the recorded animation changes
+        # to ANIM_LAEND, whose retail waiting status carries the rider bit.
+        self.lib.target(-441.625,3700,-7908.875);self.lib.tick()
+        self.lib.ground(3700);self.lib.animation(0x57)
+        self.lib.target(-442.25,3700,-7938.75);self.lib.tick()
+        self.assertEqual(self.lib.riding(),1)
+
+    def test_moving_idle_and_landing_poses_can_acquire_a_platform(self):
+        for animation in (0xc3,0x4b,0x4e,0x57):
+            self.lib.reset();self.lib.animation(animation)
+            self.lib.target(15,20,30);self.lib.tick()
+            self.assertEqual(self.lib.riding(),1,hex(animation))
+
+    def test_retail_ground_query_margin_finds_rising_platform(self):
+        self.lib.animation(0xc3);self.lib.ground(32)
+        self.lib.target(15,20,30);self.lib.tick()
+        self.assertEqual((self.lib.floor(),self.lib.riding()),(1,1))
+        self.lib.ground(46);self.lib.tick()
+        self.assertEqual(self.lib.riding(),0)
+
+    def test_landing_animation_in_air_does_not_invent_floor_contact(self):
+        self.lib.animation(0x57);self.lib.target(15,25,30);self.lib.tick()
+        self.assertEqual(self.lib.riding(),0)
 
     def test_airborne_or_gap_releases_existing_rider(self):
         for gap in (False,True):

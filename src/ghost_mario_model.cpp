@@ -21,7 +21,7 @@ static __attribute__((always_inline)) void configureMaterial(
         *reinterpret_cast<u16 *>(tev + 4) = texture;
         tev[6] = 0; // TEXCOORD0
         tev[7] = 0; // TEXMAP0, original base atlas
-        tev[8] = 4; // COLOR0A0 (RGB white, ghost opacity in alpha)
+        tev[8] = 4; // COLOR0A0 (retail diffuse lighting, ghost opacity in alpha)
         // (0 + texture * raster) -> PREV, clamped, both RGB and alpha.
         static const u8 stage[8] = {0xC0, 0x08, 0xF8, 0xAF,
                                     0xC1, 0x08, 0xF2, 0xF0};
@@ -37,10 +37,11 @@ static __attribute__((always_inline)) void configureMaterial(
         }
         // Retain the private allocated matrix objects unused; no shared edits.
         texgen[0x48] = 0; // no NBT scaling/bump matrix allocation
-        for (u32 b = 4; b < 12; ++b) color[b] = 255;
+        // Keep the BMD's diffuse channel, light mask and material colours.
+        // Resetting every channel to 0x0400 made the body completely unlit.
         color[0x0C] = 1;
-        for (u32 n = 0; n < 4; ++n)
-            *reinterpret_cast<u16 *>(color + 0x0E + n * 2) = 0x0400;
+        // Opacity is independent of lighting (the material alpha register).
+        *reinterpret_cast<u16 *>(color + 0x10) = 0x0400;
 }
 
 bool prepare(J3DModelData *data, u32 heapBegin, u32 heapEnd) {

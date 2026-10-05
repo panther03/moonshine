@@ -37,6 +37,7 @@ public:
 };
 
 extern TScreenTexture *gpScreenTexture;
+extern "C" u8 nozzleBmdData[6][0x1c];
 extern "C" f32 ghostSquareRoot(f32) asm("sqrtf__3stdFf");
 extern "C" void ghostFluddTransform(const void *, f32, u16, J3DTransformInfo *)
     asm("calcTransform__18J3DAnmTransformKeyCFfUsP16J3DTransformInfo");
@@ -1213,6 +1214,18 @@ bool available() {
 
 bool submitted(bool secondary) {
     return sSubmitted[secondary ? 1 : 0];
+}
+
+bool emissionPoint(unsigned runner, unsigned nozzle, unsigned emitter, TVec3f &position) {
+    if (runner >= 2 || nozzle >= 6) return false;
+    const AttachmentModel &head = sAttachmentModels[runner * 3 + 2];
+    const u8 *row = nozzleBmdData[nozzle];
+    if (!head.model || !head.data || !row[0x14] || row[0x14] > 3) return false;
+    const unsigned joint = row[0x17 + (emitter % row[0x14]) * 2];
+    if (joint >= head.data->getJointNum()) return false;
+    const Mtx &matrix = *head.model->getAnmMtx(joint);
+    position.set(matrix[0][3], matrix[1][3], matrix[2][3]);
+    return true;
 }
 
 #pragma clang section text=".foxtrot.text"

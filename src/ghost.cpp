@@ -1733,12 +1733,19 @@ void updateObserverGround() {
     f32 height = -32768.0f;
     bool standing = false;
     if (!observerHasTwo() && gpMap && sGhostVisible) {
-        height = gpMap->checkGround(sGhostPosition.x, sGhostPosition.y + 4.0f,
+        height = gpMap->checkGround(sGhostPosition.x, sGhostPosition.y + 25.0f,
                                     sGhostPosition.z, &floor);
         const f32 dx = sGhostPosition.x - sObserverMario->mTranslation.x;
         const f32 dz = sGhostPosition.z - sObserverMario->mTranslation.z;
+        // Retail wait/landing states can ride while still moving in world
+        // space (or being carried). These recorded animations identify those
+        // states; requiring a stationary pose misses a quick landing entirely.
+        const bool landed = sGhostAnimationId == TMario::ANIMATION_IDLE ||
+                            sGhostAnimationId == 0x4bu || // ANIM_2JMED
+                            sGhostAnimationId == 0x4eu || // ANIM_JMPED
+                            sGhostAnimationId == 0x57u;   // ANIM_LAEND
         standing = sGhostPosition.y <= height + 4.0f &&
-                   dx * dx + dz * dz <= 0.0625f;
+                   (landed || dx * dx + dz * dz <= 0.0625f);
     }
     // Retail rail/tilt blocks read these even while Mario's own movement is
     // suppressed. Use the recorded contact; never integrate Mario physics.

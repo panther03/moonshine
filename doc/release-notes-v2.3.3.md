@@ -7,7 +7,9 @@
 - New ghosts record the selected nozzle, spray direction and when water actually fires. Ghosts show FLUDD and visual spray, with droplets and ground splashes that cannot affect gameplay.
 - Corrected FLUDD's attachment to the ghost's chest and replaced the diamond-shaped water with Sunshine's own water textures. Individual droplet paths and splashes are still visual approximations; they do not reproduce every original particle or collision.
 - Restored FLUDD's closed tank and resting pump shape. Spray is larger and uses separate water and highlight passes, and ghosts now cast ground shadows.
-- Watching one ghost can activate platforms that start when Mario stands still on them. Racing remains visual only; Watch 2 does not simulate two separate riders.
+- Fixed slow, undersized ghost spray: water now uses retail quarter-frame motion, nozzle sizes, stretched droplets and both hover outlets. Floor splashes remain visual approximations, without persistent puddles or gameplay effects.
+- Restored Mario ghost material lighting so its body is shaded rather than flat.
+- Watching one ghost can activate platforms that start when Mario stands still on them. Fast recorded landings now also activate the final Sirena 4 secret platform. Racing remains visual only; Watch 2 does not simulate two separate riders.
 - Added **Mario** as a ghost appearance alongside Shadow Mario and Piantissimo, using the existing model memory.
 - New recordings last up to **10 minutes**. Existing ghosts remain readable, including older recordings over 10 minutes. Older files keep their recorded movement and inputs; missing FLUDD data is not guessed.
 
@@ -24,6 +26,8 @@
 
 ## Displays and menus
 
+- Freecam Hide all HUD also hides the coin-counter sparkle pass while keeping its animation running.
+
 - Position loads mark the attempt **TAS**. If QFT is hidden, the TAS label now sits farther inside the bottom-left corner so it stays visible.
 - Fixed the overlapping QFT text beneath a level split.
 - The failure banner uses the usual Creation editor for position, size, colour and background. Visibility and duration remain separate controls.
@@ -34,8 +38,11 @@
 
 ## Loading and memory
 
+- Fixed the launcher rejecting `moonshine.ini` above 32 KB. Launcher and game now share a 64 KB limit and allocate only the current file’s size while preserving other regions’ settings.
+- Combined adjacent, verified ISO clusters into reads of up to 64 KB. A captured PAL load sequence makes 31% fewer device requests with identical data; this is not a measured Wii loading-time improvement.
+
 - Read-speed unlocking now applies to the early boot reads too. The disc cache retains unaffected data when it wraps instead of discarding everything; console loading-time gains still need measurement.
-- The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.
+- The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches, including after power-off, avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.
 - Removed unused compression paths without changing savestate output or reducing the space available for states.
 
 ## Updating

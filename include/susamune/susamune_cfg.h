@@ -1434,6 +1434,10 @@ typedef char susamune_fludd_colors_dolphin_check[(SUSAMUNE_DOLPHIN_MARIO_COLORS_
 // volume -- see SusamuneCfgIniPath().
 #include "data_paths.h"
 #define SUSAMUNE_INI_PATH MOONSHINE_INI_PATH
+// Shared whole-file admission limit, including the parser's NUL terminator.
+// Loader and kernel must accept every file either writer can publish.
+// The temporary read allocation uses the actual file size, not this ceiling.
+#define MOONSHINE_INI_BUFFER_LIMIT 65536u
 
 // Section headers. [nintendont] holds the launcher's own options (game version,
 // per-version disc image paths, and the Nintendont settings that used to live in
