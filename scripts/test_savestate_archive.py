@@ -80,8 +80,9 @@ static StateCodec::Status fullDecode(void*w,u32 n,const StateCodec::ReadSpan*s,u
  const StateCodec::WriteSpan*d,u32 dn,u32 raw,u32 adler,StateCodec::CopyBytes copy,void*ctx){
  ++fullDecodes;return StateCodec::decompress(w,n,s,count,d,dn,raw,adler,copy,ctx);}
 static StateCodec::Status verifiedDecode(void*w,u32 n,const StateCodec::ReadSpan*s,u32 count,
- const StateCodec::WriteSpan*d,u32 dn,u32 raw,u32 adler,StateCodec::CopyBytes copy,void*ctx){
- ++verifiedDecodes;return StateCodec::decompressVerified(w,n,s,count,d,dn,raw,adler,copy,ctx);}
+ const StateCodec::WriteSpan*d,u32 dn,u32 raw,u32 adler,StateCodec::CopyBytes copy,void*ctx,
+ StateCodec::DirectBytes direct){
+ ++verifiedDecodes;return StateCodec::decompressVerified(w,n,s,count,d,dn,raw,adler,copy,ctx,direct);}
 namespace StateStorage{
 struct Result{u32 command,status,id;SusamuneStateArchiveHeader header;const void*metadata;char name[32];SusamuneStateWindowReceipt window;SusamuneTasManifest project;};
 static Result result;
@@ -188,7 +189,7 @@ class SavestateArchiveTests(unittest.TestCase):
         for name in ('void poolWriteSpans(', 'void poolReadSpans(', 'u32 packedChecksum(',
                      'bool SavestateManager::saveDialogOpen()',
                      'bool archiveStageReady(', 'bool admitArchiveStage(',
-                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
+                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(', 'bool directStateBytes(',
                      'bool SavestateManager::diskBusy()', 'void SavestateManager::updateDisk()',
                      'bool SavestateManager::takeTransferResult('):
             source+=function_source(SOURCE,name)

@@ -26,13 +26,14 @@ class GhostMarioMaterialTests(unittest.TestCase):
         source = (ROOT / "src/ghost_mario_model.cpp").read_text()
         model = (ROOT / "src/ghost_model.cpp").read_text()
         code = "typedef unsigned char u8;typedef unsigned short u16;typedef unsigned u32;\n"
+        code += 'void*memcpy(void*d,const void*s,unsigned long long n){for(unsigned long long i=0;i<n;++i)((u8*)d)[i]=((const u8*)s)[i];return d;}\n'
         code += function(source, "configureMaterial")
         code += "enum Appearance{APPEARANCE_SHADOW,APPEARANCE_PIANTA,APPEARANCE_MARIO};\n"
         code += "struct ModelSlot{int index;}; ModelSlot sSlots[2]={{0},{1}};\n"
         code += "const int SETTING_GHOST_APPEARANCE=0;struct Settings{int value;int get(int){return value;}}gSettings;\n"
         code += function(model, "selectedAlternative") + function(model, "runnerSlot")
         code += '''
-extern "C" __declspec(dllexport) void convert(u8*tev,u8*texgen,u8*color,u16 texture){configureMaterial(tev,texgen,color,texture);}
+extern "C" __declspec(dllexport) void convert(u8*tev,u8*color,u8*original){configureMaterial(tev,color,original);}
 extern "C" __declspec(dllexport) int role(int appearance,int runner){gSettings.value=appearance;return runnerSlot(runner).index;}
 extern "C" __declspec(dllexport) int alternative(int appearance){gSettings.value=appearance;return selectedAlternative();}
 '''
@@ -44,44 +45,56 @@ extern "C" __declspec(dllexport) int alternative(int appearance){gSettings.value
                        check=True, capture_output=True)
         cls.lib = C.CDLL(str(dll))
         cls.addClassCleanup(lambda: _ctypes.FreeLibrary(cls.lib._handle))
-        cls.lib.convert.argtypes = [C.POINTER(C.c_ubyte)] * 3 + [C.c_ushort]
+        cls.lib.convert.argtypes = [C.POINTER(C.c_ubyte)] * 3
 
     def test_private_shader_preserves_texture_and_multiplies_opacity(self):
-        tev = (C.c_ubyte * 40)(*([0xA5] * 40))
-        texgen = (C.c_ubyte * 100)(*([0xA5] * 100))
+        tev = (C.c_ubyte * 168)(*([0xA5] * 168))
         color = (C.c_ubyte * 32)(*([0xA5] * 32))
-        self.lib.convert(tev, texgen, color, 55)
+        original = (C.c_ubyte * 0x12A)(*[(i * 13) & 255 for i in range(0x12A)])
+        C.c_ushort.from_buffer(original, 4).value = 55
+        C.c_ushort.from_buffer(original, 10).value = 58
+        self.lib.convert(tev, color, original)
         self.assertEqual(C.c_ushort.from_buffer(tev, 4).value, 55)
-        self.assertEqual(bytes(tev[6:9]), b"\0\0\4")
-        # Decode retail GX TEV register fields: (zero + texture * raster)
-        self.assertEqual((tev[12] >> 4, tev[12] & 15, tev[13] >> 4, tev[13] & 15), (15, 8, 10, 15))
-        self.assertEqual((tev[16] >> 5, (tev[16] >> 2) & 7,
-                          ((tev[16] << 1) & 6) | (tev[17] >> 7), (tev[17] >> 4) & 7), (7, 4, 5, 7))
-        self.assertEqual(tev[11], 8)  # ADD, zero bias, x1, clamp, PREV
-        self.assertEqual(tev[15], 8)
+        self.assertEqual(C.c_ushort.from_buffer(tev, 6).value, 58)
+        self.assertEqual(bytes(tev[12:24]), bytes([0,0,4,0,3,1,4,0,255,255,5,0]))
+        self.assertEqual(tev[0x1C], 3)
+        # Clean base texture passes unchanged; native lighting stages retain
+        # their RGB math and constants instead of texture * diffuse shading.
+        self.assertEqual(bytes(tev[0x1D:0x21]), bytes.fromhex('c008fff8'))
+        for stage, native in ((1,3),(2,4)):
+            out=0x1D+stage*8; old=0x55+native*8
+            self.assertEqual(bytes(tev[out+1:out+4]),bytes(original[old+1:old+4]))
+            self.assertEqual((tev[0x6E+stage],tev[0x72+stage]),
+                             (original[0x106+native],original[0x116+native]))
+        self.assertEqual(bytes(tev[0x3E:0x6E]),bytes(original[0xD6:0x106]))
+        self.assertEqual(bytes(tev[0x76:0x7A]),bytes(original[0x126:0x12A]))
+        for stage in range(3):
+            p=0x1D+stage*8
+            # Alpha uses register opacity first, then carries PREV untouched.
+            self.assertEqual((tev[p+6]>>5,(tev[p+6]>>2)&7,
+                              ((tev[p+6]<<1)&6)|(tev[p+7]>>7),(tev[p+7]>>4)&7),
+                             (7,7,7,5 if stage==0 else 0))
+            self.assertEqual((tev[p],tev[p+4],tev[p+5]),(0xC0+stage*2,0xC1+stage*2,8))
         self.assertEqual(bytes(color[4:12]), b"\xa5" * 8)
-        self.assertEqual(color[12], 1)
+        self.assertEqual(color[12], 2)
         for n in range(4):
             self.assertEqual(C.c_ushort.from_buffer(color, 14 + 2 * n).value,
                              0x400 if n == 1 else 0xA5A5)
-        for n in range(8):
-            self.assertEqual(bytes(texgen[8+4*n:11+4*n]), bytes([1, 4, 60]))
-        self.assertEqual(bytes(texgen[0x28:0x48]), bytes(32))
         # Constructor/vtable bytes, cull choice, neighbouring storage untouched.
-        for buffer, start in ((tev, 32), (texgen, 92), (color, 24)):
+        for buffer, start in ((tev, 160), (color, 24)):
             self.assertEqual(bytes(buffer[:4]), b"\xa5" * 4)
             self.assertEqual(bytes(buffer[start:]), b"\xa5" * 8)
         self.assertEqual(color[22], 0xA5)
 
     def test_retail_diffuse_lighting_survives_private_conversion(self):
-        tev = (C.c_ubyte * 40)()
-        texgen = (C.c_ubyte * 100)()
+        tev = (C.c_ubyte * 168)()
+        original = (C.c_ubyte * 0x12A)()
         color = (C.c_ubyte * 32)()
         # All eleven retail Mario materials use enabled channel 0, two lights,
         # signed diffuse and spot attenuation, with register ambient/material.
         native_diffuse = 2 | (3 << 2) | (1 << 7) | (1 << 9) | (1 << 10)
         C.c_ushort.from_buffer(color, 14).value = native_diffuse
-        self.lib.convert(tev, texgen, color, 0)
+        self.lib.convert(tev, color, original)
         self.assertEqual(C.c_ushort.from_buffer(color, 14).value, native_diffuse)
         self.assertEqual(C.c_ushort.from_buffer(color, 16).value, 0x400)
 

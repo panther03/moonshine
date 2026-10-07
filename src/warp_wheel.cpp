@@ -1043,7 +1043,9 @@ u8 kick(TMarDirector *director, u8 state) {
     if (!sArmed) {
         return state;
     }
-    if (sQueuedSessionDeathRestart || sWaitForRetailDeathTail) return state;
+    // Automatic retries preserve retail's death sequence. A manual restart
+    // has already passed deferred session/result ownership before it is armed.
+    if (sWaitForRetailDeathTail) return state;
     // A requested warp remains armed, but the authoritative session report
     // gets the first departure. This also covers Shine-demo frames where the
     // result cannot safely own input yet.
@@ -1731,8 +1733,8 @@ void resolveDeferredRestart() {
     // A same-frame Shine result replaces the completed attempt with its own
     // retry. JP can carry the early Shine latch through that stage load; do not
     // let the old input become valid again when the new attempt starts.
-    // Death inputs are different: their requested restart must wait for the
-    // retail death animation and then own the one departure at its tail.
+    // Death inputs are different: keep the requested restart until the session
+    // has resolved it, then service the arm even while the death state is live.
     if (!sQueuedSessionDeathRestart && StageLoader::retryOwnsDeparture()) {
         sDeferredRestart = DEFERRED_RESTART_NONE;
         sDeferredRestartAfterResult = false;
@@ -1824,14 +1826,15 @@ u8 guardExitArea(u8 nextState) {
     return nextState;
 }
 
-// Native pause/save states do not call updateGameMode(), where ordinary warps
+// Native pause/save/death states do not call updateGameMode(), where ordinary warps
 // are serviced. Keep the same departure guards, then run the retail transition
 // cleanup instead of leaving a menu-selected destination armed indefinitely.
 static bool servicePausedWarp(TMarDirector *director) {
     if (!director || !director->_260) return false;
     const u8 state = director->mCurState;
     if (state != TMarDirector::STATE_PAUSE_MENU &&
-        state != TMarDirector::STATE_SAVE_CARD) return false;
+        state != TMarDirector::STATE_SAVE_CARD &&
+        state != TMarDirector::STATE_DEATH) return false;
     const u8 next = LevelWarp::kick(director, state);
     if (next == state) return false;
     if (state == TMarDirector::STATE_PAUSE_MENU && director->mPauseMenu)

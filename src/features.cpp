@@ -23,6 +23,9 @@
 #include "susamune/mem2_map.h"
 #include "Dolphin/OS.h"            // DCFlushRange, ICInvalidateRange
 
+extern "C" void retailSetupTextBox(void *, const void *, const u32 *)
+    asm("setupTextBox__8TTalk2D2FPCvP12JMSMesgEntry");
+
 namespace {
 
 // One write to a 32-bit word. All sites are in 0x80xxxxxx MEM1, so that fixed
@@ -84,22 +87,6 @@ inline u32 patchMask(const Patch &p) {
 // High-halfword-only patch.
 #define FHALFHI(jp, us, pal, val) \
     { encodedPatchAddr<SUSAMUNE_MEM1_ADDR(jp, us, pal)>() | kMaskHi, (val) }
-
-// Patch at a hardcoded *heap* address (one region's, so these live inside a
-// per-region #if). The mod raises the game's arena floor by
-// SUSAMUNE_ARENA_RESERVE_SIZE, so every bottom-anchored heap allocation sits
-// that much higher than the address a gecko code hardcodes -- add it back.
-// PatchSusamuneGeckoCodes() in the launcher does the same to the .gct when
-// these codes are run as gecko instead of ported.
-#define FHEAP(addr, val) \
-    { encodedPatchAddr<(addr) + SUSAMUNE_ARENA_RESERVE_SIZE>(), (val) }
-#define FHEAPLO(addr, val) \
-    { encodedPatchAddr<(addr) + SUSAMUNE_ARENA_RESERVE_SIZE>() | kMaskLo, \
-      (val) }
-
-// A patch row whose address is filled in at runtime (PAL Fast Text, below).
-// applyPatches() skips rows that are still unresolved.
-#define FUNRESOLVED() { 0u, 0u }
 
 // ---------------------------------------------------------------------
 // Flat patch stream. A tagged row starts a feature and every following
@@ -284,31 +271,13 @@ Patch gFeaturePatches[] = {
 //   jp 80214610 / us 8015317C / pal 80147F98 = 38005000 (li r0, 0x5000)
 //   jp 800E4888 / us 80291340 / pal 802890CC = 60000000 (nop)
 //
-// The forced message is only short *text* because the gecko's unconditional
-// tail lines plant it in the loaded message buffer; without them the fixed
-// message id resolves to whatever happens to sit there. Those writes target a
-// hardcoded heap address, so they need the arena-reserve fixup (FHEAP).
-//   jp 028D8A7E 00028149 -> "!" (Shift-JIS 8149) x3 at 808D8A7E..83
-//      048D8A84 00000000 -> terminator
-//   us 048D3A3C 21000000 -> "!" + terminator (US/PAL fonts map ASCII directly)
-//   pal one buffer per language, resolved at runtime -- see kFastTextPalMsg.
-#if defined(SUSAMUNE_VERSION_JP)
-#define FAST_TEXT_MSG_ROWS                            \
-    FHEAPLO(0x808D8A7Cu, 0x00008149u),                \
-    FHEAP(0x808D8A80u, 0x81498149u),                  \
-    FHEAP(0x808D8A84u, 0x00000000u),
-#elif defined(SUSAMUNE_VERSION_US)
-#define FAST_TEXT_MSG_ROWS FHEAP(0x808D3A3Cu, 0x21000000u),
-#else
-#define FAST_TEXT_MSG_ROWS FUNRESOLVED(),
-#endif
+// The forced fallback now supplies its short text at the setup call itself.
+// No hardcoded heap address or guessed PAL language word is written.
 
     FBEGIN(SETTING_FAST_TEXT, 0x80215290, 0x80153DA0, 0x80148D20,
            0x38000000),
     FWORD(0x80214610, 0x8015317C, 0x80147F98, 0x38005000),
     FWORD(0x800E4888, 0x80291340, 0x802890CC, 0x60000000),
-    FAST_TEXT_MSG_ROWS
-#undef FAST_TEXT_MSG_ROWS
 
 // Disable Z Menu: skip the updateGameMode path that opens the stock map.
 // Z remains available to mod binds and every other game input path.
@@ -321,35 +290,8 @@ constexpr int kNumFeaturePatches =
     (int)(sizeof(gFeaturePatches) / sizeof(gFeaturePatches[0]));
 constexpr int kNumEarlyPatches = 7;
 constexpr int kNumPatches      = kNumFeaturePatches - kNumEarlyPatches;
-#if defined(SUSAMUNE_VERSION_JP)
-static_assert(kNumFeaturePatches == 42 && kNumPatches == 35,
-              "JP patch stream shape changed");
-#else
-static_assert(kNumFeaturePatches == 40 && kNumPatches == 33,
-              "US/PAL patch stream shape changed");
-#endif
-
-#if defined(SUSAMUNE_VERSION_PAL)
-// PAL ships one message file per language and each loads at its own address,
-// so the gecko compares a language word before writing. Indexed by that word;
-// values are the gecko's, addresses still unrelocated (FHEAP is not usable in
-// a plain table, the reserve is added in resolveFastTextPalMsg).
-//   0474E87C 21000000 / 0474E9F4 21210000 / 0474ED38 00000000 /
-//   0474EE04 A1000000 / 0474EBDC 21210000
-const struct {
-    u32 addr;
-    u32 val;
-} kFastTextPalMsg[] = {
-    { 0x8074E87Cu, 0x21000000u },  // English  "!"
-    { 0x8074E9F4u, 0x21210000u },  // German   "!!"
-    { 0x8074ED38u, 0x00000000u },  // French   (terminator only)
-    { 0x8074EE04u, 0xA1000000u },  // Spanish  "\xA1"
-    { 0x8074EBDCu, 0x21210000u },  // Italian  "!!"
-};
-
-// 20570B7C in dpad_pal.txt: the language word the five writes are gated on.
-#define FAST_TEXT_PAL_LANG_ADDR 0x80570B7Cu
-#endif
+static_assert(kNumFeaturePatches == 39 && kNumPatches == 32,
+              "patch stream shape changed");
 
 // A feature that has to be installed before the app state machine runs at all.
 // featuresApplyEarly() (from onAppInit) writes these rows once and the
@@ -358,14 +300,11 @@ const struct {
 // not write, and the next boot loads the game's own code from disc.
 // Retail word at each patch site, flattened across the per-frame features in
 // stream order and captured lazily on first apply. Capture/install state lives
-// in addrState because Fast Text's heap words can legitimately be zero.
+// in addrState independently of the retail word value.
 #define gPatchOrig (*reinterpret_cast<u32 (*)[kNumPatches]>( \
     SUSAMUNE_MEM2_FEATURE_RUNTIME_PPC_BASE))
 // Whether our word is currently installed. Writes happen on the transition
-// only -- NOT whenever the site differs from what we want. Some sites are heap
-// words the game rewrites on its own (again Fast Text's message buffer), and
-// re-asserting a disabled patch's captured `orig` over those would corrupt
-// live game data.
+// only -- NOT whenever the site differs from what we want.
 
 // =====================================================================
 // Asm-hook features: ports of the gecko C2 ("insert asm") codes.
@@ -653,48 +592,24 @@ bool featureEnabled(SettingId id) {
 constexpr u8 kHookIdMask = 0x7Fu;
 constexpr u8 kHookOn     = 0x80u;
 
-#if defined(SUSAMUNE_VERSION_PAL)
-// Fill in Fast Text's message-buffer row from the live language word. Only
-// called while the setting is on, because the word is in the heap: before the
-// message data is loaded it reads as whatever was there, and 0 (English) is
-// indistinguishable from cleared heap.
-//
-// The language word is a heap address like the buffers themselves, so it
-// should move with the arena reservation -- but the launcher's .gct fixup
-// (PatchSusamuneGeckoCodes) relocates only the buffer writes and works on
-// console, so try the unreserved address as well rather than pick one blind.
-void resolveFastTextPalMsg() {
-    constexpr int kFastTextMsgPatch = kNumFeaturePatches - 2;
-    static_assert(kFastTextMsgPatch == 38,
-                  "PAL Fast Text message row moved");
-    Patch &row = gFeaturePatches[kFastTextMsgPatch];
-    if (row.addrState & kPatchAddrMask) {
-        return;
-    }
-
-    u32 lang = *reinterpret_cast<volatile u32 *>(FAST_TEXT_PAL_LANG_ADDR +
-                                                 SUSAMUNE_ARENA_RESERVE_SIZE);
-    if (lang > 4) {
-        lang = *reinterpret_cast<volatile u32 *>(FAST_TEXT_PAL_LANG_ADDR);
-    }
-    if (lang > 4) {
-        return;  // not a language yet; try again next frame
-    }
-
-    row.addrState =
-        (row.addrState & ~kPatchAddrMask) |
-        ((kFastTextPalMsg[lang].addr + SUSAMUNE_ARENA_RESERVE_SIZE) &
-         kPatchAddrMask);
-    row.value = kFastTextPalMsg[lang].val;
-}
+// This call is exclusive to setMessageID's missing-file fallback, which Fast
+// Text deliberately selects. Preserve the live message attributes but replace
+// only its text base; setupTextBox adds entry[0] to it immediately. The retail
+// parser still owns line-ending, choices, sounds and box lifecycle.
+void setupFastTextBox(void *talk, const void *data, const u32 *entry) {
+    if (featureEnabled(SETTING_FAST_TEXT)) {
+#if defined(SUSAMUNE_VERSION_JP)
+        static const char message[] = "\x81\x49\x81\x49\x81\x49";
+#else
+        static const char message[] = "!";
 #endif
+        data = reinterpret_cast<const void *>(
+            reinterpret_cast<u32>(message) - *entry);
+    }
+    retailSetupTextBox(talk, data, entry);
+}
 
 void applyPatches(bool early) {
-#if defined(SUSAMUNE_VERSION_PAL)
-    if (!early && featureEnabled(SETTING_FAST_TEXT)) {
-        resolveFastTextPalMsg();
-    }
-#endif
     int  idx          = 0;
     bool featureEarly = false;
     bool on           = false;
@@ -718,8 +633,6 @@ void applyPatches(bool early) {
             }
             word = *reinterpret_cast<volatile u32 *>(addr);
         } else {
-            // The slot is claimed even by an unresolved row (PAL Fast Text's
-            // message buffer), which resolves on a later pass.
             int i = idx++;
             if (addr == 0) {
                 continue;
@@ -747,20 +660,18 @@ void applyPatches(bool early) {
 
 enum SavestateFeatureState {
     SAVESTATE_FRUIT_TIMEOUT = 1 << 0,
-    SAVESTATE_FAST_TEXT     = 1 << 1,
+    SAVESTATE_FAST_TEXT     = 1 << 1, // Reserved for older snapshot-17 states.
 };
 
 u8 savestateFeatureBit(SettingId id) {
     if (id == SETTING_FRUIT_NEVER_TIMEOUT) return SAVESTATE_FRUIT_TIMEOUT;
-    if (id == SETTING_FAST_TEXT) return SAVESTATE_FAST_TEXT;
     return 0;
 }
 
-// Only these rows live in ranges the savestate restores. Fast Text's first
-// three rows are instructions; its remaining high-MEM1 rows are message data.
-bool savestateRewindsPatch(SettingId id, u32 addr) {
-    return id == SETTING_FRUIT_NEVER_TIMEOUT ||
-           (id == SETTING_FAST_TEXT && addr >= 0x80500000u);
+// Fast Text no longer modifies rewound message data; its old saved bit remains
+// reserved without changing snapshot layout or compatibility.
+bool savestateRewindsPatch(SettingId id, u32) {
+    return id == SETTING_FRUIT_NEVER_TIMEOUT;
 }
 
 u8 captureSavestateFeatureState() {
@@ -780,9 +691,6 @@ u8 captureSavestateFeatureState() {
 }
 
 void restoreSavestateFeatureState(u8 savedState) {
-#if defined(SUSAMUNE_VERSION_PAL)
-    if (featureEnabled(SETTING_FAST_TEXT)) resolveFastTextPalMsg();
-#endif
     int idx = 0;
     SettingId id = SETTING_COUNT;
     bool early = false;
@@ -1040,6 +948,10 @@ u32 branchWord(u32 from, u32 to) {
 }
 
 void featuresApplyEarly() {
+    const u32 fastTextSite =
+        SUSAMUNE_MEM1_ADDR(0x8021530cu, 0x80153e1cu, 0x80148d9cu);
+    writeGameCode(fastTextSite, branchWord(fastTextSite,
+        reinterpret_cast<u32>(&setupFastTextBox)) | 1u);
     const u32 departureSite =
         SUSAMUNE_MEM1_ADDR(0x800EAB7Cu, 0x802975C0u, 0x8028F458u);
     const int departureWords =

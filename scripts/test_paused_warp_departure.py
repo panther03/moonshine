@@ -22,7 +22,7 @@ int events, moves; bool ready, pending, busy;
 void event(int value){events=events*10+value;}
 struct TPauseMenu2{void setDrawEnd(){event(2);}}pause;
 struct TMarDirector {
-    enum{STATE_NORMAL=4,STATE_PAUSE_MENU=5,STATE_STAGE_EXIT=9,STATE_SAVE_CARD=11};
+    enum{STATE_NORMAL=4,STATE_PAUSE_MENU=5,STATE_DEATH=7,STATE_STAGE_EXIT=9,STATE_SAVE_CARD=11};
     u8 mCurState;int _260;TPauseMenu2 *mPauseMenu;
     void moveStage(){event(1);++moves;}
     void currentStateFinalize(u8 n){if(n==9)event(3);}
@@ -76,13 +76,28 @@ API int nullDirector(){return servicePausedWarp(nullptr);}
         self.assertEqual([self.lib.value(i)for i in range(4)],[9,134,1,0])
 
     def test_busy_card_result_and_pb_decision_keep_departure_armed(self):
-        for state in (5,11):
-            for option,blocked,allowed in ((2,1,0),(3,0,1),(4,1,0),(6,1,0),(7,1,0)):
+        for state in (5,7,11):
+            for option,blocked,allowed in ((2,1,0),(3,0,1),(4,1,0),(7,1,0)):
                 self.lib.reset(state);self.lib.set(option,blocked)
                 self.assertEqual(self.lib.tick(),0,(state,option))
                 self.assertEqual([self.lib.value(i)for i in range(4)],[state,0,0,1])
                 self.lib.set(option,allowed)
                 self.assertEqual(self.lib.tick(),1,(state,option))
+
+    def test_manual_streak_death_restart_leaves_death_once_armed(self):
+        self.lib.reset(7);self.lib.set(6,1)
+        self.lib.set(0,0)  # Still deferred: no departure before session resolves.
+        self.assertEqual(self.lib.tick(),0)
+        self.lib.set(0,1)
+        self.assertEqual(self.lib.tick(),1)
+        self.assertEqual([self.lib.value(i)for i in range(4)],[9,134,1,0])
+        self.assertEqual(self.lib.tick(),0)
+        self.assertEqual(self.lib.value(2),1)
+
+    def test_automatic_death_retry_keeps_retail_animation(self):
+        self.lib.reset(7);self.lib.set(7,1)
+        self.assertEqual(self.lib.tick(),0)
+        self.assertEqual([self.lib.value(i)for i in range(4)],[7,0,0,1])
 
     def test_save_idle_guard_remains_in_force(self):
         self.lib.reset(11);self.lib.set(5,1);self.lib.set(2,1)

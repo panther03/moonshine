@@ -19,8 +19,10 @@ class LiveVideoRestoreTests(unittest.TestCase):
         source = r'''
 #include "susamune/state_live_video.hxx"
 #include "susamune/state_restore_bindings.hxx"
+#include "susamune/state_slot_pool.h"
 static StateRestoreBindings::Words sRestoreBindings = {};
 typedef unsigned int u32;
+typedef unsigned char u8;
 static unsigned int player[0x1d0/4], needed;
 static unsigned char *ActivePlayer=reinterpret_cast<unsigned char*>(player);
 static StateLiveVideo::Range sLiveVideo,sVideoReadRing;

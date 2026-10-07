@@ -4,6 +4,7 @@
 #include "Dolphin/MTX.h"
 #include "Dolphin/OS.h"
 #include "Dolphin/mem.h"
+#include "Dolphin/string.h"
 #include "JSystem/J3D/J3DDrawBuffer.hxx"
 #include "JSystem/J3D/J3DModel.hxx"
 #include "JSystem/J3D/J3DModelLoaderDataBase.hxx"
@@ -12,6 +13,8 @@
 #include "JSystem/JKernel/JKRFileLoader.hxx"
 #include "JSystem/JKernel/JKRHeap.hxx"
 #include "SMS/Player/Mario.hxx"
+#include "SMS/Map/Map.hxx"
+#include "SMS/Camera/CubeManagerBase.hxx"
 #include "SMS/Player/MarioDraw.hxx"
 #include "SMS/Player/Yoshi.hxx"
 #include "SMS/Player/Watergun.hxx"
@@ -42,8 +45,14 @@ extern "C" f32 ghostSquareRoot(f32) asm("sqrtf__3stdFf");
 extern "C" void ghostFluddTransform(const void *, f32, u16, J3DTransformInfo *)
     asm("calcTransform__18J3DAnmTransformKeyCFfUsP16J3DTransformInfo");
 
-void SMS_InitPacket_MatColor(J3DModel *, u16, GXChannelID,
-                             const GXColor *);
+// Retail lighting routes: the light manager owns the buffers and installs the
+// matching environment lights when they are drawn, after model submission.
+extern "C" void *gpLightManager;
+extern "C" void ghostLightEntry(void *, int)
+    asm("changeLightDrawBuffer__15TLightWithDBSetFi");
+extern "C" void ghostLightExit(void *)
+    asm("resetLightDrawBuffer__15TLightWithDBSetFv");
+
 J3DMtxCalc *J3DNewMtxCalcAnm(u32, J3DAnmTransform *);
 
 namespace GhostModel {
@@ -73,6 +82,7 @@ struct ModelSlot {
     J3DModelData *data;
     J3DModel *model;
     J3DMtxCalc *mtxCalc;
+    J3DMtxCalc *upperCalc;
     bool opaque;
     bool opacityConfigured;
     bool colorCallbacksInstalled;
@@ -323,7 +333,7 @@ u8 ghostAlpha() {
     return kOpacity[choice];
 }
 
-J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi) {
+J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi, bool upper = false) {
     if (!gpMarioOriginal || !gpMarioOriginal->mModelData ||
         !gpMarioOriginal->mModelData->_04 ||
         logicalId > SUSAMUNE_GHOST_ANIMATION_ID_MAX) {
@@ -331,7 +341,8 @@ J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi) {
     }
     // Retail bypasses gMarioAnimeData for 0xB6..0xC6 rider poses.
     const u16 bckId = ridingYoshi
-        ? logicalId : gMarioAnimeData[logicalId].mAnimID;
+        ? logicalId : upper ? gMarioAnimeData[logicalId].mAnimFluddID
+                           : gMarioAnimeData[logicalId].mAnimID;
     if (bckId >= kMarioBckCount) return nullptr;
     u8 *common = static_cast<u8 *>(gpMarioOriginal->mModelData->_04);
     J3DAnmTransform **animations =
@@ -393,11 +404,29 @@ bool configureOpacity(ModelSlot &slot, bool opaque) {
     return true;
 }
 
+void bodyPacketCallback(J3DShapePacket *packet, int stage) {
+    if (stage != 0) return;
+    const GXColor *original = *reinterpret_cast<const GXColor **>(
+        reinterpret_cast<u8 *>(packet) + kShapePacketUserAreaOffset);
+    GXColor color = *original;
+    color.a = sGhostColor.a;
+    GXSetChanMatColor(GX_COLOR0A0, color);
+}
+
 bool installColorCallbacks(ModelSlot &slot) {
     if (!slot.data || !slot.model) return false;
     if (slot.colorCallbacksInstalled) return true;
-    for (u16 i = 0; i < slot.data->getMaterialNum(); ++i)
-        SMS_InitPacket_MatColor(slot.model, i, GX_COLOR0A0, &sGhostColor);
+    // The retail helper writes complete XF RGBA regardless of GX_ALPHA0.
+    // Keep each private material's native RGB and change only ghost opacity.
+    for (u16 i = 0; i < slot.data->getMaterialNum(); ++i) {
+        u8 *material = reinterpret_cast<u8 *>(slot.data->mMaterials[i]);
+        const u8 *color = *reinterpret_cast<u8 **>(material + 0x20);
+        J3DShape *shape = *reinterpret_cast<J3DShape **>(material + 0x04);
+        u8 *packet = reinterpret_cast<u8 *>(slot.model->mShapePackets) +
+            static_cast<u32>(shape->_4) * kShapePacketStride;
+        *reinterpret_cast<const void **>(packet + kShapePacketUserAreaOffset) = color + 4;
+        *reinterpret_cast<void (**)(J3DShapePacket *, int)>(packet + kShapePacketCallbackOffset) = bodyPacketCallback;
+    }
     slot.colorCallbacksInstalled = true;
     return true;
 }
@@ -542,23 +571,51 @@ J3DModel *yoshiSource() {
 
 void restoreHeap(JKRHeap *heap);
 
-void closeFluddPump(J3DModelData *data) {
-    // Borrow the already loaded key table, but evaluate an explicit frame:
-    // neither Mario's animation object nor his model data is changed.
-    const u8 *actor = *reinterpret_cast<u8 **>(
-        reinterpret_cast<u8 *>(gpMarioOriginal->mFludd) + 0x1cd4);
-    if (!actor) return;
-    const u8 *animations = *reinterpret_cast<u8 *const *>(actor);
-    if (!animations) return;
-    const u8 *table = *reinterpret_cast<u8 *const *>(animations + 0x2c);
-    if (!table || *reinterpret_cast<const u32 *>(table) != 7) return;
+// Existing V6 samples do not store the separate pump frame. Reconstruct a
+// deterministic ping-pong pose from the recorded timeline; pause/seek do not
+// advance it and the live player's animation state is never used.
+f32 pumpFrame(const Ghost::VisualState &state, s16 end) {
+    if (end <= 0) return 0;
+    const u32 span = static_cast<u32>(end) * 4u;
+    const u32 phase = state.visualQf % (span * 2u);
+    return static_cast<f32>(phase > span ? span * 2u - phase : phase) * 0.25f;
+}
+
+
+MActor *fluddActor(u8 nozzle, bool body) {
+    TWaterGun *gun = gpMarioOriginal ? gpMarioOriginal->mFludd : nullptr;
+    if (!gun || nozzle >= 6 || !gun->mNozzleList[nozzle]) return nullptr;
+    return body ? *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun) + 0x1cd4)
+        : *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun->mNozzleList[nozzle]) + 0x380);
+}
+
+void animateFludd(J3DModelData *data, MActor *actor, bool body,
+                  const Ghost::VisualState &state) {
+    // Read the retail key table, but evaluate into private joints at an explicit
+    // frame. No MActor::setBck or live frame-controller writes are performed.
+    if (!actor || !actor->mAnmData) return;
+    const u8 *table = *reinterpret_cast<u8 *const *>(
+        reinterpret_cast<const u8 *>(actor->mAnmData) + 0x2c);
+    if (!table) return;
+    const u32 count = *reinterpret_cast<const u32 *>(table);
+    if (!count || count > 16) return;
     const char *const *names = *reinterpret_cast<const char *const *const *>(table + 8);
-    if (!names || !names[2] || memcmp(names[2], "wg_house", 9)) return;
     const u8 *const *keys = *reinterpret_cast<const u8 *const *const *>(table + 12);
-    if (!keys) return;
-    const u8 *animation = keys[2];
+    if (!names || !keys) return;
+    const bool firing = state.fludd.mode & SUSAMUNE_GHOST_FLUDD_SPRAYING;
+    u32 index = firing ? 2u : 3u;
+    if (body) {
+        const char *name = firing ? "wg_pump" : "wg_house";
+        for (index = 0; index < count; ++index)
+            if (names[index] && !strcmp(names[index], name)) break;
+    }
+    if (index >= count) return;
+    const u8 *animation = keys[index];
     if (!animation || *reinterpret_cast<const u16 *>(animation + 0x22) != data->getJointNum()) return;
-    const f32 frame = *reinterpret_cast<const s16 *>(animation + 2);
+    const s16 end = *reinterpret_cast<const s16 *>(animation + 2);
+    if (end <= 0) return;
+    const f32 frame = !firing ? end : body ? pumpFrame(state, end)
+        : (state.visualQf % (static_cast<u32>(end) * 4u)) * 0.25f;
     for (u16 i = 0; i < data->getJointNum(); ++i)
         ghostFluddTransform(animation, frame, i,
             reinterpret_cast<J3DTransformInfo *>(reinterpret_cast<u8 *>(data->mJoints[i]) + 0x1c));
@@ -594,7 +651,6 @@ AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
     sAttachmentHeap->becomeCurrentHeap();
     const u32 before = sAttachmentHeap->getTotalFreeSize();
     if (independent) attachment.data = J3DModelLoaderDataBase::load(bmd, 0x10040000u);
-    if (kind == ATTACHMENT_FLUDD && attachment.data) closeFluddPump(attachment.data);
     void *storage = sAttachmentHeap->alloc(sizeof(J3DModel), 32);
     if (storage && attachment.data) {
         attachment.model =
@@ -640,13 +696,9 @@ ModelSlot &runnerSlot(int runner);
 void desiredFludd(const Ghost::VisualState &state, AttachmentRequest *out) {
     if (state.yoshi || !(state.fludd.mode & SUSAMUNE_GHOST_FLUDD_PRESENT) ||
         !gpMarioOriginal || !gpMarioOriginal->mFludd) return;
-    TWaterGun *gun = gpMarioOriginal->mFludd;
     const u32 nozzle = state.fludd.mode & 7;
-    if (nozzle >= 6 || !gun->mNozzleList[nozzle]) return;
-    // Retail Watergun.hpp: body MActor at 1CD4, nozzle MActor at 380.
-    MActor *body = *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun) + 0x1CD4);
-    MActor *head = *reinterpret_cast<MActor **>(
-        reinterpret_cast<u8 *>(gun->mNozzleList[nozzle]) + 0x380);
+    MActor *body = fluddActor(nozzle, true);
+    MActor *head = fluddActor(nozzle, false);
     if (body && body->mModel) out[0] = {ATTACHMENT_FLUDD, body->mModel};
     if (head && head->mModel) out[1] = {ATTACHMENT_NOZZLE, head->mModel};
 }
@@ -673,8 +725,10 @@ bool prepareFludd(AttachmentModel &attachment, int runner,
         MTXCopy(*body.model->getAnmMtx(center), *base);
     }
     // Private model data has no live-Mario callbacks or animation ownership.
-    attachment.model->J3DModel::calc();
     const u8 nozzle = state.fludd.mode & 7u;
+    const bool body = attachment.kind == ATTACHMENT_FLUDD;
+    animateFludd(attachment.data, fluddActor(nozzle, body), body, state);
+    attachment.model->J3DModel::calc();
     if (attachment.kind == ATTACHMENT_NOZZLE && (nozzle == 0 || nozzle == 5)) {
         const s32 muzzle = attachment.data->mJointNames->getIndex("null_G_muzzle");
         if (muzzle < 0 || muzzle >= attachment.data->getJointNum()) return true;
@@ -735,7 +789,7 @@ void restoreHeap(JKRHeap *heap) {
 __attribute__((noinline)) void clearLiveModel(ModelSlot &slot) {
     slot.data = nullptr;
     slot.model = nullptr;
-    slot.mtxCalc = nullptr;
+    slot.mtxCalc = slot.upperCalc = nullptr;
     slot.opaque = false;
     slot.opacityConfigured = false;
     slot.colorCallbacksInstalled = false;
@@ -803,8 +857,9 @@ bool loadModel(Appearance appearance) {
         if (!initial && initialId != 0) initial = marioAnimation(0, false);
         if (initial) {
             slot.mtxCalc = J3DNewMtxCalcAnm(slot.data->_C & 0xfu, initial);
+            slot.upperCalc = J3DNewMtxCalcAnm(slot.data->_C & 0xfu, initial);
         }
-        if (!slot.mtxCalc) slot.model = nullptr;
+        if (!slot.mtxCalc || !slot.upperCalc) slot.model = nullptr;
     }
     if (slot.model && appearance == APPEARANCE_SHADOW &&
         !gpScreenTexture->replace(slot.data, kShadowTextureName)) {
@@ -841,6 +896,29 @@ ModelSlot &runnerSlot(int runner) {
     return sSlots[selected ^ (runner != 0 ? 1 : 0)];
 }
 
+
+void *lightSetFor(const Ghost::VisualState &state) {
+    if (!gpLightManager || !gpMap) return nullptr;
+    void **sets = *reinterpret_cast<void ***>(
+        reinterpret_cast<u8 *>(gpLightManager) + 0x14);
+    if (!sets) return nullptr;
+    // Object lighting is already registered by stage actors. Player lighting
+    // is optional in retail stages; never allocate/enable a late draw group.
+    u8 *set = reinterpret_cast<u8 *>(sets[1]);
+    if (!set || !set[0x20] || !*reinterpret_cast<void **>(set + 0x10)) return nullptr;
+    const TVec3f position = {state.x, state.y, state.z};
+    const TBGCheckData *ground = nullptr;
+    const f32 floor = gpMap->checkGround(state.x, state.y + 25.0f, state.z, &ground);
+    int light = ground && (ground->mType & 0x4000u) && floor + 200.0f > state.y
+        ? ground->mValue : 0;
+    if (gpCubeShadow && gpCubeShadow->getInCubeNo(*reinterpret_cast<const Vec *>(&position)) != 0xffffffffu)
+        light = 1;
+    // Retail changeLightDrawBuffer accepts an out-of-range equality: bound it.
+    if (light < 0 || light >= *reinterpret_cast<int *>(set + 0x1c)) light = 0;
+    ghostLightEntry(set, light);
+    return set;
+}
+
 bool prepareRunner(int runner, const Ghost::VisualState &state) {
     ModelSlot &slot = runnerSlot(runner);
     if (!slot.model || !slot.mtxCalc || !state.visible ||
@@ -869,7 +947,23 @@ bool prepareRunner(int runner, const Ghost::VisualState &state) {
     *frame = static_cast<f32>(state.animationPhase) * frameMax /
              static_cast<f32>(SUSAMUNE_GHOST_ANIMATION_PHASE_MAX + 1u);
     *rootCalc = slot.mtxCalc;
+    J3DMtxCalc **upperSlot = nullptr;
+    J3DAnmTransform *upper = nullptr;
+    f32 savedUpperFrame = 0;
+    if (!state.yoshi && (state.fludd.mode & SUSAMUNE_GHOST_FLUDD_SPRAYING) &&
+        slot.data->mJointNames && (upper = marioAnimation(state.animationId, false, true))) {
+        const s32 chest = slot.data->mJointNames->getIndex("chn_chest");
+        if (chest > 0 && chest < slot.data->getJointNum()) {
+            upperSlot = reinterpret_cast<J3DMtxCalc **>(
+                reinterpret_cast<u8 *>(slot.data->mJoints[chest]) + 0x58);
+            *reinterpret_cast<J3DAnmTransform **>(reinterpret_cast<u8 *>(slot.upperCalc) - 0x10) = upper;
+            savedUpperFrame = *animationFrame(upper);
+            *animationFrame(upper) = pumpFrame(state, animationFrameMax(upper));
+            *upperSlot = slot.upperCalc;
+        }
+    }
     slot.model->J3DModel::calc();
+    if (upperSlot) { *upperSlot = nullptr; *animationFrame(upper) = savedUpperFrame; }
     *rootCalc = savedCalc;
     *frame = savedFrame;
     return true;
@@ -1053,11 +1147,13 @@ public:
             for (int runner = 0; runner < 2; ++runner) {
                 ModelSlot &slot = runnerSlot(runner);
                 if (!sPrepared[runner] || !modelPacketsReady(slot)) continue;
+                void *lighting = lightSetFor(sVisualStates[runner]);
                 slot.model->J3DModel::entry();
                 for (int part = 0; part < 3; ++part) {
                     AttachmentModel *attachment = sPreparedAttachments[runner * 3 + part];
                     if (attachment && attachment->model) entryAttachment(*attachment);
                 }
+                if (lighting) ghostLightExit(lighting);
                 sSubmitted[runner] = true;
             }
         }

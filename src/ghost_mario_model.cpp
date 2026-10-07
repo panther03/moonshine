@@ -3,6 +3,7 @@
 #include "susamune/ghost_mario_model.hxx"
 #include "JSystem/J3D/J3DModel.hxx"
 #include "Dolphin/types.h"
+#include "Dolphin/mem.h"
 
 // This retail method is static despite the older project header declaration.
 extern "C" void *newCleanTevBlock(int) asm("createTevBlock__11J3DMaterialFi");
@@ -16,30 +17,34 @@ static bool owned(const void *pointer, u32 size, u32 begin, u32 end) {
 }
 
 static __attribute__((always_inline)) void configureMaterial(
-        u8 *tev, u8 *texgen, u8 *color, u16 texture) {
-        // Private TVB1 layout, audited against the retail classes/constructors.
-        *reinterpret_cast<u16 *>(tev + 4) = texture;
-        tev[6] = 0; // TEXCOORD0
-        tev[7] = 0; // TEXMAP0, original base atlas
-        tev[8] = 4; // COLOR0A0 (retail diffuse lighting, ghost opacity in alpha)
-        // (0 + texture * raster) -> PREV, clamped, both RGB and alpha.
-        static const u8 stage[8] = {0xC0, 0x08, 0xF8, 0xAF,
-                                    0xC1, 0x08, 0xF2, 0xF0};
-        for (u32 b = 0; b < 8; ++b) tev[0x0A + b] = stage[b];
-        for (u32 b = 0x12; b < 0x1E; ++b) tev[b] = 0; // no indirect sampling
-        *reinterpret_cast<u32 *>(texgen + 4) = 1;
-        for (u32 n = 0; n < 8; ++n) {
-            u8 *coord = texgen + 8 + 4 * n;
-            coord[0] = 1; // MTX2x4
-            coord[1] = 4; // TEX0
-            coord[2] = 60; // IDENTITY
-            *reinterpret_cast<u32 *>(texgen + 0x28 + 4 * n) = 0;
+        u8 *tev, u8 *color, const u8 *original) {
+        // Keep retail Mario's lighting lookup and specular combination. Only
+        // the two pollution-mask stages are replaced by a clean base sample.
+        *reinterpret_cast<u16 *>(tev + 4) = *reinterpret_cast<const u16 *>(original + 4);
+        *reinterpret_cast<u16 *>(tev + 6) = *reinterpret_cast<const u16 *>(original + 10);
+        static const u8 orders[12] = {0, 0, 4, 0, 3, 1, 4, 0, 255, 255, 5, 0};
+        memcpy(tev + 0x0C, orders, sizeof(orders));
+        tev[0x1C] = 3;
+        memcpy(tev + 0x3E, original + 0xD6, 48); // TEV and konst colours
+        memcpy(tev + 0x76, original + 0x126, 4); // swap tables
+        for (u32 stage = 0; stage < 3; ++stage) {
+            u8 *out = tev + 0x1D + stage * 8;
+            if (stage) {
+                const u32 source = stage + 2;
+                memcpy(out, original + 0x55 + source * 8, 8);
+                tev[0x6E + stage] = original[0x106 + source];
+                tev[0x72 + stage] = original[0x116 + source];
+            } else {
+                out[1] = 8; out[2] = 0xFF; out[3] = 0xF8; // base texture -> PREV
+            }
+            out[0] = 0xC0 + stage * 2; out[4] = out[0] + 1;
+            out[5] = 8; out[6] = 0xFF;
+            out[7] = stage ? 0x80 : 0xD0; // alpha PREV / raster opacity
         }
-        // Retain the private allocated matrix objects unused; no shared edits.
-        texgen[0x48] = 0; // no NBT scaling/bump matrix allocation
+        // The original texgens supply base UV0 and the COLOR0 lighting lookup.
         // Keep the BMD's diffuse channel, light mask and material colours.
         // Resetting every channel to 0x0400 made the body completely unlit.
-        color[0x0C] = 1;
+        color[0x0C] = 2;
         // Opacity is independent of lighting (the material alpha register).
         *reinterpret_cast<u16 *>(color + 0x10) = 0x0400;
 }
@@ -55,16 +60,14 @@ bool prepare(J3DModelData *data, u32 heapBegin, u32 heapEnd) {
         u8 *material = reinterpret_cast<u8 *>(data->mMaterials[i]);
         if (!owned(material, 0x40, heapBegin, heapEnd)) return false;
         u8 *color = *reinterpret_cast<u8 **>(material + 0x20);
-        u8 *texgen = *reinterpret_cast<u8 **>(material + 0x24);
         const u8 *oldTev = *reinterpret_cast<u8 **>(material + 0x28);
         if (!owned(color, 0x18, heapBegin, heapEnd) ||
-            !owned(texgen, 0x5C, heapBegin, heapEnd) ||
-            !owned(oldTev, 6, heapBegin, heapEnd)) return false;
+            !owned(oldTev, 0x12A, heapBegin, heapEnd)) return false;
         const u16 texture = *reinterpret_cast<const u16 *>(oldTev + 4);
         if (texture >= 59) return false;
-        u8 *tev = static_cast<u8 *>(newCleanTevBlock(1));
-        if (!owned(tev, 0x20, heapBegin, heapEnd)) return false;
-        configureMaterial(tev, texgen, color, texture);
+        u8 *tev = static_cast<u8 *>(newCleanTevBlock(4));
+        if (!owned(tev, 0xA0, heapBegin, heapEnd)) return false;
+        configureMaterial(tev, color, oldTev);
         *reinterpret_cast<u8 **>(material + 0x28) = tev;
         // The old block remains in the same heap; the bound includes it.
         // No free/delete ABI or allocator fragmentation assumptions are needed.

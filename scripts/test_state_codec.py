@@ -95,6 +95,11 @@ class Result(C.Structure):
                 ("raw", C.c_uint), ("adler", C.c_uint)]
 
 
+class DirectPolicy(C.Structure):
+    _fields_ = [(name, C.c_size_t) for name in
+                ('copies', 'copied_bytes', 'queries', 'allowed', 'first', 'last')]
+
+
 class Guarded:
     def __init__(self, size):
         self.size = size
@@ -205,6 +210,24 @@ __declspec(dllexport) int unpackVerifiedPolicy(void *w,unsigned int ws,const Sta
  CopyPolicy *policy) {
  return StateCodec::decompressVerified(w,ws,s,n,d,dn,raw,adler,copyPolicy,policy);
 }
+struct DirectPolicy {__UINTPTR_TYPE__ copies,bytes,queries,allowed,first,last;};
+bool directPolicy(void *p,void *d,unsigned int n) {
+ DirectPolicy *policy=(DirectPolicy*)p;++policy->queries;
+ __UINTPTR_TYPE__ first=(__UINTPTR_TYPE__)d;
+ if(policy->last>first&&policy->first<first+n)return false;
+ ++policy->allowed;return true;
+}
+void selectiveCopy(void *p,void *d,const void *s,unsigned int n) {
+ DirectPolicy *policy=(DirectPolicy*)p;++policy->copies;policy->bytes+=n;
+ unsigned char *out=(unsigned char*)d;const unsigned char *in=(const unsigned char*)s;
+ for(unsigned int i=0;i<n;++i){__UINTPTR_TYPE__ address=(__UINTPTR_TYPE__)(out+i);
+  if(address<policy->first||address>=policy->last)out[i]=in[i];}
+}
+__declspec(dllexport) int unpackDirect(void *w,unsigned int ws,const StateCodec::ReadSpan *s,
+ unsigned int n,const StateCodec::WriteSpan *d,unsigned int dn,unsigned int raw,unsigned int adler,
+ DirectPolicy *policy) {
+ return StateCodec::decompressVerified(w,ws,s,n,d,dn,raw,adler,selectiveCopy,policy,directPolicy);
+}
 }
 ''', encoding="ascii")
         production = (ROOT / "src/state_codec.cpp").read_text()
@@ -246,6 +269,7 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
         cls.lib.unpackPolicy.argtypes = cls.lib.unpack.argtypes + [C.POINTER(C.c_uint)]
         cls.lib.unpackVerified.argtypes = cls.lib.unpack.argtypes
         cls.lib.unpackVerifiedPolicy.argtypes = cls.lib.unpackPolicy.argtypes
+        cls.lib.unpackDirect.argtypes = cls.lib.unpack.argtypes + [C.POINTER(DirectPolicy)]
         cls.lib.unpackRetained.argtypes = cls.lib.unpackPolicy.argtypes
         cls.lib.counterBoundary.argtypes = [C.c_uint, C.c_int, C.c_uint, C.POINTER(C.c_uint)]
         cls.lib.checkStream.argtypes = [C.c_void_p, C.c_uint, C.POINTER(StreamSource), C.c_uint, C.c_uint]
@@ -849,6 +873,65 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
                            invalid_output, 2, C.byref(result))
         self.assertEqual(result.status, INVALID)
 
+    def test_direct_decode_keeps_protected_bytes_and_scattered_span_boundaries(self):
+        data = bytes(QUICK_BLOCK * 3 + 53)
+        measured, _ = self.pack(self.source(data), quick=True)
+        packed, encoded = self.pack(self.source(data), [measured.compressed], quick=True)
+        source = self.source(encoded, [7, 19, len(encoded)-1])
+        for sizes in ([len(data)], [0, QUICK_BLOCK, 0, QUICK_BLOCK, QUICK_BLOCK+53],
+                      [QUICK_BLOCK-1, 2, QUICK_BLOCK*2+52]):
+            with self.subTest(sizes=sizes):
+                buffers = [Guarded(n) for n in sizes]
+                out = (Span * len(buffers))(*[Span(b.ptr, b.size) for b in buffers])
+                kept = next(b for b in buffers if b.size >= QUICK_BLOCK)
+                policy = DirectPolicy(first=kept.ptr+17, last=kept.ptr+19)
+                self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                    out,len(out),len(data),packed.adler,C.byref(policy)), SUCCESS)
+                for b in buffers:
+                    expected = bytearray(b.size)
+                    if b is kept: expected[17:19] = b'\xa7\xa7'
+                    self.assertEqual(b.data(), expected)
+                    self.assertTrue(b.guards())
+                self.assertGreater(policy.copies, 0)
+                self.assertGreater(policy.allowed, 0)
+                self.assertLess(policy.copied_bytes, len(data))
+                self.assertGreaterEqual(policy.queries, policy.allowed)
+                if len(sizes) == 1: self.assertGreater(policy.queries, policy.allowed)
+        self.assertTrue(self.work.guards())
+
+    def test_direct_permission_follows_frame_and_output_bounds_and_does_not_apply_to_plain(self):
+        raw = random.Random(812).randbytes(QUICK_BLOCK)
+        for quick in (False, True):
+            measured, _ = self.pack(self.source(raw), quick=quick)
+            packed, encoded = self.pack(self.source(raw), [measured.compressed], quick=quick)
+            source = self.source(encoded)
+            out = Guarded(len(raw)); spans = (Span * 1)(Span(out.ptr,out.size)); policy = DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,len(raw),packed.adler,C.byref(policy)), SUCCESS)
+            self.assertEqual(policy.queries, 0)
+            self.assertEqual(policy.copied_bytes, len(raw))
+            self.assertEqual(out.data(), raw); self.assertTrue(out.guards())
+        raw = bytes(QUICK_BLOCK)
+        measured, _ = self.pack(self.source(raw), quick=True)
+        packed, encoded = self.pack(self.source(raw), [measured.compressed], quick=True)
+        for offset, value in ((4,1),(8,QUICK_BLOCK+1),(12,0),(12,0x7FFFFFFF)):
+            damaged = bytearray(encoded); struct.pack_into('>I',damaged,offset,value)
+            source = self.source(bytes(damaged)); out = Guarded(len(raw)); spans=(Span*1)(Span(out.ptr,out.size))
+            policy = DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,len(raw),packed.adler,C.byref(policy)), COMMIT)
+            self.assertEqual((policy.queries,policy.copies), (0,0))
+            self.assertEqual(out.data(), b'\xa7'*len(raw));self.assertTrue(out.guards())
+        for payload in (b'\x10A\x00\x00', b'\x10A\x02\x00', b'\xf0\xff', b'\x1fA\x01\x00\xff'):
+            # A violated verified-stream promise may have written destination
+            # bytes, but must remain bounded and report fatal commit failure.
+            encoded = struct.pack('>IIII',0x4D534C34,QUICK_BLOCK,100,len(payload))+payload
+            source=self.source(encoded);out=Guarded(100);spans=(Span*1)(Span(out.ptr,out.size))
+            policy=DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,100,1,C.byref(policy)), COMMIT)
+            self.assertEqual((policy.queries,policy.allowed,policy.copies),(1,1,0))
+            self.assertTrue(out.guards());self.assertTrue(self.work.guards())
     def test_quick_header_and_payload_counters_refuse_uint32_wrap(self):
         for start, length, word, expected, final in (
                 (0xFFFFFFFB, 0, 1, 1, 0xFFFFFFFF),

@@ -24,3 +24,8 @@ typedef unsigned long long uint64_t;
 extern "C" void *memcpy(void *, const void *, size_t);
 extern "C" void *memset(void *, int, size_t);
 extern "C" int memcmp(const void *, const void *, size_t);
+
+// Fast-parser dictionary fills are disjoint, bounded copies. Share the same
+// word-copy implementation as compressed output and retained-state commits.
+void StateSlotPoolCopyForward(unsigned char *, const unsigned char *, unsigned int);
+#define MINIZ_FAST_COPY(dst, src, size) StateSlotPoolCopyForward(dst, src, size)

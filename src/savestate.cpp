@@ -491,29 +491,26 @@ bool validStore() {
 }
 
 bool compressCandidate(const StateCodec::ReadSpan *source, u32 sourceCount,
-                       u32 rawSize, u32 slot, StateCodec::Result &result) {
+                       u32 rawSize, u32 slot, StateCodec::Result &result, u32 sizes[3],
+                       u32 modeEnd = 3) {
     StateCodec::WriteSpan output[3];
     output[0] = {reinterpret_cast<void *>(kStagingBase), SUSAMUNE_STATE_STAGING_SIZE};
     poolWriteSpans(sPool.used, poolCapacity() - sPool.used, output + 1);
-    result = StateCodec::compress(codecWorkspace(), SUSAMUNE_STATE_CODEC_WORKSPACE_SIZE,
-        source, sourceCount, output, 3, false, true);
-    bool quick = true;
-    bool compact = false;
-    if ((result.status == StateCodec::SUCCESS || result.status == StateCodec::OUTPUT_FULL) &&
-        StateSlotPoolPlanReplace(&sPool, poolCapacity(), slot, result.compressedBytes,
-                                 SUSAMUNE_STATE_STAGING_SIZE) == STATE_SLOT_REPLACE_REFUSE) {
-        quick = false;
+    for (u32 mode = 0; mode < modeEnd; ++mode) {
+        // Retained-state repacking never changes this save's immutable input.
+        // Do not repeat a measured mode until the pool has enough room for it.
+        if (sizes[mode] && StateSlotPoolPlanReplace(&sPool, poolCapacity(), slot,
+                sizes[mode], SUSAMUNE_STATE_STAGING_SIZE) == STATE_SLOT_REPLACE_REFUSE)
+            continue;
         result = StateCodec::compress(codecWorkspace(), SUSAMUNE_STATE_CODEC_WORKSPACE_SIZE,
-            source, sourceCount, output, 3);
+            source, sourceCount, output, 3, mode == 2, mode == 0);
+        if ((result.status != StateCodec::SUCCESS && result.status != StateCodec::OUTPUT_FULL) ||
+            result.rawBytes != rawSize) return false;
+        sizes[mode] = result.compressedBytes;
+        if (commitPackedState(source, sourceCount, rawSize, slot, result, mode == 2, mode == 0))
+            return true;
     }
-    if ((result.status == StateCodec::SUCCESS || result.status == StateCodec::OUTPUT_FULL) &&
-        StateSlotPoolPlanReplace(&sPool, poolCapacity(), slot, result.compressedBytes,
-                                 SUSAMUNE_STATE_STAGING_SIZE) == STATE_SLOT_REPLACE_REFUSE) {
-        compact = true;
-        result = StateCodec::compress(codecWorkspace(), SUSAMUNE_STATE_CODEC_WORKSPACE_SIZE,
-            source, sourceCount, output, 3, compact);
-    }
-    return commitPackedState(source, sourceCount, rawSize, slot, result, compact, quick);
+    return false;
 }
 
 bool quickStoredState(u32 slot) {
@@ -549,7 +546,7 @@ bool repackRetainedState(u32 slot, bool compact) {
 }
 
 bool repackForCandidate(const StateCodec::ReadSpan *source, u32 sourceCount,
-                        u32 rawSize, u32 slot, StateCodec::Result &result) {
+                        u32 rawSize, u32 slot, StateCodec::Result &result, u32 sizes[3]) {
     if ((result.status != StateCodec::SUCCESS && result.status != StateCodec::OUTPUT_FULL) ||
         result.rawBytes != rawSize ||
         StateSlotPoolPlanReplace(&sPool, poolCapacity(), slot, result.compressedBytes,
@@ -562,13 +559,21 @@ bool repackForCandidate(const StateCodec::ReadSpan *source, u32 sourceCount,
         if (quickStoredState(i)) quickSlots |= 1u << i;
     }
     for (u32 mode = 0; mode < 2; ++mode) {
+        // A quick retained stream can often make room for the already-measured
+        // fast candidate. Do that before spending a full dense candidate pass.
+        // Dense candidate/retained fallbacks still run if fast repacking fails.
+        if (mode && compressCandidate(source, sourceCount, rawSize, slot, result, sizes))
+            return true;
+        if ((result.status != StateCodec::SUCCESS && result.status != StateCodec::OUTPUT_FULL) ||
+            result.rawBytes != rawSize) return false;
         for (u32 i = 0; i < SavestateManager::kSlotCount; ++i) {
             if (!((mode ? retainedSlots : quickSlots) & (1u << i)) ||
                 !repackRetainedState(i, mode != 0)) continue;
             if (StateSlotPoolPlanReplace(&sPool, poolCapacity(), slot, result.compressedBytes,
                                          SUSAMUNE_STATE_STAGING_SIZE) == STATE_SLOT_REPLACE_REFUSE)
                 continue;
-            if (compressCandidate(source, sourceCount, rawSize, slot, result)) return true;
+            if (compressCandidate(source, sourceCount, rawSize, slot, result, sizes,
+                                  mode ? 3 : 2)) return true;
             if ((result.status != StateCodec::SUCCESS && result.status != StateCodec::OUTPUT_FULL) ||
                 result.rawBytes != rawSize) return false;
         }
@@ -834,7 +839,10 @@ bool archiveProjectCandidateMatches(const SusamuneStateArchiveHeader &file) {
 #pragma clang section text=".foxtrot.text"
 void copyBaseStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
     if (profile) StateArchiveProfile::copyGameBytes(profile, destination, source, size);
-    else memcpy(destination, source, size);
+    // The existing pool copy handles all alignments with bounded word reads.
+    // Decoder input/output are disjoint, and owner filters have already run.
+    else StateSlotPoolCopyForward(static_cast<u8 *>(destination),
+                                 static_cast<const u8 *>(source), size);
 }
 
 void copyOwnedStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
@@ -844,6 +852,15 @@ void copyOwnedStateBytes(void *profile, void *destination, const void *source, u
 void copyStateBytes(void *profile, void *destination, const void *source, unsigned int size) {
     if (PracticeSession::copySavestateBytes(destination, source, size)) return;
     StateLiveVideo::copyExcept(sLiveVideo, profile, destination, source, size, copyOwnedStateBytes);
+}
+
+bool directStateBytes(void *profile, void *destination, unsigned int size) {
+    const StateLiveVideo::Address address = reinterpret_cast<StateLiveVideo::Address>(destination);
+    // Same-session heap blocks cannot contain the mod's retained TAS tape.
+    // Durable owners and any captured bindings keep the full copy policy.
+    return !profile && !sRestoreBindings.count && address >= sRestoreBindings.first &&
+        address <= sRestoreBindings.last && size <= sRestoreBindings.last - address &&
+        (sLiveVideo.last <= address || sLiveVideo.first >= address + size);
 }
 
 #pragma clang section text=".foxtrot.text"
@@ -1557,10 +1574,11 @@ bool SavestateManager::saveSlotExplicit(u32 slot, bool forceRng, bool omitPracti
         rawSize += practiceSource[i].size;
     }
     StateCodec::Result result;
+    u32 packedSizes[3] = {};
     bool fits = compressCandidate(source, h->region_count + Ghost::kSavestateSpanCount +
-        PracticeSession::kSavestateSpanCount, rawSize, slot, result);
+        PracticeSession::kSavestateSpanCount, rawSize, slot, result, packedSizes, 2);
     if (!fits) fits = repackForCandidate(source, h->region_count + Ghost::kSavestateSpanCount +
-        PracticeSession::kSavestateSpanCount, rawSize, slot, result);
+        PracticeSession::kSavestateSpanCount, rawSize, slot, result, packedSizes);
     if (!fits) {
         rebaseMissionStopwatch(h->save_time);
         invalidateVideoReadBuffer();
@@ -1835,7 +1853,7 @@ bool SavestateManager::loadSlot(u32 slot, u32 expectedGeneration) {
             SUSAMUNE_STATE_CODEC_WORKSPACE_SIZE, compressed, 3, destinations,
             h->region_count + Ghost::kSavestateSpanCount + PracticeSession::kSavestateSpanCount, saved.rawSize, saved.adler32,
             copyStateBytes,
-            durable ? &sLiveArchiveProfile : nullptr);
+            durable ? &sLiveArchiveProfile : nullptr, directStateBytes);
     }
     if (restored == StateCodec::COMMIT_FAILED) __builtin_trap();
     if (restored != StateCodec::SUCCESS) {

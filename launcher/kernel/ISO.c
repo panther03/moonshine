@@ -519,10 +519,13 @@ const u8 *ISORead(u32* Length, u32 Offset)
 	for( i = 0; i < CacheEntryCount; ++i )
 	{
 		if(DC[i].Size == 0) continue;
-		if( Offset >= DC[i].Offset && Offset - DC[i].Offset <= DC[i].Size &&
-			*Length <= DC[i].Size - (Offset - DC[i].Offset) )
+		if( Offset >= DC[i].Offset && Offset - DC[i].Offset < DC[i].Size )
 		{
 			//dbgprintf("DI: Cached Read Offset:%08X Size:%08X Buffer:%p\r\n", DC[i].Offset, DC[i].Size, DC[i].Data );
+			/* DI consumes bounded pieces before patching the complete request.
+			 * Keep its cached prefix rather than reading those bytes again. */
+			u32 available = DC[i].Size - (Offset - DC[i].Offset);
+			if (*Length > available) *Length = available;
 			return DC[i].Data + (Offset - DC[i].Offset);
 		}
 	}
@@ -534,6 +537,19 @@ const u8 *ISORead(u32* Length, u32 Offset)
 		while((cacheLength += OriLength) < 0x10000) ;
 		if (cacheLength > DCacheLimit) cacheLength = DCacheLimit;
 	}
+	u32 cacheOffset = Offset;
+	u32 cachePrefix = (u32)Offset64 & 511u;
+	/* Prepend only existing disc bytes; trim speculative read-ahead to a
+	 * sector boundary without dropping requested bytes or extending EOF. */
+	if (cachePrefix <= Offset && cachePrefix <= DCacheLimit - cacheLength)
+	{
+		cacheOffset -= cachePrefix;
+		cacheLength += cachePrefix;
+		u32 alignedLength = cacheLength & ~511u;
+		if (alignedLength >= *Length + cachePrefix)
+			cacheLength = alignedLength;
+	}
+	else cachePrefix = 0;
 	/* Read-ahead belongs to the cache, not the caller's output length. */
 
 	// case we ran out of positions
@@ -557,11 +573,11 @@ const u8 *ISORead(u32* Length, u32 Offset)
 	if (CacheEntryCount < TempCacheCount) CacheEntryCount = TempCacheCount;
 
 	DC[pos].Data = destination;
-	DC[pos].Offset = Offset;
+	DC[pos].Offset = cacheOffset;
 	DC[pos].Size = cacheLength;
 
-	ISOReadDirect(DC[pos].Data, cacheLength, Offset64);
+	ISOReadDirect(DC[pos].Data, cacheLength, Offset64 - cachePrefix);
 
 	DataCacheOffset += cacheLength;
-	return DC[pos].Data;
+	return DC[pos].Data + cachePrefix;
 }

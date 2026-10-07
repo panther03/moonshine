@@ -101,7 +101,8 @@ API int card(u32 slot,u32 size){openingSlot=slot;cardSizes[slot]=size;return GCN
 API u32 get(u32 key){switch(key){case 0:return reads;case 1:return bytesRead;case 2:return lastReturned;
  case 3:return lastReadSize;case 4:return DCacheLimit;case 5:return cardReads;case 6:return cardCloses;
  case 7:return shutdowns;case 8:return configWrites;case 9:return (u32)bootStatus;case 10:return (u32)bootError;
- case 11:return overruns;case 12:return memCard[0].size;case 13:return memCard[1].size;case 14:return CacheEntryCount;}return 0;}
+ case 11:return overruns;case 12:return memCard[0].size;case 13:return memCard[1].size;case 14:return CacheEntryCount;
+ case 15:return (u32)lastReadOffset;case 16:return (u32)(lastReadOffset>>32);}return 0;}
 '''
 
 
@@ -183,6 +184,52 @@ class LauncherIsoCacheTests(unittest.TestCase):
         for index in range(1030):self.read(index*0x1000,32)
         self.assertEqual(self.lib.get(14),1024)
         self.read(1029*0x1000,32)
+
+    def test_boundary_request_consumes_cached_prefix_without_rereading_it(self):
+        self.lib.reset(0,1)
+        self.lib.sequential(0x900020)
+        self.read(0x900020,0x1000)
+        self.assertEqual((self.lib.get(15),self.lib.get(3)),(0x900000,0x10000))
+        fills=self.lib.get(0)
+        self.read(0x90f020,0x1000)
+        self.assertEqual((self.lib.get(0),self.lib.get(2)),(fills,0xfe0))
+        self.read(0x910000,0x20)
+        self.assertEqual(self.lib.get(0),fills+1)
+        self.assertEqual((self.lib.get(15),self.lib.get(3)),(0x910000,0x10000))
+
+    def test_alignment_never_adds_trailing_bytes_to_a_nonprefetched_read(self):
+        self.lib.reset(0,1)
+        self.read(0x903ffe,33)
+        self.assertEqual((self.lib.get(15),self.lib.get(3)),(0x903e00,543))
+        self.assertEqual(self.lib.get(15)+self.lib.get(3),0x903ffe+33)
+
+    def test_unaligned_shift_preserves_logical_start_and_full_64bit_address(self):
+        self.lib.reset(0,1);self.lib.shift(0x120000023)
+        self.read(0,32) # Do not prepend bytes before the selected disc image.
+        self.assertEqual((self.lib.get(16),self.lib.get(15),self.lib.get(3)),(1,0x20000023,32))
+        self.read(0x4000,0x1000)
+        self.assertEqual((self.lib.get(16),self.lib.get(15)),(1,0x20004000))
+        fills=self.lib.get(0)
+        self.read(0x4080,32)
+        self.assertEqual(self.lib.get(0),fills)
+
+    def test_prefix_cannot_overflow_a_completely_filled_cache(self):
+        self.lib.reset(0x200000,1)
+        self.read(0x900020,0x100000)
+        self.assertEqual((self.lib.get(15),self.lib.get(3)),(0x900020,0x100000))
+        self.assertEqual(self.lib.get(2),0x100000)
+
+    def test_partial_cache_hits_always_progress_through_a_full_request(self):
+        self.lib.reset(0,1)
+        for offset in range(0x900000,0x920000,0x2000):self.read(offset,0x800)
+        offset=0x900400;remaining=0x20000
+        iterations=0
+        while remaining:
+            self.read(offset,remaining)
+            consumed=self.lib.get(2)
+            self.assertGreater(consumed,0)
+            remaining-=consumed;offset+=consumed;iterations+=1
+            self.assertLess(iterations,35)
 
     def test_randomized_overlapping_reads_return_exact_bytes_after_wraps(self):
         rng=random.Random(233)

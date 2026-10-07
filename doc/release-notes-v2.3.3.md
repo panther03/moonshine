@@ -8,8 +8,10 @@
 - Corrected FLUDD's attachment to the ghost's chest and replaced the diamond-shaped water with Sunshine's own water textures. Individual droplet paths and splashes are still visual approximations; they do not reproduce every original particle or collision.
 - Restored FLUDD's closed tank and resting pump shape. Spray is larger and uses separate water and highlight passes, and ghosts now cast ground shadows.
 - Fixed slow, undersized ghost spray: water now uses retail quarter-frame motion, nozzle sizes, stretched droplets and both hover outlets. Floor splashes remain visual approximations, without persistent puddles or gameplay effects.
-- Restored Mario ghost material lighting so its body is shaded rather than flat.
+- Corrected ghost lighting selection and Mario's missing native lighting stages, including the dark band over its cap and body.
+- Ghosts now animate their upper body and FLUDD while using a nozzle. Pump movement is reconstructed from the recorded timeline; older files without FLUDD data keep their previous behavior.
 - Watching one ghost can activate platforms that start when Mario stands still on them. Fast recorded landings now also activate the final Sirena 4 secret platform. Racing remains visual only; Watch 2 does not simulate two separate riders.
+- Single Ghost Watch also recognizes ledge-hanging animations for platform contact; this still needs a suitable recorded ledge-grab check.
 - Added **Mario** as a ghost appearance alongside Shadow Mario and Piantissimo, using the existing model memory.
 - New recordings last up to **10 minutes**. Existing ghosts remain readable, including older recordings over 10 minutes. Older files keep their recorded movement and inputs; missing FLUDD data is not guessed.
 
@@ -23,10 +25,12 @@
 - Fixed IL launches remaining stuck in native pause/save screens. Save/load shortcuts also accept other held gameplay buttons, including A+B during frame advance.
 - Gelato Enter shows its chosen Plaza state by name, such as **Peaceful** or **Yoshi unlock**, instead of an ambiguous episode number.
 - Rejected streak finishes now explain the reason, such as intro skip, frame advance or restarting inside a full-level route. The reported Full Reds streak misses have not been reproduced yet; these messages should help identify the cause.
+- Fixed manual death restarts waiting for the death animation during streaks.
 
 ## Displays and menus
 
 - Freecam Hide all HUD also hides the coin-counter sparkle pass while keeping its animation running.
+- Fixed PAL Fast Text showing the missing-message error.
 
 - Position loads mark the attempt **TAS**. If QFT is hidden, the TAS label now sits farther inside the bottom-left corner so it stays visible.
 - Fixed the overlapping QFT text beneath a level split.
@@ -40,6 +44,8 @@
 
 - Fixed the launcher rejecting `moonshine.ini` above 32 KB. Launcher and game now share a 64 KB limit and allocate only the current file’s size while preserving other regions’ settings.
 - Combined adjacent, verified ISO clusters into reads of up to 64 KB. A captured PAL load sequence makes 31% fewer device requests with identical data; this is not a measured Wii loading-time improvement.
+- Sector-aligned cache fills and reuse of cached prefixes reduce that sequence further, from 2,210 to 1,725 device requests. Actual Wii load times still need measurement.
+- Reduced savestate load copying and repeated compression work when saving a third state. All slots are retained; the requested Wii timing targets remain unconfirmed.
 
 - Read-speed unlocking now applies to the early boot reads too. The disc cache retains unaffected data when it wraps instead of discarding everything; console loading-time gains still need measurement.
 - The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches, including after power-off, avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.

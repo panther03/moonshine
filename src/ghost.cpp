@@ -1737,10 +1737,13 @@ void updateObserverGround() {
                                     sGhostPosition.z, &floor);
         const f32 dx = sGhostPosition.x - sObserverMario->mTranslation.x;
         const f32 dz = sGhostPosition.z - sObserverMario->mTranslation.z;
-        // Retail wait/landing states can ride while still moving in world
-        // space (or being carried). These recorded animations identify those
-        // states; requiring a stationary pose misses a quick landing entirely.
+        // Retail wait/landing/ledge-hang states can ride while still moving
+        // in world space. A hanging root stays at the top of its ledge;
+        // animation lowers the body. Keep the same real floor-contact gate.
         const bool landed = sGhostAnimationId == TMario::ANIMATION_IDLE ||
+                            sGhostAnimationId == TMario::ANIMATION_WALLHANG ||
+                            sGhostAnimationId == 0xd7u || // ANIM_HMOV_L
+                            sGhostAnimationId == 0xd8u || // ANIM_HMOV_R
                             sGhostAnimationId == 0x4bu || // ANIM_2JMED
                             sGhostAnimationId == 0x4eu || // ANIM_JMPED
                             sGhostAnimationId == 0x57u;   // ANIM_LAEND

@@ -3,6 +3,33 @@
 #endif
 
 #include "../vendor/miniz/state_miniz_config.h"
+#include "../vendor/miniz/miniz.h"
+#if defined(__powerpc__)
+// A single named text section otherwise keeps unused miniz convenience APIs
+// alive with the streaming codec. Separate their sections so the linker can
+// discard them, including an out-of-line initializer when all callers inline it.
+#define MINIZ_SEPARATE_API(name) \
+    extern "C" __typeof__(name) name \
+        __attribute__((section(".foxtrot.text.miniz." #name)));
+MINIZ_SEPARATE_API(mz_free)
+MINIZ_SEPARATE_API(miniz_def_alloc_func)
+MINIZ_SEPARATE_API(miniz_def_free_func)
+MINIZ_SEPARATE_API(miniz_def_realloc_func)
+MINIZ_SEPARATE_API(tdefl_init)
+MINIZ_SEPARATE_API(tdefl_compress_buffer)
+MINIZ_SEPARATE_API(tdefl_create_comp_flags_from_zip_params)
+MINIZ_SEPARATE_API(tdefl_get_adler32)
+MINIZ_SEPARATE_API(tdefl_get_prev_return_status)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_heap)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_mem)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_output)
+MINIZ_SEPARATE_API(tdefl_write_image_to_png_file_in_memory)
+MINIZ_SEPARATE_API(tdefl_write_image_to_png_file_in_memory_ex)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_callback)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_heap)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_mem)
+#undef MINIZ_SEPARATE_API
+#endif
 #include "../vendor/miniz/miniz.c"
 #include "../vendor/miniz/miniz_tdef.c"
 #include "../vendor/miniz/miniz_tinfl.c"
@@ -16,6 +43,7 @@
 #pragma clang section text=".foxtrot.text" rodata=".foxtrot.rodata" data=".foxtrot.data" bss=".foxtrot.bss"
 #endif
 #include "susamune/state_codec.hxx"
+#include "susamune/state_slot_pool.h"
 
 namespace StateCodec {
 namespace {
@@ -139,7 +167,7 @@ __attribute__((noinline)) int packOutput(const void *data, int length, void *con
         if (offset >= span.size) { offset -= span.size; continue; }
         const unsigned int room = span.size - offset;
         const unsigned int amount = remaining < room ? remaining : room;
-        memcpy(static_cast<unsigned char *>(span.data) + offset, bytes, amount);
+        StateSlotPoolCopyForward(static_cast<unsigned char *>(span.data) + offset, bytes, amount);
         bytes += amount;
         remaining -= amount;
         offset = 0;
@@ -154,11 +182,11 @@ struct ScatterSink {
     CopyBytes copy;
     void *context;
 
-    unsigned char *reserve(unsigned int size) {
-        if (copy) return NULL;
+    unsigned char *reserve(unsigned int size, DirectBytes direct) {
         while (index < count && offset == spans[index].size) { ++index; offset = 0; }
         if (index == count || size > spans[index].size - offset) return NULL;
         unsigned char *destination = static_cast<unsigned char *>(spans[index].data) + offset;
+        if (copy && (!direct || !direct(context, destination, size))) return NULL;
         offset += size;
         return destination;
     }
@@ -284,7 +312,8 @@ Status quickPass(void *workspace, const ReadSpan *source, unsigned int sourceCou
                  unsigned int outputCount, unsigned int expectedRaw,
                  unsigned int expectedAdler, CopyBytes copy, void *copyContext,
                  const StreamSource *stream = NULL,
-                 EmitBytes emit = NULL, void *emitContext = NULL) {
+                 EmitBytes emit = NULL, void *emitContext = NULL,
+                 DirectBytes directPolicy = NULL) {
     QuickWorkspace *work = static_cast<QuickWorkspace *>(workspace);
     SpanReader reader = {source, sourceCount, 0, 0, stream, 0};
     ScatterSink sink = {output, outputCount, 0, 0, copy, copyContext};
@@ -307,8 +336,9 @@ Status quickPass(void *workspace, const ReadSpan *source, unsigned int sourceCou
             (plain ? packed != raw : packed >= raw)) return CORRUPT_STREAM;
         const unsigned char *bytes = reader.take(packed, work->packed);
         if (!bytes) return CORRUPT_STREAM;
-        // Filtered restores must never write old runtime-owner bytes directly.
-        unsigned char *direct = output && !plain ? sink.reserve(raw) : NULL;
+        // Only a checked whole block with no retained/redirected owner bytes may
+        // bypass the copy policy. The permission callback never sees split spans.
+        unsigned char *direct = output && !plain ? sink.reserve(raw, directPolicy) : NULL;
         if (!plain) {
             if (LZ4_decompress_safe(reinterpret_cast<const char *>(bytes),
                     reinterpret_cast<char *>(direct ? direct : work->raw), packed, raw) != static_cast<int>(raw))
@@ -330,14 +360,15 @@ Status inflatePass(void *workspace, const ReadSpan *source,
                    unsigned int expectedRaw, unsigned int expectedAdler,
                    CopyBytes copy = 0, void *copyContext = 0,
                    const StreamSource *stream = NULL,
-                   EmitBytes emit = NULL, void *emitContext = NULL) {
+                   EmitBytes emit = NULL, void *emitContext = NULL,
+                   DirectBytes directPolicy = NULL) {
     SpanReader probe = {source, sourceCount, 0, 0, stream, 0};
     unsigned char prefix[4];
     const unsigned char *magic = compressedBytes >= 4 ? probe.take(4, prefix) : NULL;
     if (magic && readWord(magic) == kQuickMagic)
         return quickPass(workspace, source, sourceCount, compressedBytes, output,
                          outputCount, expectedRaw, expectedAdler, copy, copyContext,
-                         stream, emit, emitContext);
+                         stream, emit, emitContext, directPolicy);
     InflateWorkspace *work = static_cast<InflateWorkspace *>(workspace);
     tinfl_init(&work->state);
     ScatterSink sink = {output, outputCount, 0, 0, copy, copyContext};
@@ -378,6 +409,7 @@ Status inflatePass(void *workspace, const ReadSpan *source,
 
 } // namespace
 
+__attribute__((section(".foxtrot.text.codecWorkspaceSize")))
 unsigned int workspaceSize() { return kWorkSize; }
 
 Result compress(void *workspace, unsigned int workspaceBytes,
@@ -512,7 +544,7 @@ Status decompressVerified(void *workspace, unsigned int workspaceBytes,
                   const ReadSpan *source, unsigned int sourceCount,
                   const WriteSpan *output, unsigned int outputCount,
                   unsigned int expectedRaw, unsigned int expectedAdler,
-                  CopyBytes copy, void *copyContext) {
+                  CopyBytes copy, void *copyContext, DirectBytes direct) {
     unsigned int compressedBytes, capacity;
     Status status = checkSource(workspace, workspaceBytes, source, sourceCount, &compressedBytes);
     if (status != SUCCESS) return status;
@@ -520,7 +552,8 @@ Status decompressVerified(void *workspace, unsigned int workspaceBytes,
     if (status != SUCCESS) return status;
     if (!expectedRaw || capacity != expectedRaw) return INVALID_ARGUMENT;
     status = inflatePass(workspace, source, sourceCount, compressedBytes,
-                         output, outputCount, expectedRaw, expectedAdler, copy, copyContext);
+                         output, outputCount, expectedRaw, expectedAdler, copy, copyContext,
+                         NULL, NULL, NULL, direct);
     return status == SUCCESS ? SUCCESS : COMMIT_FAILED;
 }
 

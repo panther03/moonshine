@@ -275,6 +275,7 @@ bool reidentify(Data &data, unsigned int build) {
     data.checksum = checksum(data);
     return true;
 }
+__attribute__((section(".foxtrot.text.ownerFailureAddress")))
 unsigned int failureAddress() { return sFailure; }
 
 void copyGameBytes(void *context, void *destination, const void *source, unsigned int size) {

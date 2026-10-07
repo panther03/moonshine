@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import random
 
 from test_practice_tape import function_source
 
@@ -79,6 +80,14 @@ __declspec(dllexport) u32 copy(u32 replay,u32 durable,u32 isTake){
 __declspec(dllexport) void protectVideo(u32 offset,u32 size){
  sLiveVideo={(__UINTPTR_TYPE__)(ordinary+offset),(__UINTPTR_TYPE__)(ordinary+offset+size)};}
 __declspec(dllexport) u32 byte(u32 offset){return ordinary[offset];}
+__declspec(dllexport) void rawCopy(void*d,const void*s,u32 n){copyBaseStateBytes(0,d,s,n);}
+__declspec(dllexport) void filteredCopy(void*d,const void*s,u32 n,u32 first,u32 count){
+ sRestoreBindings.reset(0,0);ownReplay=false;
+ sLiveVideo={(__UINTPTR_TYPE__)d+first,(__UINTPTR_TYPE__)d+first+count};copyStateBytes(0,d,s,n);}
+__declspec(dllexport) u32 direct(u32 first,u32 last,u32 address,u32 size,
+ u32 videoFirst,u32 videoLast,u32 bindings,u32 durable){
+ sRestoreBindings.reset(first,last);sRestoreBindings.count=bindings;sLiveVideo={videoFirst,videoLast};
+ return directStateBytes(durable?(void*)1:0,(void*)(__UINTPTR_TYPE__)address,size);}
 }
 '''
 
@@ -94,7 +103,7 @@ class SavestateCheckpointContractTests(unittest.TestCase):
         production = SOURCE.read_text()
         stored = production[production.index('const u32 kSnapshotMagic'):production.index('StateSlotPool sPool;')]
         methods = ''.join(function_source(SOURCE, method) for method in (
-            'u32 metadataTag(', 'bool validStore()', 'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(',
+            'u32 metadataTag(', 'bool validStore()', 'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(', 'bool directStateBytes(',
             'SavestateManager::SlotInfo SavestateManager::slotInfo(',
             'bool SavestateManager::practiceData(', 'void SavestateManager::feedback('))
         cls.libs = {}
@@ -112,6 +121,8 @@ class SavestateCheckpointContractTests(unittest.TestCase):
             lib = C.CDLL(str(path.with_suffix('.dll')))
             cls.addClassCleanup(lambda lib=lib:C.windll.kernel32.FreeLibrary(C.c_void_p(lib._handle)))
             lib.message.restype = C.c_char_p
+            lib.rawCopy.argtypes = [C.c_void_p,C.c_void_p,C.c_uint]
+            lib.filteredCopy.argtypes = [C.c_void_p,C.c_void_p,C.c_uint,C.c_uint,C.c_uint]
             cls.libs[region] = lib
 
     def test_all_three_slots_publish_metadata_and_practice_on_every_region(self):
@@ -178,6 +189,51 @@ class SavestateCheckpointContractTests(unittest.TestCase):
                                      [9, 0, 0] + [0x55] * 7 + [0] * 6)
                     self.assertEqual(lib.value(2), 2 * durable)
                     self.assertEqual(lib.value(3), 1)
+
+    def test_direct_blocks_are_only_same_session_heap_without_retained_owners(self):
+        first, last = 0x80800000, 0x81000000
+        for region, lib in self.libs.items():
+            with self.subTest(region=region):
+                lib.reset()
+                for address, size, expected in ((first, 0x20000, 1), (last-0x20000, 0x20000, 1),
+                        (first-1, 0x20000, 0), (last-0x20000+1, 0x20000, 0),
+                        (last+1, 1, 0), (first, 0xFFFFFFFF, 0),
+                        (0x71880000, 0x20000, 0), (0x803E0000, 0x20000, 0)):
+                    self.assertEqual(lib.direct(first,last,address,size,0,0,0,0), expected)
+                for durable, bindings in ((1,0), (0,1), (0,32), (1,32)):
+                    self.assertFalse(lib.direct(first,last,first,0x20000,0,0,bindings,durable))
+                for videoFirst, videoLast, expected in ((first+0x20000, first+0x30000, 1),
+                        (first-0x10000, first, 1), (first-1, first+1, 0),
+                        (first+0x1FFFF, first+0x30000, 0), (first, last, 0)):
+                    self.assertEqual(lib.direct(first,last,first,0x20000,videoFirst,videoLast,0,0), expected)
+
+    def test_non_durable_copy_preserves_all_alignments_lengths_and_tail_guards(self):
+        rng=random.Random(0x53544154)
+        for region,lib in self.libs.items():
+            for size in (*range(33),127,128,129,1023,4099,32768):
+                data=rng.randbytes(size)
+                for srcAlign in range(4):
+                    source=C.create_string_buffer(b'\xa5'*16+bytes(srcAlign)+data+b'\xa5'*16)
+                    for dstAlign in range(4):
+                        with self.subTest(region=region,size=size,source=srcAlign,destination=dstAlign):
+                            dest=C.create_string_buffer(b'\xa7'*(size+40));start=16+dstAlign
+                            before=source.raw
+                            lib.rawCopy(C.addressof(dest)+start,C.addressof(source)+16+srcAlign,size)
+                            self.assertEqual(dest.raw[:start],b'\xa7'*start)
+                            self.assertEqual(dest.raw[start:start+size],data)
+                            self.assertEqual(dest.raw[start+size:-1],b'\xa7'*(40-start))
+                            self.assertEqual(dest.raw[-1:],b'\0')
+                            self.assertEqual(source.raw,before)
+
+    def test_word_copy_still_skips_protected_fragments_at_every_alignment(self):
+        data=random.Random(923).randbytes(32773);source=C.create_string_buffer(data)
+        for region,lib in self.libs.items():
+            for first,count in ((0,1),(1,3),(4,4),(127,33),(128,128),(32768,5)):
+                with self.subTest(region=region,first=first,count=count):
+                    target=C.create_string_buffer(b'\xa7'*(len(data)+32))
+                    lib.filteredCopy(C.addressof(target)+16,source,len(data),first,count)
+                    expected=data[:first]+b'\xa7'*count+data[first+count:]
+                    self.assertEqual(target.raw,b'\xa7'*16+expected+b'\xa7'*16+b'\0')
 
     def test_practice_sidecar_is_validated_before_restore_and_adopted_after_cleanup(self):
         save = function_source(SOURCE, 'bool SavestateManager::saveSlotExplicit(')

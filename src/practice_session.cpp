@@ -1843,6 +1843,7 @@ bool projectAvailable() {
     return available() && tapeStorageReady() && normalStage() && !Ghost::observerStatsSuppressed();
 }
 u32 editRevision() { return sEditRevision; }
+__attribute__((section(".foxtrot.text.takePosition")))
 u32 takePosition() { return sTakePosition; }
 
 bool requestContinue() {
@@ -1936,12 +1937,17 @@ bool hideHud() {
 }
 bool recording() { return sRecord; }
 bool replaying() { return sReplay; }
+__attribute__((section(".foxtrot.text.desyncFrame")))
 s32 desyncFrame() { return sDesyncFrame; }
 bool starting() { return sLoadKind != 0; }
 bool assisted() { return sAssisted; }
+// Keep diagnostic query bodies discardable when all runtime callers inline.
+__attribute__((section(".foxtrot.text.practiceAvailable")))
 bool available() { return sPadHookReady && sTalkHookReady; }
+__attribute__((section(".foxtrot.text.stepCount")))
 u32 stepCount() { return sSteps; }
 u32 recordedFrames() { return sCount; }
+__attribute__((section(".foxtrot.text.replayFrame")))
 u32 replayFrame() { return sCursor; }
 u32 capacityFrames() { return kMaxFrames; }
 const char *status() { return sStatus; }

@@ -150,7 +150,7 @@ class SavestateStreamingTests(unittest.TestCase):
         text = FIXTURE
         for name in ('void poolWriteSpans(', 'void poolReadSpans(', 'u32 packedChecksum(',
                      'bool waitStateWindow(', 'bool readStateWindow(',
-                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes('):
+                     'void copyBaseStateBytes(', 'void copyOwnedStateBytes(', 'void copyStateBytes(', 'bool directStateBytes('):
             text += function_source(SOURCE, name)
         production = SOURCE.read_text()
         text += production[production.index('struct SDRecovery {'):production.index('bool prepareSDRecovery(')]

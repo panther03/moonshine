@@ -661,7 +661,7 @@ class PlaylistFormatTests(unittest.TestCase):
         wheel = WARP_WHEEL.read_text(encoding="utf-8")
         iling = ILING.read_text(encoding="utf-8")
         self.assertIn(
-            "if (sQueuedSessionDeathRestart || sWaitForRetailDeathTail) return state;",
+            "if (sWaitForRetailDeathTail) return state;",
             wheel,
         )
         self.assertRegex(

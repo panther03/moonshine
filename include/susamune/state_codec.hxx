@@ -14,6 +14,7 @@ struct StreamSource {
 };
 typedef void (*CopyBytes)(void *context, void *destination,
                           const void *source, unsigned int size);
+typedef bool (*DirectBytes)(void *context, void *destination, unsigned int size);
 enum Status {
     SUCCESS,
     INVALID_ARGUMENT,
@@ -75,11 +76,13 @@ Status decompress(void *workspace, unsigned int workspaceBytes,
 
 // Only for a locally encoded or fully validated stream whose saved checksum has
 // just been rechecked under exclusive ownership. Any failure may follow writes.
+// The optional direct policy may permit a whole checked block to bypass copy.
+// It must certify that copy would retain no bytes or redirect any writes there.
 Status decompressVerified(void *workspace, unsigned int workspaceBytes,
                   const ReadSpan *source, unsigned int sourceCount,
                   const WriteSpan *output, unsigned int outputCount,
                   unsigned int expectedRaw, unsigned int expectedAdler,
-                  CopyBytes copy = 0, void *copyContext = 0);
+                  CopyBytes copy = 0, void *copyContext = 0, DirectBytes direct = 0);
 
 // The reader lends bytes inside its declared buffer until its next call.
 // Validation does not write destinations. A writing-pass failure requires a

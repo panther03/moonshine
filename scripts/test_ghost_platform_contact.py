@@ -23,7 +23,7 @@ struct TVec3f{float x,y,z;void set(float a,float b,float c){x=a;y=b;z=c;}};
 using Vec=TVec3f;struct TVec3s{short x,y,z;};
 struct TBGCheckData{void*owner;void*getActor()const{return owner;}}illegal,originalFloor,platformFloor;
 struct TMario{
-    enum{STATE_IDLE=0x0c400201,ANIMATION_IDLE=0xc3};
+    enum{STATE_IDLE=0x0c400201,ANIMATION_IDLE=0xc3,ANIMATION_WALLHANG=0x33};
     u16 mPerformFlags;struct{bool mIsVisible;}mAttributes,mPrevAttributes;
     TVec3f mTranslation,mLastPosition,mLastPos,mLastGroundedPos,mSpeed,mPrevSpeed;
     f32 mForwardSpeed;TVec3s mAngle;s16 mModelAngleY;
@@ -156,6 +156,22 @@ API float coordinate(int n){return n==0?mario.mTranslation.x:n==1?mario.mTransla
         self.assertEqual((self.lib.floor(),self.lib.riding()),(1,1))
         self.lib.ground(46);self.lib.tick()
         self.assertEqual(self.lib.riding(),0)
+
+    def test_moving_ledge_hang_starts_retail_rail_without_climbing_up(self):
+        # Retail hanging (0x3800034b) carries the rider bit. Its root remains
+        # at the ledge's top; the hanging animation lowers the drawn body.
+        for animation in (0x33,0xd7,0xd8):
+            self.lib.reset();self.lib.animation(animation)
+            self.lib.target(15,20,30);self.lib.tick()
+            self.assertEqual(self.lib.riding(),1,hex(animation))
+            self.lib.target(20,25,30);self.lib.tick()
+            self.assertEqual(self.lib.riding(),0,'No ledge floor contact')
+
+    def test_wall_and_wire_animations_do_not_invent_a_ledge_contact(self):
+        for animation in (0x34,0x35,0xc6,0xc7,0xf0,0xf1,0xf2):
+            self.lib.reset();self.lib.animation(animation)
+            self.lib.target(15,20,30);self.lib.tick()
+            self.assertEqual(self.lib.riding(),0,hex(animation))
 
     def test_landing_animation_in_air_does_not_invent_floor_contact(self):
         self.lib.animation(0x57);self.lib.target(15,25,30);self.lib.tick()
