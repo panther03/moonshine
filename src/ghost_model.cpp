@@ -48,6 +48,7 @@ extern "C" void ghostFluddTransform(const void *, f32, u16, J3DTransformInfo *)
 // Retail lighting routes: the light manager owns the buffers and installs the
 // matching environment lights when they are drawn, after model submission.
 extern "C" void *gpLightManager;
+extern "C" u8 j3dSys[];
 extern "C" void ghostLightEntry(void *, int)
     asm("changeLightDrawBuffer__15TLightWithDBSetFi");
 extern "C" void ghostLightExit(void *)
@@ -891,7 +892,7 @@ Appearance selectedAlternative() {
         ? APPEARANCE_MARIO : APPEARANCE_PIANTA;
 }
 
-ModelSlot &runnerSlot(int runner) {
+__attribute__((noinline)) ModelSlot &runnerSlot(int runner) {
     const int selected = gSettings.get(SETTING_GHOST_APPEARANCE) != 0;
     return sSlots[selected ^ (runner != 0 ? 1 : 0)];
 }
@@ -1201,6 +1202,43 @@ bool retirePlayerDrawBuffers() {
     return true;
 }
 
+__attribute__((noinline)) void clearPreparedPackets() {
+    sSubmitted[0] = sSubmitted[1] = false;
+    sPrepared[0] = sPrepared[1] = false;
+    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+}
+
+void rebuildPlayerDrawBuffers() {
+    if (!retirePlayerDrawBuffers()) return;
+    TMario *const mario = gpMarioOriginal;
+    // Match retail ENTRY visibility and testPerform gates, including Watch's
+    // invisible observer. The misleading mIsVisible bit is retail's UNK4
+    // suppression flag, so read its audited flags word explicitly.
+    const u32 flags = *reinterpret_cast<const u32 *>(&mario->mAttributes);
+    if (!(mario->_114 & 2u) || (flags & 0x200004u) ||
+        (mario->mPerformFlags & kCueEntry)) return;
+
+    J3DDrawBuffer **const buffers =
+        reinterpret_cast<J3DDrawBuffer **>(j3dSys + 0x44);
+    J3DDrawBuffer *const oldA = buffers[0], *const oldB = buffers[1];
+    buffers[0] = mario->mDrawBufferA;
+    buffers[1] = mario->mDrawBufferB;
+    // These ENTRY-only retail paths use restored matrices and do not read
+    // graphics. Do not perform Mario: that also repeats dirt/fog/shadow work;
+    // his begin-buffer cue advances tremble. Yoshi's separate queues survive.
+    if ((flags & 0x8000u) && mario->mFludd)
+        mario->mFludd->TWaterGun::perform(kCueEntry, nullptr);
+    // A ridden Blooper uses the shared object-light queues, which survived
+    // restore. Do not insert its packet twice. entryModels only reads status
+    // to select Blooper/cart entry; no gameplay or animation update runs here.
+    const u32 status = mario->mState;
+    mario->mState = status & ~0x10000u;
+    mario->entryModels(nullptr);
+    mario->mState = status;
+    buffers[0] = oldA;
+    buffers[1] = oldB;
+}
+
 void loadPendingStage() {
     const u32 generation = sPendingGeneration;
     if (generation == sLoadedGeneration) return;
@@ -1223,9 +1261,7 @@ void loadPendingStage() {
     }
     GXDrawDone();
     if (!retirePlayerDrawBuffers()) return;
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    clearPreparedPackets();
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
     if (sAttachmentHeap) sAttachmentHeap->freeAll();
     clearLiveModel(sSlots[APPEARANCE_SHADOW]);
@@ -1253,8 +1289,7 @@ void init() {
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
     memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
     sRegistered = false;
-    sPrepared[0] = sPrepared[1] = false;
-    sSubmitted[0] = sSubmitted[1] = false;
+    clearPreparedPackets();
     sPendingDirector = nullptr;
     sPendingGeneration = 0;
     sQuiescedGeneration = 0;
@@ -1276,9 +1311,7 @@ void init() {
 }
 
 void beginFrame() {
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    clearPreparedPackets();
     // Reuse the stage-change barrier when switching the second heap's model,
     // including after a settings/state restore in the same stage.
     if (sLoadedGeneration == sPendingGeneration &&
@@ -1336,10 +1369,8 @@ bool preserveSavestateBindings(bool (*keep)(const void *word)) {
 }
 
 void onSavestateLoaded() {
-    retirePlayerDrawBuffers();
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    rebuildPlayerDrawBuffers();
+    clearPreparedPackets();
 }
 #pragma clang section text=""
 

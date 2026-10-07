@@ -1113,7 +1113,8 @@ public:
     TMarioControllerWork *mControllerWork;  // 0x0108
     u32 _10C;                               // unknown
     u32 _110;                               // unknown
-    u32 _114;                               // unknown
+    u16 _114;                               // retail model/visibility flags
+    u16 _116;
 
     struct {
         u32 _04                   : 10;

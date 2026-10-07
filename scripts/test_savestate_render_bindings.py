@@ -1,6 +1,7 @@
 """Run typed render-binding preservation against guarded live fixtures."""
 
 import ctypes as C
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,7 +22,7 @@ class SavestateRenderBindingTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
         code = r'''
-typedef unsigned char u8; typedef unsigned u32;
+typedef unsigned char u8; typedef unsigned short u16; typedef unsigned u32;
 #define API extern "C" __declspec(dllexport)
 extern "C" void *memset(void*d,int v,unsigned long long n){u8*p=(u8*)d;while(n--)*p++=(u8)v;return d;}
 extern "C" void *memcpy(void*d,const void*s,unsigned long long n){u8*a=(u8*)d;const u8*b=(const u8*)s;while(n--)*a++=*b++;return d;}
@@ -86,21 +87,53 @@ int run(unsigned scenario){
             code += "return preserveSavestateBindings(keepWord)||keptCount?5:0;}\n}\n"
             code += f"API int {namespace}Run(unsigned scenario){{return {namespace}::run(scenario);}}\n"
         ghost = (ROOT / "src/ghost_model.cpp").read_text()
+        mario_header = (ROOT / "include/SMS/Player/Mario.hxx").read_text()
+        # Derive widths from the production header, rather than a permissive
+        # host-only u32 stub which masks PPC big-endian halfword mistakes.
+        visibility_fields = "\n".join(re.search(
+            rf"^\s*(u\d+ {field};)", mario_header, re.MULTILINE
+        ).group(1) for field in ("_114", "_116"))
         code += r'''
 namespace GhostModel {
-struct Buffer {unsigned count;void frameInit(){++count;}}a,b;
-struct Player {Buffer*mDrawBufferA,*mDrawBufferB;}player={&a,&b},*gpMarioOriginal=&player;
+struct J3DDrawBuffer {unsigned count,queued;void frameInit(){++count;queued=0;}}a,b,otherA,otherB;
+alignas(8) u8 j3dSys[0x60];
+const u32 kCueEntry=0x200;
+unsigned entries,fluddEntries,badEntry,sequence;
+u32 expectedStatus;
+struct TWaterGun {
+ void perform(u32 cue,void*graphics){
+  auto buffers=reinterpret_cast<J3DDrawBuffer**>(j3dSys+0x44);
+  if(cue!=kCueEntry||graphics||buffers[0]!=&a||buffers[1]!=&b||sequence++)++badEntry;
+  ++fluddEntries;b.queued|=2;
+ }
+}fludd;
+struct TMario {
+ J3DDrawBuffer*mDrawBufferA,*mDrawBufferB;
+ VISIBILITY_FIELDS
+ u32 mAttributes,mPerformFlags,mState;
+ TWaterGun*mFludd;
+ void entryModels(void*graphics){
+  auto buffers=reinterpret_cast<J3DDrawBuffer**>(j3dSys+0x44);
+  if(graphics||buffers[0]!=&a||buffers[1]!=&b||sequence!=fluddEntries||mState!=(expectedStatus&~0x10000u))++badEntry;
+  ++entries;a.queued|=1;
+ }
+}player,*gpMarioOriginal=&player;
+static_assert(sizeof(player._114)==2&&sizeof(player._116)==2,"retail flags are two halfwords");
+static_assert(__builtin_offsetof(TMario,_116)==__builtin_offsetof(TMario,_114)+2,"retail flag offsets");
+static_assert(__builtin_offsetof(TMario,mAttributes)==__builtin_offsetof(TMario,_114)+4,"attributes follow at +0x118");
 bool sRegistered,sSubmitted[2],sPrepared[2];void*sPreparedAttachments[2];
 TMarDirector*sPendingDirector;u32 sLoadedGeneration,sPendingGeneration;
 void*sView;void**sViewWord;
 '''
+        code = code.replace("VISIBILITY_FIELDS", visibility_fields)
         # Keep the host address full-width; the real PPC pointer is 32 bits.
         preserve = function(ghost, "preserveSavestateBindings").replace(
             "const u32 address = reinterpret_cast<u32>(sViewWord);",
             "const auto address = reinterpret_cast<__UINTPTR_TYPE__>(sViewWord);",
         )
-        code += preserve + function(ghost, "retirePlayerDrawBuffers")
-        code += function(ghost, "onSavestateLoaded")
+        code += preserve + "\n".join(function(ghost, name) for name in (
+            "retirePlayerDrawBuffers", "clearPreparedPackets",
+            "rebuildPlayerDrawBuffers", "onSavestateLoaded"))
         code += r'''
 API int ghostRun(unsigned scenario,void**word){
  gpMarDirector=&director;director={1,2};sPendingDirector=&director;
@@ -125,14 +158,44 @@ API int ghostRun(unsigned scenario,void**word){
  return preserveSavestateBindings(keepWord)||keptCount?4:0;
 }
 API int ghostRetire(unsigned scenario){
- a.count=b.count=0;player={&a,&b};gpMarioOriginal=&player;
+ a={0,0x80};b={0,0x80};otherA={9,0x1234};otherB={8,0x5678};
+ // Observed retail bytes at Mario+0x114: 04 12 00 00; +0x118: 00 00 80 00.
+ // Decode only host byte order. Widths/layout above come from the real header.
+ const u8 nativeBytes[]={0x04,0x12,0x00,0x00,0x00,0x00,0x80,0x00};
+ player={&a,&b,u16((nativeBytes[0]<<8)|nativeBytes[1]),
+  u16((nativeBytes[2]<<8)|nativeBytes[3]),
+  u32((nativeBytes[4]<<24)|(nativeBytes[5]<<16)|(nativeBytes[6]<<8)|nativeBytes[7]),
+  0,0x80001,&fludd};gpMarioOriginal=&player;
+ entries=fluddEntries=badEntry=sequence=0;
+ auto buffers=reinterpret_cast<J3DDrawBuffer**>(j3dSys+0x44);
+ buffers[0]=&otherA;buffers[1]=&otherB;
  sSubmitted[0]=sSubmitted[1]=sPrepared[0]=sPrepared[1]=true;
  sPreparedAttachments[0]=sPreparedAttachments[1]=(void*)1;
  if(scenario==1)gpMarioOriginal=nullptr;
  if(scenario==2)player.mDrawBufferB=nullptr;
+ if(scenario==3)player._114=0;
+ if(scenario==4)player.mAttributes|=4;
+ if(scenario==5)player.mAttributes|=0x200000;
+ if(scenario==6)player.mPerformFlags=kCueEntry;
+ if(scenario==7)player.mAttributes=0;
+ if(scenario==8)player.mFludd=nullptr;
+ if(scenario==9){player._114|=1;player.mAttributes|=0x10;player.mPerformFlags=1;}
+ if(scenario==10)player.mState=0x810446; // ridden Blooper
+ if(scenario==11)player.mState=0x800447; // cart: keep exact status
+ if(scenario==12)player._116=0xffff; // adjacent halfword is not visibility
+ if(scenario==13){player._114=0x410;player._116=2;} // low word cannot make Mario visible
+ expectedStatus=player.mState;
  onSavestateLoaded();
  if(sSubmitted[0]||sSubmitted[1]||sPrepared[0]||sPrepared[1]||sPreparedAttachments[0]||sPreparedAttachments[1])return 1;
- return a.count==(scenario?0:1)&&b.count==(scenario?0:1)?0:2;
+ const bool retired=scenario!=1&&scenario!=2;
+ const bool visible=scenario==0||(scenario>=7&&scenario!=13);
+ const bool wet=visible&&scenario!=7&&scenario!=8;
+ if(a.count!=retired||b.count!=retired)return 2;
+ if(entries!=visible||fluddEntries!=wet||badEntry)return 3;
+ if(a.queued!=(retired?unsigned(visible):0x80)||b.queued!=(retired?unsigned(wet)*2:0x80))return 4;
+ if(buffers[0]!=&otherA||buffers[1]!=&otherB||otherA.count!=9||otherB.count!=8||otherA.queued!=0x1234||otherB.queued!=0x5678)return 5;
+ if(player.mState!=expectedStatus)return 6;
+ return 0;
 }
 }
 '''
@@ -175,8 +238,8 @@ API int ghostRetire(unsigned scenario){
             with self.subTest(scenario=scenario):
                 self.assertEqual(self.lib.ghostRun(scenario, self.word), 0)
 
-    def test_restore_retires_draw_buffers_and_prepared_packets(self):
-        for scenario in range(3):
+    def test_restore_rebuilds_visible_mario_without_simulation_or_other_queue_changes(self):
+        for scenario in range(14):
             with self.subTest(scenario=scenario):
                 self.assertEqual(self.lib.ghostRetire(scenario), 0)
 
