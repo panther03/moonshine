@@ -35,7 +35,11 @@ extern "C"
 
     /* ------------------- Low-level Decompression (completely independent from all compression API's) */
 
+#ifdef MINIZ_FAST_COPY
+#define TINFL_MEMCPY(d, s, l) MINIZ_FAST_COPY(d, s, l)
+#else
 #define TINFL_MEMCPY(d, s, l) memcpy(d, s, l)
+#endif
 #define TINFL_MEMSET(p, c, l) memset(p, c, l)
 
 #define TINFL_CR_BEGIN  \
@@ -640,6 +644,10 @@ extern "C"
         *pOut_buf_size = pOut_buf_cur - pOut_buf_next;
         if ((decomp_flags & (TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_COMPUTE_ADLER32)) && (status >= 0))
         {
+#ifdef MINIZ_STATE_ADLER32
+            r->m_check_adler32 = (mz_uint32)mz_adler32(r->m_check_adler32,
+                                                      pOut_buf_next, *pOut_buf_size);
+#else
             const mz_uint8 *ptr = pOut_buf_next;
             size_t buf_len = *pOut_buf_size;
             mz_uint32 i, s1 = r->m_check_adler32 & 0xffff, s2 = r->m_check_adler32 >> 16;
@@ -664,6 +672,7 @@ extern "C"
                 block_len = 5552;
             }
             r->m_check_adler32 = (s2 << 16) + s1;
+#endif
             if ((status == TINFL_STATUS_DONE) && (decomp_flags & TINFL_FLAG_PARSE_ZLIB_HEADER) && (r->m_check_adler32 != r->m_z_adler32))
                 status = TINFL_STATUS_ADLER32_MISMATCH;
         }

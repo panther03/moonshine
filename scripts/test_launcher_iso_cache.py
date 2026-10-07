@@ -33,7 +33,7 @@ extern "C" void *memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++
 #define FA_READ 1
 #define FA_OPEN_EXISTING 0
 #define FR_OK 0
-static u8 memory[CACHE_SIZE+64],scratch[0x80000+64];
+alignas(32) static u8 memory[CACHE_SIZE+64],scratch[0x80000+64];
 static u8*const DI_READ_BUFFER=scratch+32;
 static const u32 DI_READ_BUFFER_LENGTH=0x80000;
 static u32 ISOFileOpen=1,CacheInited,TempCacheCount,CacheEntryCount,DataCacheOffset;
@@ -60,11 +60,12 @@ static u32 ConfigGetConfig(u32 flag){return ncfg->Config&flag;}
 static u32 ConfigGetGameID(){return 0x474D5350u;}
 static void ConfigSetMemcardBlocks(u32){++configWrites;}
 static u32 GCNCard_GetTotalSize(){return memCard[0].size+memCard[1].size;}
-static u32 reads,bytesRead,lastReadSize,lastReturned,overruns;
+static u32 reads,bytesRead,lastReadSize,lastReturned,overruns,lastDestination;
 static u64 lastReadOffset;
 static u8 sample(u64 address){return (u8)(address^(address>>8)^(address>>16)^(address>>32));}
 static void ISOReadDirect(void*dst,u32 length,u64 offset){
  ++reads;bytesRead+=length;lastReadSize=length;lastReadOffset=offset;
+ lastDestination=(u32)((u8*)dst-CACHE_START);
  u8*out=(u8*)dst;
  bool inCache=out>=CACHE_START&&out<=CACHE_START+CACHE_SIZE&&length<=(u32)(CACHE_START+CACHE_SIZE-out);
  bool inScratch=out==DI_READ_BUFFER&&length<=DI_READ_BUFFER_LENGTH;
@@ -102,7 +103,8 @@ API u32 get(u32 key){switch(key){case 0:return reads;case 1:return bytesRead;cas
  case 3:return lastReadSize;case 4:return DCacheLimit;case 5:return cardReads;case 6:return cardCloses;
  case 7:return shutdowns;case 8:return configWrites;case 9:return (u32)bootStatus;case 10:return (u32)bootError;
  case 11:return overruns;case 12:return memCard[0].size;case 13:return memCard[1].size;case 14:return CacheEntryCount;
- case 15:return (u32)lastReadOffset;case 16:return (u32)(lastReadOffset>>32);}return 0;}
+ case 15:return (u32)lastReadOffset;case 16:return (u32)(lastReadOffset>>32);
+ case 17:return lastDestination;}return 0;}
 '''
 
 
@@ -213,6 +215,29 @@ class LauncherIsoCacheTests(unittest.TestCase):
         self.read(0x4080,32)
         self.assertEqual(self.lib.get(0),fills)
 
+    def test_short_fill_keeps_following_dma_aligned_without_padding_disc_read(self):
+        self.lib.reset(0,1)
+        self.read(0x903ffe,33)
+        self.assertEqual((self.lib.get(3),self.lib.get(17)),(543,0))
+        self.read(0xA00000,0x1000)
+        self.assertEqual(self.lib.get(17),544)
+        fills=self.lib.get(0)
+        self.read(0x903ffe,33)
+        self.assertEqual(self.lib.get(0),fills)
+
+    def test_alignment_padding_at_ring_end_wraps_without_overwriting_adjacent_entries(self):
+        self.lib.reset(0x200000,1)
+        self.read(0x900000,33)
+        self.read(0xA00000,0x100000-65)
+        self.assertEqual(self.lib.get(17),0x200000+64)
+        self.read(0xC00000,1)
+        self.assertEqual(self.lib.get(17),0x200000)
+        fills=self.lib.get(0)
+        self.read(0xA00000,0x100000-65)
+        self.assertEqual(self.lib.get(0),fills)
+        self.read(0x900000,33)
+        self.assertEqual(self.lib.get(0),fills+1)
+
     def test_prefix_cannot_overflow_a_completely_filled_cache(self):
         self.lib.reset(0x200000,1)
         self.read(0x900020,0x100000)
@@ -236,8 +261,10 @@ class LauncherIsoCacheTests(unittest.TestCase):
         self.lib.reset(0x100000,1)
         for _ in range(240):
             offset=rng.randrange(0x100000,0x1200000,32)
-            size=rng.choice((32,4096,0x8000,0x10000,0x30000,0x300001))
+            size=rng.choice((31,33,543,4096,0x8000,0x10000,0x30000,0x300001))
             self.read(offset,size)
+            if size <= self.lib.get(4):
+                self.assertEqual(self.lib.get(17)&31,0)
 
     def test_supported_cards_keep_their_full_data_and_both_slots_fit(self):
         self.lib.reset(0,0)

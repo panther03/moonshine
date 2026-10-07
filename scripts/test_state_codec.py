@@ -129,6 +129,9 @@ class StateCodecTests(unittest.TestCase):
         shim.write_text(r'''
 #include "../src/state_codec.cpp"
 extern "C" {
+__declspec(dllexport) unsigned adler(unsigned seed,const unsigned char*p,unsigned size) {
+ return mz_adler32(seed,p,size);
+}
 __declspec(dllexport) int referenceQuick(void *w,const char *source,char *dest,int size,int capacity) {
  return LZ4_compress_fast_extState(w,source,dest,size,capacity,1);
 }
@@ -252,6 +255,8 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
         cls.lib = C.CDLL(str(library))
         cls.addClassCleanup(lambda: C.windll.kernel32.FreeLibrary(C.c_void_p(cls.lib._handle)))
         cls.lib.workspace.restype = C.c_uint
+        cls.lib.adler.argtypes = [C.c_uint, C.c_void_p, C.c_uint]
+        cls.lib.adler.restype = C.c_uint
         cls.lib.referenceQuick.argtypes = [C.c_void_p,C.c_void_p,C.c_void_p,C.c_int,C.c_int]
         cls.lib.pack.argtypes = [C.c_void_p, C.c_uint, C.POINTER(Span), C.c_uint,
                                  C.POINTER(Span), C.POINTER(Result)]
@@ -278,6 +283,32 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
     def setUp(self):
         self.work = Guarded(self.lib.workspace())
         self.assertLessEqual(self.work.size, 0x50000)
+
+    def test_packed_adler_matches_independent_checksum_at_lane_and_modulo_bounds(self):
+        rng = random.Random(0x41444C52)
+        lengths = [*range(130), 255, 256, 5551, 5552, 5553, 5554,
+                   11103, 11104, 11105, 32768, 131072, 1000003]
+        for length in lengths:
+            for raw in (bytes(length), bytes([255]) * length, rng.randbytes(length)):
+                for alignment in range(4):
+                    source = C.create_string_buffer(alignment + length + 8)
+                    pointer = C.addressof(source) + alignment
+                    C.memmove(pointer, raw, length)
+                    for seed in (0, 1, 0xFFFFFFFF, 0x12345678, rng.getrandbits(32)):
+                        expected = zlib.adler32(raw, seed) if length else seed
+                        self.assertEqual(self.lib.adler(seed, pointer, length), expected,
+                                         (length, alignment, seed))
+        self.assertEqual(self.lib.adler(0xFFFFFFFF, None, 123), 1)
+
+    def test_packed_adler_keeps_fragmented_seed_semantics(self):
+        raw = random.Random(317).randbytes(11107)
+        source = C.create_string_buffer(raw)
+        for fragment in (1, 3, 63, 64, 65, 5551, 5552, 5553):
+            adler = 1
+            for offset in range(0, len(raw), fragment):
+                adler = self.lib.adler(adler, C.addressof(source) + offset,
+                                       min(fragment, len(raw) - offset))
+            self.assertEqual(adler, zlib.adler32(raw))
 
     def test_specialized_quick_compressor_matches_original_exactly(self):
         rng = random.Random(73)

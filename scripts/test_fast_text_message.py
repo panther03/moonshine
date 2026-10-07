@@ -72,7 +72,7 @@ API int count(){return calls;}
     def test_enabled_uses_short_literal_for_any_live_resource_offset(self):
         for region,lib in self.libs.items():
             for offset in (0,1,0x3e,0x400,0x1247,0x20000):
-                expected=b'\x81\x49'*3 if region=='JP'else b'!'
+                expected={'JP':b'\x81\x49'*3,'PAL':b'!!!','US':b'!'}[region]
                 self.assertEqual(self.invoke(lib,1,0,offset),expected,(region,offset))
 
     def test_off_passes_the_real_message_through(self):

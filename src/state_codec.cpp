@@ -30,6 +30,9 @@ MINIZ_SEPARATE_API(tinfl_decompress_mem_to_heap)
 MINIZ_SEPARATE_API(tinfl_decompress_mem_to_mem)
 #undef MINIZ_SEPARATE_API
 #endif
+// Both Quick blocks and Deflate use the same checked Adler implementation.
+// Keep one copy rather than inlining its packed-byte loop into each caller.
+extern "C" __typeof__(mz_adler32) mz_adler32 __attribute__((noinline));
 #include "../vendor/miniz/miniz.c"
 #include "../vendor/miniz/miniz_tdef.c"
 #include "../vendor/miniz/miniz_tinfl.c"

@@ -26,11 +26,12 @@
 - Gelato Enter shows its chosen Plaza state by name, such as **Peaceful** or **Yoshi unlock**, instead of an ambiguous episode number.
 - Rejected streak finishes now explain the reason, such as intro skip, frame advance or restarting inside a full-level route. The reported Full Reds streak misses have not been reproduced yet; these messages should help identify the cause.
 - Fixed manual death restarts waiting for the death animation during streaks.
+- Console soft reset ends the active streak or stageloader session.
 
 ## Displays and menus
 
 - Freecam Hide all HUD also hides the coin-counter sparkle pass while keeping its animation running.
-- Fixed PAL Fast Text showing the missing-message error.
+- Fixed PAL Fast Text showing the missing-message error; its short text is `!!!`.
 
 - Position loads mark the attempt **TAS**. If QFT is hidden, the TAS label now sits farther inside the bottom-left corner so it stays visible.
 - Fixed the overlapping QFT text beneath a level split.
@@ -44,8 +45,10 @@
 
 - Fixed the launcher rejecting `moonshine.ini` above 32 KB. Launcher and game now share a 64 KB limit and allocate only the current file’s size while preserving other regions’ settings.
 - Combined adjacent, verified ISO clusters into reads of up to 64 KB. A captured PAL load sequence makes 31% fewer device requests with identical data; this is not a measured Wii loading-time improvement.
-- Sector-aligned cache fills and reuse of cached prefixes reduce that sequence further, from 2,210 to 1,725 device requests. Actual Wii load times still need measurement.
-- Reduced savestate load copying and repeated compression work when saving a third state. All slots are retained; the requested Wii timing targets remain unconfirmed.
+- Sector-aligned cache fills and reuse of cached prefixes reduce that sequence further, from 2,210 to 1,725 device requests. User Wii testing of Sirena 4 full measured shorter resets and transitions; the complete-build results are recorded in the feedback 5 notes.
+- ISO cache destinations stay aligned for direct device reads, avoiding unnecessary temporary-buffer copying.
+- Reduced savestate load copying and repeated compression work when saving a third state. All slots are retained. User Wii testing in Plaza measured a 1.435-second third save, down from 6.674 seconds.
+- Faster savestate checksum calculations preserve the same integrity checks and file compatibility. The final Dolphin Quick-load routine measured about 0.228 seconds versus 0.254 seconds before; this is not the complete visible freeze on Wii.
 
 - Read-speed unlocking now applies to the early boot reads too. The disc cache retains unaffected data when it wraps instead of discarding everything; console loading-time gains still need measurement.
 - The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches, including after power-off, avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.

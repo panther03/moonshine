@@ -309,6 +309,17 @@ extern "C" void onSetup(TMarDirector* director) {
 
 extern "C" s32 onUpdate(JDrama::TDirector* director) {
     CrashReport::observeContext(gpApplication.mContext);
+    // Retail soft reset returns through APP_STATE_DONE (4), also used by
+    // Intro Skip to construct file select. Movies and level/death reloads
+    // use other contexts and must retain the live practice session.
+    // Cancel on entry only: the file-select menu can start a new session.
+    static bool wasResetContext = false;
+    const bool resetContext = gpApplication.mContext == TApplication::CONTEXT_GAME_INTRO;
+    if (resetContext && !wasResetContext &&
+        StageLoader::active()) {
+        StageLoader::cancel();
+    }
+    wasResetContext = resetContext;
     static bool recordsStageContext = false;
     TMarDirector *const stageDirector = RetailInput::stageDirector();
     const bool stageContext = stageDirector != nullptr;

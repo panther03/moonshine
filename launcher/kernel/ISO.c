@@ -556,6 +556,9 @@ const u8 *ISORead(u32* Length, u32 Offset)
 	if( TempCacheCount >= CACHE_MAX )
 		TempCacheCount = 0;
 
+	/* Keep device DMA direct after short, non-aligned file reads. Padding is
+	 * unused ring space, never extra disc data or part of the cached entry. */
+	DataCacheOffset = (DataCacheOffset + 31u) & ~31u;
 	// case we filled up the cache
 	if( DataCacheOffset > DCacheLimit - cacheLength )
 	{

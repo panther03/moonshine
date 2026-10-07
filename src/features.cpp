@@ -600,6 +600,8 @@ void setupFastTextBox(void *talk, const void *data, const u32 *entry) {
     if (featureEnabled(SETTING_FAST_TEXT)) {
 #if defined(SUSAMUNE_VERSION_JP)
         static const char message[] = "\x81\x49\x81\x49\x81\x49";
+#elif defined(SUSAMUNE_VERSION_PAL)
+        static const char message[] = "!!!";
 #else
         static const char message[] = "!";
 #endif

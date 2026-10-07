@@ -9,6 +9,7 @@
 #define USE_EXTERNAL_MZCRC
 #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0
 #define MINIZ_PORTABLE_FAST_DEFLATE 1
+#define MINIZ_STATE_ADLER32 1
 #define NDEBUG
 
 // Retain the vendored fork's freestanding guard on both PPC and host tests.
