@@ -8,6 +8,10 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+CURRENT_BUILD = 0x4D530011
+LEGACY_BUILDS = ((0x7D55E8F2, 0x8C8B60C4),
+                 (0x46F87973, 0xD784A910),
+                 (0xEA3C3DFD, 0x96DD313A))
 U = C.c_uint
 READ = C.CFUNCTYPE(C.c_bool, C.c_void_p, U, C.POINTER(U))
 class Word(C.Structure):
@@ -31,6 +35,7 @@ class ArchiveProfileTests(unittest.TestCase):
         shim=Path(cls.folder.name)/'profile.cpp'
         shim.write_text(r'''
 #include "susamune/state_archive_profile.hxx"
+#include "susamune/state_compatibility.h"
 extern "C" {
 void *memcpy(void *d,const void *s,__SIZE_TYPE__ n) {
  unsigned char *a=(unsigned char*)d;const unsigned char *b=(const unsigned char*)s;
@@ -45,10 +50,12 @@ int memcmp(const void *a,const void *b,__SIZE_TYPE__ n) {
 }
 __declspec(dllexport) bool snapshot(StateArchiveProfile::Data *d,
  const StateArchiveProfile::Layout *l,StateArchiveProfile::ReadWord read,void *ctx) {
- return StateArchiveProfile::captureWithReader(*d,*l,read,ctx,17,23);
+ return StateArchiveProfile::captureWithReader(*d,*l,read,ctx,SUSAMUNE_STATE_COMPATIBILITY_ID,23);
 }
+__declspec(dllexport) int admitted(unsigned game,unsigned build){return SusamuneStateBuildCompatible(game,build);}
 __declspec(dllexport) bool valid(const StateArchiveProfile::Data *d){return StateArchiveProfile::valid(*d);}
 __declspec(dllexport) bool match(const StateArchiveProfile::Data *a,const StateArchiveProfile::Data *b){return StateArchiveProfile::matches(*a,*b);}
+__declspec(dllexport) bool reidentify(StateArchiveProfile::Data *d,unsigned build){return StateArchiveProfile::reidentify(*d,build);}
 __declspec(dllexport) unsigned failure(){return StateArchiveProfile::failureAddress();}
 __declspec(dllexport) void filtered(StateArchiveProfile::Data *d,void *out,const void *in,unsigned n){StateArchiveProfile::copyGameBytes(d,out,in,n);}
 }
@@ -67,6 +74,7 @@ __declspec(dllexport) void filtered(StateArchiveProfile::Data *d,void *out,const
         cls.lib.snapshot.restype=C.c_bool
         cls.lib.valid.argtypes=[C.POINTER(Data)];cls.lib.valid.restype=C.c_bool
         cls.lib.match.argtypes=[C.POINTER(Data),C.POINTER(Data)];cls.lib.match.restype=C.c_bool
+        cls.lib.reidentify.argtypes=[C.POINTER(Data),U];cls.lib.reidentify.restype=C.c_bool
         cls.lib.failure.restype=U
         cls.lib.filtered.argtypes=[C.POINTER(Data),C.c_void_p,C.c_void_p,U]
 
@@ -102,6 +110,113 @@ __declspec(dllexport) void filtered(StateArchiveProfile::Data *d,void *out,const
     def capture(self):
         d=Data();ok=self.lib.snapshot(C.byref(d),C.byref(self.layout),self.read,None)
         return ok,d
+
+    def reseal(self, data):
+        data.checksum = 0
+        value = 2166136261
+        for byte in bytes(data):
+            value = ((value ^ byte) * 16777619) & 0xffffffff
+        data.checksum = value
+
+    def test_only_current_contract_and_exact_region_builds_are_admitted(self):
+        for game in range(1, 4):
+            for build in (CURRENT_BUILD, *LEGACY_BUILDS[game - 1]):
+                self.assertTrue(self.lib.admitted(game, build), (game, hex(build)))
+            for other in range(1, 4):
+                if other != game:
+                    for build in LEGACY_BUILDS[other - 1]:
+                        self.assertFalse(self.lib.admitted(game, build))
+            for build in (0, 17, 0xffffffff, 0xBD88B673, 0x0E7FDCB9, 0x2D9D231D,
+                          0xC05B6660, 0x466C2034, 0x5363FD8B):
+                self.assertFalse(self.lib.admitted(game, build), hex(build))
+        for game in (0, 4, 255, 0xffffffff):
+            self.assertFalse(self.lib.admitted(game, CURRENT_BUILD))
+
+    def test_audited_builds_match_without_rewriting_either_profile(self):
+        for game, builds in enumerate(LEGACY_BUILDS, 1):
+            self.layout.game = game
+            ok, live = self.capture()
+            self.assertTrue(ok)
+            for build in builds:
+                saved = Data.from_buffer_copy(live)
+                saved.build = build
+                self.reseal(saved)
+                before = bytes(saved), bytes(live)
+                self.assertTrue(self.lib.match(C.byref(saved), C.byref(live)))
+                self.assertTrue(self.lib.match(C.byref(live), C.byref(saved)))
+                self.assertEqual((bytes(saved), bytes(live)), before)
+
+    def test_build_compatibility_cannot_bypass_profile_checksum(self):
+        _, live = self.capture()
+        saved = Data.from_buffer_copy(live)
+        saved.build = LEGACY_BUILDS[1][0]
+        self.assertFalse(self.lib.match(C.byref(saved), C.byref(live)))
+        self.reseal(saved)
+        self.assertTrue(self.lib.match(C.byref(saved), C.byref(live)))
+        live.checksum ^= 1
+        self.assertFalse(self.lib.match(C.byref(saved), C.byref(live)))
+
+    def test_reidentify_changes_only_build_and_derived_checksum(self):
+        _, current = self.capture()
+        for build in LEGACY_BUILDS[1]:
+            legacy = Data.from_buffer_copy(current)
+            legacy.build = build
+            self.reseal(legacy)
+            before = bytes(legacy)
+            self.assertTrue(self.lib.reidentify(C.byref(legacy), CURRENT_BUILD))
+            self.assertEqual(bytes(legacy), bytes(current))
+            self.assertEqual(bytes(legacy)[:12], before[:12])
+            self.assertEqual(bytes(legacy)[16:28], before[16:28])
+            self.assertEqual(bytes(legacy)[32:], before[32:])
+            self.assertTrue(self.lib.valid(C.byref(legacy)))
+
+    def test_reidentify_refuses_unknown_wrong_region_or_corrupt_identity_without_mutation(self):
+        _, current = self.capture()
+        for source, target, corrupt in (
+            (17, CURRENT_BUILD, False),
+            (LEGACY_BUILDS[0][0], CURRENT_BUILD, False),
+            (CURRENT_BUILD, 0xBD88B673, False),
+            (CURRENT_BUILD, LEGACY_BUILDS[2][1], False),
+            (LEGACY_BUILDS[1][0], CURRENT_BUILD, True),
+        ):
+            data = Data.from_buffer_copy(current)
+            data.build = source
+            self.reseal(data)
+            if corrupt: data.checksum ^= 1
+            before = bytes(data)
+            self.assertFalse(self.lib.reidentify(C.byref(data), target))
+            self.assertEqual(bytes(data), before)
+    def test_unknown_or_wrong_region_identity_rejects_even_when_checksums_are_valid(self):
+        _, live = self.capture()
+        for build in (17, 0xBD88B673, LEGACY_BUILDS[0][0], LEGACY_BUILDS[2][1]):
+            saved = Data.from_buffer_copy(live)
+            saved.build = build
+            self.reseal(saved)
+            self.assertTrue(self.lib.valid(C.byref(saved)))
+            self.assertFalse(self.lib.match(C.byref(saved), C.byref(live)))
+            self.assertFalse(self.lib.match(C.byref(saved), C.byref(saved)))
+        saved = Data.from_buffer_copy(live)
+        saved.game = 1
+        self.reseal(saved)
+        self.assertFalse(self.lib.match(C.byref(saved), C.byref(live)))
+
+    def test_every_owner_byte_including_unused_tail_must_still_match(self):
+        _, live = self.capture()
+        for change in (
+            lambda p: setattr(p, 'config', p.config + 1),
+            lambda p: setattr(p, 'count', p.count - 1),
+            lambda p: setattr(p, 'keepCount', p.keepCount - 1),
+            lambda p: setattr(p.anchors[0], 'value', p.anchors[0].value ^ 4),
+            lambda p: setattr(p.anchors[p.count], 'value', 1),
+            lambda p: setattr(p.keep[p.keepCount], 'address', 0x80000000),
+            lambda p: setattr(p.keep[0], 'size', p.keep[0].size - 1),
+        ):
+            saved = Data.from_buffer_copy(live)
+            saved.build = LEGACY_BUILDS[1][0]
+            change(saved)
+            self.reseal(saved)
+            self.assertTrue(self.lib.valid(C.byref(saved)))
+            self.assertFalse(self.lib.match(C.byref(saved), C.byref(live)))
 
     def test_valid_owner_graph_and_volatile_controller_thread_bytes_stay_compatible(self):
         ok,a=self.capture();self.assertTrue(ok,hex(self.lib.failure()))

@@ -615,7 +615,7 @@ class TimeAndStreakContracts(unittest.TestCase):
 
 
 class AssistAndChallengeContracts(unittest.TestCase):
-    def test_only_the_named_boss_assists_are_allowed_for_their_own_time(self) -> None:
+    def test_legacy_assist_reasons_remain_compatible_and_boss_controls_no_longer_invalidate(self) -> None:
         records = source(RECORDS)
         assist = source(ASSIST_HEADER)
         rng = source(RNG)
@@ -634,10 +634,8 @@ class AssistAndChallengeContracts(unittest.TestCase):
         self.assertIn("reasons != 0 && !(reasons & ~petey)", allowed)
         self.assertRegex(allowed, r"return false;\s*\}")
 
-        self.assertIn("reasons |= Assist::KING_BOO_FRUIT", rng)
-        self.assertIn("reasons |= Assist::PETEY_NO_TORNADO", rng)
-        self.assertIn("reasons |= Assist::PETEY_ROUTE", rng)
-        self.assertIn("ILing::invalidateForAssist(reasons);", rng)
+        self.assertNotIn("ILing::invalidateForAssist", rng)
+        self.assertIn("applyPeteyTornadoControl();", rng)
         invalidator = function_body(iling, r"void\s+invalidateForAssist\([^)]*\)")
         self.assertIn("const u8 added = reasons & ~sAssistReasons;", invalidator)
         self.assertIn("sAssistReasons |= reasons;", invalidator)

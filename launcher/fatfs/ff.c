@@ -1351,6 +1351,36 @@ DWORD clmt_clust (	/* <2:Error, >=2:Cluster number */
 	return cl + *tbl;	/* Return the cluster number */
 }
 
+#ifndef __PPC__
+/* The kernel's read-only ISO already has a checked cluster link map. Read
+ * adjacent clusters in the same extent together instead of selecting the SD
+ * card again at every cluster boundary. Keep the existing 64 KiB maximum FAT
+ * transfer size; do not infer adjacency across different extents. */
+static
+UINT clmt_read_sectors (FIL* fp, UINT requested)
+{
+	FATFS* fs = fp->obj.fs;
+	DWORD* tbl = fp->cltbl + 1;
+	DWORD cl = (DWORD)(fp->fptr / SS(fs) / fs->csize);
+	DWORD count;
+	UINT limit = 65536 / SS(fs);
+	UINT csect = (UINT)(fp->fptr / SS(fs) & (fs->csize - 1));
+	if (requested > limit) requested = limit;
+	for (;;) {
+		count = *tbl++;
+		if (!count) return 0;
+		if (cl < count) break;
+		cl -= count; tbl++;
+	}
+	/* Bound before multiplying, including with very large exFAT extents. */
+	count -= cl;
+	if (count > (requested + csect + fs->csize - 1) / fs->csize)
+		count = (requested + csect + fs->csize - 1) / fs->csize;
+	count = count * fs->csize - csect;
+	return requested < count ? requested : (UINT)count;
+}
+#endif
+
 #endif	/* _USE_FASTSEEK */
 
 
@@ -3667,6 +3697,12 @@ FRESULT f_read (
 			sect += csect;
 			cc = btr / SS(fs);					/* When remaining bytes >= sector size, */
 			if (cc) {							/* Read maximum contiguous sectors directly */
+				#if _USE_FASTSEEK && !defined(__PPC__)
+				if (fp->cltbl && !(fp->flag & FA_WRITE)) {
+					cc = clmt_read_sectors(fp, cc);
+					if (!cc) ABORT(fs, FR_INT_ERR);
+				} else
+				#endif
 				if (csect + cc > fs->csize) {	/* Clip at cluster boundary */
 					cc = fs->csize - csect;
 				}
@@ -3683,6 +3719,11 @@ FRESULT f_read (
 #endif
 #endif
 				rcnt = SS(fs) * cc;				/* Number of bytes transferred */
+				#if _USE_FASTSEEK && !defined(__PPC__)
+				/* The current cluster owns the last byte read, including when
+				 * a read ends exactly on a cluster/extent boundary. */
+				fp->clust += (csect + cc - 1) / fs->csize;
+				#endif
 				continue;
 			}
 #if !_FS_TINY

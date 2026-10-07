@@ -320,7 +320,7 @@ class PersistenceSourceContracts(unittest.TestCase):
 
     def test_dolphin_v5_migration_has_explicit_shifted_fields(self) -> None:
         for contract in (
-            "constexpr u16 kRecordVersion = 11;",
+            "constexpr u16 kRecordVersion = 12;",
             "bool validV9(const Record *source)",
             "record->payloadSize == kRecordPayloadSizeV9",
             "struct RecordV5",

@@ -114,7 +114,7 @@ class RngControlMenuTests(unittest.TestCase):
             "if ((rapid & TMarioGamePad::X) && Settings::favoriteable(id))",
             menu,
         )
-        self.assertEqual(len(rows), 142)
+        self.assertEqual(len(rows), 151)
         self.assertNotIn("SETTING_BUTTSLIDE_DISPLAY", rows)
         self.assertIn("SETTING_BUTTSLIDE_DISPLAY = SETTING_COUNT", settings)
         self.assertIn("id <= SETTING_BUTTSLIDE_DISPLAY", implementation)

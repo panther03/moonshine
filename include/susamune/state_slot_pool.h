@@ -67,7 +67,13 @@ static inline StateSlotPoolWord StateSlotPoolMergeWords(StateSlotPoolWord first,
 
 /* Aligned loads/stores only. Byte edges keep every read inside its span,
  * including when adjacent logical banks are physically far apart. */
-static inline void StateSlotPoolCopyForward(unsigned char *dst,
+#ifdef __cplusplus
+// Pool moves, codec output and filtered restores share one checked copy body.
+__attribute__((noinline)) inline
+#else
+static inline
+#endif
+void StateSlotPoolCopyForward(unsigned char *dst,
                                             const unsigned char *src,
                                             unsigned int size) {
     while (size && ((StateSlotPoolAddress)dst & 3u)) {

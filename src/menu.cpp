@@ -78,23 +78,6 @@ namespace {
 typedef JUtility::TColor Color;
 
 inline Color col(u8 r, u8 g, u8 b, u8 a) { return Color(r, g, b, a); }
-inline Color warningForeground(Color color, bool menuShown) {
-    if (!menuShown && rngControlInvalidatesIl() &&
-        (u16)color.r + color.g + color.b > 192) {
-        color.r = 255;
-        color.g = 0;
-        color.b = 0;
-    }
-    return color;
-}
-inline Color warningText(Color color, bool menuShown) {
-    if (!menuShown && rngControlInvalidatesIl()) {
-        color.r = 255;
-        color.g = 0;
-        color.b = 0;
-    }
-    return color;
-}
 inline int clampi(int value, int lo, int hi) {
     if (value < lo) return lo;
     if (value > hi) return hi;
@@ -271,7 +254,7 @@ public:
     // the menu's input grab and stage-freeze behaviour.
     virtual bool fullScreen() const { return false; }
     virtual bool favoriteHint() const { return false; }
-    virtual bool available() const { return true; }
+
     // Nested hubs use a non-negative count as a compact Ready/blocked value.
     virtual int rootAlertCount() const { return -1; }
     virtual void focus() {}
@@ -704,7 +687,7 @@ public:
             const int entry = ILing::menuEntryAt(position);
             const bool selected = !isOption() &&
                                   position == selectedPosition();
-            char pb[40];
+            char pb[64];
             const char *value = "(PB: --)";
             const s32 qf = ILing::pbQf(entry);
             if (qf >= 0) {
@@ -716,8 +699,12 @@ public:
                 char time[24];
                 if (qf >= 0) ILing::formatTime(qf, time, sizeof(time));
                 else snprintf(time, sizeof(time), "--");
-                snprintf(pb, sizeof(pb), "E%d  (PB: %s)",
-                         ILing::selectedEpisode(entry) + 1, time);
+                if (ILing::choosesPlazaState(entry))
+                    snprintf(pb, sizeof(pb), "%s  (PB: %s)",
+                             JapaneseUi::text(ILing::plazaStateName(ILing::selectedEpisode(entry))), time);
+                else
+                    snprintf(pb, sizeof(pb), "E%d  (PB: %s)",
+                             ILing::selectedEpisode(entry) + 1, time);
                 value = pb;
             }
             drawValueRow(menu, x, ry, w, ILing::label(entry), value, selected,
@@ -727,13 +714,19 @@ public:
         }
 
         drawScrollHints(menu, x, y, w, listH, start, end, rows);
+        const bool plazaChoice = !isOption() && ILing::choosesPlazaState(selectedEntry());
         const char *hint = mChoosingEpisode
-            ? SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select episode"
+            ? (plazaChoice
+                ? SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select Plaza state"
+                : SUSAMUNE_GLYPH_A " Keep  " SUSAMUNE_GLYPH_B " Back  " SUSAMUNE_GLYPH_C " Select episode")
             : isOption()
             ? SUSAMUNE_GLYPH_A " Toggle" SUSAMUNE_GLYPH_SLASH "Edit  "
               SUSAMUNE_GLYPH_X " Shine  " SUSAMUNE_GLYPH_C
               " U" SUSAMUNE_GLYPH_SLASH "D Select L"
               SUSAMUNE_GLYPH_SLASH "R Section"
+            : plazaChoice
+            ? SUSAMUNE_GLYPH_A " Start  " SUSAMUNE_GLYPH_Z " Plaza state  "
+              SUSAMUNE_GLYPH_Y " Stats  " SUSAMUNE_GLYPH_X " Delete"
             : ILing::canChooseEpisode(selectedEntry())
             ? SUSAMUNE_GLYPH_A " Start  " SUSAMUNE_GLYPH_Z " Episode  "
               SUSAMUNE_GLYPH_Y " Stats  " SUSAMUNE_GLYPH_X " Delete"
@@ -741,17 +734,20 @@ public:
               SUSAMUNE_GLYPH_Y " Stats  " SUSAMUNE_GLYPH_C " Move";
         drawFooterText(menu, hint, x + 4, y + h - FOOT_SZ);
         if (mChoosingEpisode) {
-            const int dx = x + w - 176;
+            const bool plaza = ILing::choosesPlazaState(selectedEntry());
+            const int width = plaza ? 232 : 172;
+            const int dx = x + w - width - 4;
             const int dy = y + 8;
-            menu->fillBox(dx, dy, 172, 10 * ROW_H, cPanel());
-            menu->fillBox(dx, dy, 172, 3, cAccent());
-            menu->drawText("START EPISODE", dx + 12, dy + 9,
+            menu->fillBox(dx, dy, width, 10 * ROW_H, cPanel());
+            menu->fillBox(dx, dy, width, 3, cAccent());
+            menu->drawText(plaza ? "PLAZA STATE" : "START EPISODE", dx + 12, dy + 9,
                            FOOT_SZ, FOOT_SZ, cTitle());
             for (int i = 0; i < 8; ++i) {
-                char name[16];
-                snprintf(name, sizeof(name), "Episode %d", i + 1);
+                char name[32];
+                if (!plaza) snprintf(name, sizeof(name), "Episode %d", i + 1);
                 drawValueRow(menu, dx + 4, dy + (i + 1) * ROW_H,
-                             164, name, "", mEpisodeChoice == i, false, true);
+                             width - 8, plaza ? ILing::plazaStateName(i) : name,
+                             "", mEpisodeChoice == i, false, true);
             }
         }
     }
@@ -1410,7 +1406,7 @@ private:
         if (mSel == OPACITY_ROW)
             return "Changes how transparent the ghost looks in the stage.";
         if (mSel == APPEARANCE_ROW)
-            return "Chooses Shadow Mario or Piantissimo as the ghost model.";
+            return "Chooses Shadow Mario, Piantissimo or Mario as the ghost model.";
         if (mSel == AUTO_TARGET_ROW)
             return "Chooses whether a restart races the last attempt or success.";
         if (mSel == PB_SAVE_ROW)
@@ -3265,6 +3261,7 @@ const u8 kTimerFreezeSettings[] = {
     SETTING_TIMER_FREEZE_YOSHI,
 };
 const SettingPage kTimerPages[] = {
+    {"Cosmetics", "Edit the Sunshine timer and QFT appearance.", nullptr, 0},
     {"Timer and splits", "Choose the timers, history and split overlays shown.",
      kTimerDisplaySettings, sizeof(kTimerDisplaySettings)},
     {"QFT freezes", "Choose which actions briefly freeze the QFT display.",
@@ -3503,7 +3500,7 @@ public:
     }
     bool grabsInput() const override {
         return resetConfirm() ||
-               (hasVisualEditor() && gCreationExtras.editing()) ||
+               (hasVisualEditor() && (gCreationExtras.editing() || gQftDisplay.editing())) ||
                (hasMarioColorsEditor() && (MarioColors::editing() || FluddColors::editing()));
     }
     bool fullScreen() const override { return grabsInput(); }
@@ -3528,6 +3525,7 @@ public:
             }
             return;
         }
+        if (hasTimerEditors() && gQftDisplay.editing()) { gQftDisplay.updateEditor(pad); return; }
         if (hasMarioColorsEditor() && MarioColors::editing()) {
             MarioColors::updateEditor(pad);
             return;
@@ -3567,7 +3565,10 @@ public:
         }
         if (mSel >= settings) {
             if (rapid & TMarioGamePad::A) {
-                if (hasFeedbackEditor())
+                if (hasTimerEditors()) {
+                    if (mSel == settings) gCreationExtras.beginNativeTimerEditor();
+                    else gQftDisplay.beginEditor();
+                } else if (hasFeedbackEditor())
                     gCreationExtras.beginSavestateFeedbackEditor();
                 else if (hasNativeTimerEditor())
                     gCreationExtras.beginNativeTimerEditor();
@@ -3624,6 +3625,7 @@ public:
             drawSmallFooterText(menu, hint, 320 - Menu::textWidth(hint, 12) / 2, 270);
             return;
         }
+        if (hasTimerEditors() && gQftDisplay.editing()) { gQftDisplay.drawEditor(menu); return; }
         if (hasMarioColorsEditor() && MarioColors::editing()) {
             MarioColors::drawEditor(menu);
             return;
@@ -3683,7 +3685,8 @@ public:
                 name = Settings::name(id);
                 val = gSettings.valueLabel(id);
             } else {
-                name = hasFeedbackEditor() ? "Feedback display"
+                name = hasTimerEditors() ? (i == settings ? "Sunshine timer" : "QFT")
+                     : hasFeedbackEditor() ? "Feedback display"
                      : hasNativeTimerEditor() ? "Sunshine timer editor"
                      : hasMarioColorsEditor() ? (i == settings ? "Mario colours" : "FLUDD colours")
                      : hasMovementEditors()
@@ -3742,8 +3745,9 @@ private:
         return isDisplay() && mMode &&
                currentPage().ids == kDisplayNativeSettings;
     }
+    bool hasTimerEditors() const { return isTimer() && mMode == 1; }
     bool hasVisualEditor() const {
-        return hasFeedbackEditor() || hasMovementEditors() || hasNativeTimerEditor() ||
+        return hasTimerEditors() || hasFeedbackEditor() || hasMovementEditors() || hasNativeTimerEditor() ||
                hasMarioColorsEditor();
     }
     bool hasMarioColorsEditor() const {
@@ -3752,7 +3756,7 @@ private:
     }
     bool hasFactoryReset() const { return mCat == SETTING_CAT_MISC; }
     int extraRows() const {
-        return (hasFactoryReset() || hasMarioColorsEditor()) ? 2 : hasMovementEditors() ? 6
+        return (hasFactoryReset() || hasMarioColorsEditor() || hasTimerEditors()) ? 2 : hasMovementEditors() ? 6
              : (hasFeedbackEditor() || hasNativeTimerEditor()) ? 1 : 0;
     }
 
@@ -3781,7 +3785,7 @@ private:
     }
 
     const char *pageRootSection(int page) const {
-        if (isTimer()) return page == 0 ? "TIMING AND SPLITS" : "QFT";
+        if (isTimer()) return page == 0 ? "APPEARANCE" : page == 1 ? "TIMING AND SPLITS" : "QFT";
         if (isRng()) {
             if (page == 0) return "PRACTICE CODES";
             if (page == 1) return "ASSISTED RNG";
@@ -3829,6 +3833,7 @@ private:
 
     const char *selectionHelp(const u8 *ids, int settings) const {
         if (mSel < settings) return settingHelp((SettingId)ids[mSel]);
+        if (hasTimerEditors()) return "Move, resize and recolour this timer.";
         if (hasFeedbackEditor()) return "Changes the savestate status popup layout.";
         if (hasNativeTimerEditor()) return "Move, resize and style the original Sunshine timer.";
         if (hasMarioColorsEditor()) return mSel == settings
@@ -3868,7 +3873,7 @@ private:
             if (hasPages()) {
                 if (!isTimer())
                     return logical == 0 ? currentPage().name : nullptr;
-                if (mMode == 1) {
+                if (mMode == 2) {
                     if (logical == 0) return "TIMER DISPLAY";
                     return logical == 2 ? "HISTORY AND SPLITS" : nullptr;
                 }
@@ -3933,7 +3938,7 @@ public:
         mUpper(false), mGeneration(0) { mName[0] = 0; mInput.begin(JUTGamePad::A | JUTGamePad::Y); }
     const char *title() const override { return "Layout profiles"; }
     const char *summary() const override { return "Save and switch between five named layouts."; }
-    bool available() const override { return !rngControlInvalidatesIl(); }
+
     bool grabsInput() const override {
         return mMode != 0;
     }
@@ -4036,7 +4041,7 @@ public:
     const char *summary() const override {
         return "Move, resize and recolour Moonshine HUD elements.";
     }
-    bool available() const override { return !rngControlInvalidatesIl(); }
+
     bool grabsInput() const override {
         return gQftDisplay.editing() || gInputDisplay.editing() ||
                gMetadataDisplay.editing() || gCreationExtras.editing();
@@ -4443,7 +4448,7 @@ public:
         return grabsInput() || (JUTGamePad::mPadStatus[0].mButton &
             (JUTGamePad::A | JUTGamePad::X)) != 0;
     }
-    bool favoriteHint() const override { return !mSD && (mSel == ROW_RNG || mSel == ROW_FEEDBACK); }
+    bool favoriteHint() const override { return !mSD && (mSel == ROW_RNG || mSel == ROW_FEEDBACK || mSel == ROW_ERRORS); }
     void update(Menu *menu, TMarioGamePad *pad) override {
         if (gCreationExtras.editing()) {
             gCreationExtras.updateEditor(pad);
@@ -4474,7 +4479,7 @@ public:
             return;
         }
         if ((pressed & JUTGamePad::X) && favoriteHint()) {
-            const SettingId setting = mSel == ROW_RNG ? SETTING_SAVE_RNG_STATE : SETTING_SAVESTATE_FEEDBACK;
+            const SettingId setting = mSel == ROW_RNG ? SETTING_SAVE_RNG_STATE : mSel == ROW_ERRORS ? SETTING_SAVESTATE_ERRORS : SETTING_SAVESTATE_FEEDBACK;
             gSettings.toggleFavorite(setting);
             menu->toast(gSettings.favorite(setting) ? "Added to Shined" : "Removed from Shined");
             return;
@@ -4500,7 +4505,7 @@ public:
                 !gSavestateMgr->sdCatalogReady() && !SavestateManager::diskBusy())
                 gSavestateMgr->refreshSD();
         } else {
-            gSettings.cycle(mSel == ROW_RNG ? SETTING_SAVE_RNG_STATE : SETTING_SAVESTATE_FEEDBACK, 1);
+            gSettings.cycle(mSel == ROW_RNG ? SETTING_SAVE_RNG_STATE : mSel == ROW_ERRORS ? SETTING_SAVESTATE_ERRORS : SETTING_SAVESTATE_FEEDBACK, 1);
         }
     }
     void draw(Menu *menu, int x, int y, int w, int h) override {
@@ -4519,15 +4524,15 @@ public:
         }
         char save[24], load[32];
         formatSources(save, sizeof(save), load, sizeof(load));
-        const char *labels[] = {"Save to", "Load from", "Clear save slot", "Save RNG state", "Savestate feedback", "Feedback display", "SD states"};
+        const char *labels[] = {"Save to", "Load from", "Clear save slot", "Save RNG state", "Savestate feedback", "Error messages", "Feedback display", "SD states"};
         const char *values[] = {save, load, "Clear", gSettings.valueLabel(SETTING_SAVE_RNG_STATE),
-            gSettings.valueLabel(SETTING_SAVESTATE_FEEDBACK), "Edit", "Open"};
+            gSettings.valueLabel(SETTING_SAVESTATE_FEEDBACK), gSettings.valueLabel(SETTING_SAVESTATE_ERRORS), "Edit", "Open"};
         const int listH = h - HELP_H - ROW_H;
         const int start = listScrollStart(mSel, ROW_COUNT, listH / ROW_H);
         const int end = clampi(start + listH / ROW_H, 0, ROW_COUNT);
         for (int row = start; row < end; ++row) {
-            const bool starred = (row == ROW_RNG || row == ROW_FEEDBACK) &&
-                gSettings.favorite(row == ROW_RNG ? SETTING_SAVE_RNG_STATE : SETTING_SAVESTATE_FEEDBACK);
+            const bool starred = (row == ROW_RNG || row == ROW_FEEDBACK || row == ROW_ERRORS) &&
+                gSettings.favorite(row == ROW_RNG ? SETTING_SAVE_RNG_STATE : row == ROW_ERRORS ? SETTING_SAVESTATE_ERRORS : SETTING_SAVESTATE_FEEDBACK);
             drawValueRow(menu, x, y + (row - start) * ROW_H, w, labels[row], values[row], row == mSel, starred, false);
         }
         drawScrollHints(menu, x, y, w, listH, start, end, ROW_COUNT);
@@ -4544,12 +4549,13 @@ public:
             : mSel == ROW_CLEAR ? "Remove the memory state in the Save to slot, after confirmation."
             : mSel == ROW_RNG ? "Keep the game RNG with each state."
             : mSel == ROW_FEEDBACK ? "Show a message when saving or loading a state."
+            : mSel == ROW_ERRORS ? "Show errors when a state cannot be saved or loaded."
             : mSel == ROW_SD ? "Save states to SD and bring them back after restarting."
             : "Change the savestate message's position and appearance.";
         drawHelpLine(menu, x, y, w, h, help);
     }
 private:
-    enum { ROW_SAVE, ROW_LOAD, ROW_CLEAR, ROW_RNG, ROW_FEEDBACK, ROW_EDITOR, ROW_SD, ROW_COUNT };
+    enum { ROW_SAVE, ROW_LOAD, ROW_CLEAR, ROW_RNG, ROW_FEEDBACK, ROW_ERRORS, ROW_EDITOR, ROW_SD, ROW_COUNT };
     enum { SD_SAVE_SLOT, SD_LOAD_SLOT, SD_SAVE, SD_REFRESH, SD_NEXT, SD_FILES };
     enum { NAME_NONE, NAME_SAVE, NAME_RENAME };
     void formatSources(char *save, u32 saveSize, char *load, u32 loadSize) const {
@@ -4965,9 +4971,9 @@ private:
 // ---------------------------------------------------------------------
 class StageLoaderTab final : public MenuTab {
 public:
-    StageLoaderTab()
+    explicit StageLoaderTab(bool streaking = false)
         : mSel(0), mGoal(5), mTargetQf(-1), mStreakEntry(0),
-          mStreaking(false), mBuiltinPlaylist(0), mCustomSlot(0),
+          mStreaking(streaking), mBuiltinPlaylist(0), mCustomSlot(0),
           mEditor(EDIT_NONE), mTextCursor(0), mTextPage(1), mTextLength(0),
           mTextUpper(false) {
         mText[0] = '\0';
@@ -4975,16 +4981,21 @@ public:
         mTargetQf = StageTargets::get(mStreakEntry);
     }
 
-    const char *title() const override { return "Stage Loader"; }
-    bool grabsInput() const override { return mEditor != EDIT_NONE; }
+    const char *title() const override { return mStreaking ? "Streaking" : "Stageloader"; }
+    bool favoriteHint() const override { return optionSetting(selectedOption()) != SETTING_COUNT; }
+    bool grabsInput() const override { return mEditor != EDIT_NONE || gCreationExtras.editing(); }
     bool suppressesBinds() const override {
-        if (mEditor != EDIT_NONE) return true;
+        if (mEditor != EDIT_NONE || gCreationExtras.editing()) return true;
         const u16 held = JUTGamePad::mPadStatus[0].mButton;
         return (held & (JUTGamePad::A | JUTGamePad::X)) != 0;
     }
-    bool fullScreen() const override { return mEditor != EDIT_NONE; }
+    bool fullScreen() const override { return mEditor != EDIT_NONE || gCreationExtras.editing(); }
 
     void update(Menu *menu, TMarioGamePad *pad) override {
+        if (gCreationExtras.editing()) {
+            gCreationExtras.updateEditor(pad);
+            return;
+        }
         if (mEditor != EDIT_NONE) {
             updateTextEditor(menu);
             return;
@@ -5010,6 +5021,9 @@ public:
             menu->toast("Any finish counts");
             return;
         }
+        const SettingId setting = optionSetting(selectedOption());
+        if ((rapid & TMarioGamePad::X) && setting != SETTING_COUNT)
+            gSettings.toggleFavorite(setting);
         if (!(rapid & TMarioGamePad::A)) return;
 
         if (isOption()) {
@@ -5043,6 +5057,10 @@ public:
     }
 
     void draw(Menu *menu, int x, int y, int w, int h) override {
+        if (gCreationExtras.editing()) {
+            gCreationExtras.drawEditor(menu);
+            return;
+        }
         if (mEditor != EDIT_NONE) {
             drawCreationKeyboard(
                 menu,
@@ -5084,11 +5102,12 @@ public:
              optionRow++, row++) {
             if (row < start || row >= end) continue;
             const Option option = optionAt(optionRow);
+            const SettingId setting = optionSetting(option);
             const char *name;
             const char *value;
-            if (option == OPTION_MODE) {
-                name = "Mode";
-                value = mStreaking ? "Streaking" : "Stageloader";
+            if (setting != SETTING_COUNT) {
+                name = Settings::name(setting);
+                value = gSettings.valueLabel(setting);
             } else if (option == OPTION_RUN) {
                 name = mStreaking ? "Start streak" : "Run playlist";
                 value = mStreaking ? ILing::shortLabel(mStreakEntry) : "Start";
@@ -5098,15 +5117,12 @@ public:
             } else if (option == OPTION_TARGET) {
                 name = mStreaking ? "Target time" : "Clear playlist";
                 value = mStreaking ? target : "Clear";
-            } else if (option == OPTION_DISPLAY) {
-                name = "Session display";
-                value = gSettings.valueLabel(SETTING_STAGE_SESSION_DISPLAY);
-            } else if (option == OPTION_AUTO_RESET) {
-                name = "Streak auto-reset";
-                value = gSettings.valueLabel(SETTING_STREAK_AUTO_RESET);
             } else if (option == OPTION_BUILTIN) {
                 name = "Built-in preset";
                 value = StageLoader::builtinPlaylistName(mBuiltinPlaylist);
+            } else if (option == OPTION_FAILURE_STYLE) {
+                name = "Failure banner appearance";
+                value = "Edit";
             } else {
                 const int saved =
                     StageLoader::customPlaylistEntryCount(mCustomSlot);
@@ -5124,7 +5140,7 @@ public:
                 value = custom;
             }
             drawValueRow(menu, x, ry, w, name, value, mSel == optionRow,
-                         false, true);
+                         setting != SETTING_COUNT && gSettings.favorite(setting), true);
             ry += ROW_H;
         }
 
@@ -5197,8 +5213,7 @@ public:
             (selected == OPTION_LOAD || selected == OPTION_SAVE);
         const bool builtinOption = !mStreaking && isOption() &&
             selected == OPTION_BUILTIN;
-        const bool displayOption = isOption() &&
-            (selected == OPTION_DISPLAY || selected == OPTION_AUTO_RESET);
+        const bool displayOption = optionSetting(selected) != SETTING_COUNT;
         const char *hint = customOption
             ? SUSAMUNE_GLYPH_A " Select   " SUSAMUNE_GLYPH_C
               " L" SUSAMUNE_GLYPH_SLASH "R Slot"
@@ -5224,7 +5239,6 @@ public:
 
 private:
     enum Option {
-        OPTION_MODE,
         OPTION_RUN,
         OPTION_FINISHES,
         OPTION_TARGET,
@@ -5233,6 +5247,7 @@ private:
         OPTION_LOAD,
         OPTION_SAVE,
         OPTION_AUTO_RESET,
+        OPTION_FAILURE, OPTION_FAILURE_STYLE, OPTION_FAILURE_DURATION,
         OPTION_COUNT_MAX,
     };
 
@@ -5242,12 +5257,19 @@ private:
         EDIT_TARGET,
     };
 
+    static SettingId optionSetting(Option option) {
+        if (option == OPTION_DISPLAY) return SETTING_STAGE_SESSION_DISPLAY;
+        if (option == OPTION_AUTO_RESET) return SETTING_STREAK_AUTO_RESET;
+        return option == OPTION_FAILURE ? SETTING_STREAK_FAILURE_BANNER :
+            option == OPTION_FAILURE_DURATION ? SETTING_STREAK_FAILURE_DURATION : SETTING_COUNT;
+    }
+
     int optionCount() const {
-        return mStreaking ? OPTION_BUILTIN + 1 : OPTION_AUTO_RESET;
+        return mStreaking ? 8 : OPTION_AUTO_RESET;
     }
     Option optionAt(int row) const {
-        return mStreaking && row == OPTION_BUILTIN
-                   ? OPTION_AUTO_RESET
+        return mStreaking && row >= OPTION_BUILTIN
+                   ? (Option)(OPTION_AUTO_RESET + row - OPTION_BUILTIN)
                    : (Option)row;
     }
     Option selectedOption() const {
@@ -5301,15 +5323,13 @@ private:
 
     void activateOption(Menu *menu) {
         const Option option = selectedOption();
-        if (option == OPTION_MODE) {
-            mStreaking = !mStreaking;
-            if (mStreaking) {
-                if (!ILing::streakEntrySelectable(mStreakEntry)) {
-                    mStreakEntry = catalogueEntryAt(0);
-                }
-                mTargetQf = StageTargets::get(mStreakEntry);
-            }
-            mSel = OPTION_MODE;
+        if (option == OPTION_FAILURE_STYLE) {
+            gCreationExtras.beginFailureBannerEditor();
+            return;
+        }
+        const SettingId setting = optionSetting(option);
+        if (setting != SETTING_COUNT) {
+            gSettings.cycle(setting, 1);
             return;
         }
         if (option == OPTION_RUN) {
@@ -5343,14 +5363,6 @@ private:
             }
             return;
         }
-        if (option == OPTION_DISPLAY) {
-            gSettings.cycle(SETTING_STAGE_SESSION_DISPLAY, 1);
-            return;
-        }
-        if (option == OPTION_AUTO_RESET) {
-            gSettings.cycle(SETTING_STREAK_AUTO_RESET, 1);
-            return;
-        }
         if (option == OPTION_BUILTIN) {
             if (StageLoader::loadBuiltinPlaylist(mBuiltinPlaylist)) {
                 mSel = OPTION_FINISHES;
@@ -5381,11 +5393,9 @@ private:
     void moveHorizontal(int direction) {
         if (isOption()) {
             const Option option = selectedOption();
-            if (option == OPTION_DISPLAY || option == OPTION_AUTO_RESET) {
-                gSettings.cycle(option == OPTION_DISPLAY
-                                    ? SETTING_STAGE_SESSION_DISPLAY
-                                    : SETTING_STREAK_AUTO_RESET,
-                                direction);
+            const SettingId setting = optionSetting(option);
+            if (setting != SETTING_COUNT) {
+                gSettings.cycle(setting, direction);
             } else if (!mStreaking && option == OPTION_BUILTIN) {
                 mBuiltinPlaylist = (u8)wrap(
                     mBuiltinPlaylist + (direction < 0 ? -1 : 1),
@@ -5418,7 +5428,7 @@ private:
         const int destination = ILing::jumpMenuGroup(position, direction);
         if ((direction < 0 && groupFirst == 0) ||
             (direction > 0 && destination == 0)) {
-            mSel = OPTION_MODE;
+            mSel = OPTION_RUN;
             return;
         }
         mSel = catalogueFirst() + catalogueIndexForEntry(
@@ -5492,37 +5502,8 @@ private:
     }
 
     void updateTimeKeyboard(u16 pressed) {
-        const int count = 32;
-        if (pressed & JUTGamePad::DPAD_LEFT)
-            mTextCursor = (u8)((mTextCursor + count - 1) % count);
-        else if (pressed & JUTGamePad::DPAD_RIGHT)
-            mTextCursor = (u8)((mTextCursor + 1) % count);
-        else if (pressed & JUTGamePad::DPAD_UP)
-            mTextCursor = (u8)((mTextCursor + count - 8) % count);
-        else if (pressed & JUTGamePad::DPAD_DOWN)
-            mTextCursor = (u8)((mTextCursor + 8) % count);
-        if (pressed & (JUTGamePad::L | JUTGamePad::R)) {
-            mTextPage ^= 1;
-            mTextCursor = 0;
-        }
-        if (pressed & JUTGamePad::Y) mTextUpper = !mTextUpper;
-        if ((pressed & JUTGamePad::B) && mTextLength) {
-            mText[--mTextLength] = '\0';
-        }
-        if ((pressed & JUTGamePad::X) &&
-            mTextLength + 1 < sizeof(mText)) {
-            mText[mTextLength++] = ' ';
-            mText[mTextLength] = '\0';
-        }
-        if ((pressed & JUTGamePad::A) &&
-            mTextLength + 1 < sizeof(mText)) {
-            const char *characters = mTextPage ? gCreationSymbols
-                                              : mTextUpper
-                                                    ? gCreationLettersUpper
-                                                    : gCreationLettersLower;
-            mText[mTextLength++] = characters[mTextCursor];
-            mText[mTextLength] = '\0';
-        }
+        updateCreationKeyboardButtons(pressed, mText, mTextLength, sizeof(mText) - 1,
+                                      mTextPage, mTextUpper, mTextCursor);
     }
 
     static bool parseFinishes(const char *text, u16 *out) {
@@ -5545,16 +5526,17 @@ private:
         }
 
         const char *p = text;
-        u64 first = 0;
+        u32 first = 0;
         int digits = 0;
         while (*p >= '0' && *p <= '9') {
-            first = first * 10 + (u64)(*p++ - '0');
+            first = first * 10 + (u32)(*p++ - '0');
+            if (first > 59999) return false;
             digits++;
         }
         if (!digits) return false;
 
-        u64 minutes = 0;
-        u64 seconds = first;
+        u32 minutes = 0;
+        u32 seconds = first;
         bool hasColon = false;
         if (*p == ':') {
             hasColon = true;
@@ -5563,18 +5545,19 @@ private:
             digits = 0;
             p++;
             while (*p >= '0' && *p <= '9') {
-                seconds = seconds * 10 + (u64)(*p++ - '0');
+                seconds = seconds * 10 + (u32)(*p++ - '0');
+                if (seconds >= 60) return false;
                 digits++;
             }
             if (!digits || seconds >= 60) return false;
         }
 
-        u64 fraction = 0;
+        u32 fraction = 0;
         int fractionDigits = 0;
         if (*p == '.') {
             p++;
             while (*p >= '0' && *p <= '9' && fractionDigits < 3) {
-                fraction = fraction * 10 + (u64)(*p++ - '0');
+                fraction = fraction * 10 + (u32)(*p++ - '0');
                 fractionDigits++;
             }
             if (!fractionDigits || (*p >= '0' && *p <= '9')) return false;
@@ -5584,8 +5567,10 @@ private:
         if (*p) return false;
         if (minutes > 999 || (!hasColon && seconds > 59999)) return false;
 
-        const u64 millis = (minutes * 60 + seconds) * 1000 + fraction;
-        const u64 qf = (((millis + 1) * 120) - 1) / 1001;
+        const u32 millis = (minutes * 60 + seconds) * 1000 + fraction;
+        // Divide first so the exact display-to-QF conversion fits in u32.
+        const u32 qf = (millis / 1001) * 120 +
+                       ((millis % 1001 + 1) * 120 - 1) / 1001;
         // ILing::formatTime currently multiplies qf by 1001 in signed s32.
         if (qf > 0x7FFFFFFFu / 1001u) return false;
         *out = (s32)qf;
@@ -5604,16 +5589,7 @@ private:
         return row;
     }
 
-    int catalogueRowCount() const {
-        int rows = 0;
-        for (int position = 0; position < ILing::count(); position++) {
-            const int entry = ILing::menuEntryAt(position);
-            if (!catalogueIncludesEntry(entry)) continue;
-            if (ILing::beginsMenuGroup(position)) rows++;
-            rows++;
-        }
-        return rows;
-    }
+    int catalogueRowCount() const { return catalogueRowForEntry(-1); }
 
     int catalogueBaseRow() const {
         int row = optionCount();
@@ -5756,10 +5732,6 @@ public:
             jumpRootSection(+1);
         }
         if (mNavInput.update() & JUTGamePad::A) {
-            if (!mChildren[mSel]->available()) {
-                menu->toast("Disable boss RNG controls first");
-                return;
-            }
             mPage = (s8)mSel;
             focus();
         }
@@ -5797,11 +5769,10 @@ public:
                     row++;
                     continue;
                 }
-                const bool available = mChildren[i]->available();
-                const int alertCount = available
-                    ? mChildren[i]->rootAlertCount() : -1;
+
+                const int alertCount = mChildren[i]->rootAlertCount();
                 char alert[20];
-                const char *value = available ? nullptr : "Disabled";
+                const char *value = nullptr;
                 Color valueColor = cValue();
                 if (alertCount >= 0) {
                     if (alertCount == 0) {
@@ -5814,7 +5785,7 @@ public:
                 }
                 drawValueRowColored(menu, x, ry, w,
                                     mChildren[i]->title(), value,
-                                    i == mSel, false, available, valueColor);
+                                    i == mSel, false, true, valueColor);
                 ry += ROW_H;
                 row++;
             }
@@ -5838,7 +5809,7 @@ private:
     MenuTab *current() const {
         MenuTab *child = mPage >= 0 && mPage < mCount
                              ? mChildren[mPage] : nullptr;
-        return child && child->available() ? child : nullptr;
+        return child;
     }
 
     const char *sectionName(int child) const {
@@ -6057,7 +6028,7 @@ public:
              "Timers includes the full Sunshine timer editor.", "Native HUD colours includes health and air.",
              "Metadata: field gap, row gap, columns, width.", "Practice feedback: wallkick, rollout and dust.",
              "Hold Y while adjusting HSL for steps of 1.", "A: keep. B: discard. Z: reset selected option."},
-            {"FRAME BY FRAME", "Moonshine V2.3.2 Frame By Frame", "Find Timer and splits in Runs or Display.",
+            {"FRAME BY FRAME", "Moonshine V2.3.3 Frame By Frame", "Find Timer and splits in Runs or Display.",
              "Split comparison: Off, PB, SOB or Ghost.", "Report any missing or incorrect checkpoints.",
              "Full English and Japanese guides are in the ZIP.", "Keep crash reports when reporting a problem.", "Settings and records survive updates."},
         };
@@ -6218,6 +6189,7 @@ struct __attribute__((aligned(8))) MenuRuntime {
     u8 records[sizeof(RecordsTab)] __attribute__((aligned(8)));
     u8 binds[sizeof(BindsTab)] __attribute__((aligned(8)));
     u8 stageLoader[sizeof(StageLoaderTab)] __attribute__((aligned(8)));
+    u8 streaking[sizeof(StageLoaderTab)] __attribute__((aligned(8)));
     u8 settingsHub[sizeof(NestedMenuTab)] __attribute__((aligned(8)));
     u8 ilsHub[sizeof(NestedMenuTab)] __attribute__((aligned(8)));
     u8 practiceControls[sizeof(PracticeControlsTab)] __attribute__((aligned(8)));
@@ -6331,13 +6303,14 @@ Menu::Menu() : mText(gpSystemFont->mFont, " ") {
     MenuTab *iling = new (sILingBuf) ILingTab();
     MenuTab *ghosts = new (sGhostsBuf) GhostsTab();
     MenuTab *stageLoader = new (sStageLoaderBuf) StageLoaderTab();
+    MenuTab *streaking = new (sMenuRuntime.streaking) StageLoaderTab(true);
     MenuTab *records = new (sRecordsBuf) RecordsTab();
 
     MenuTab *camera = new (sMenuRuntime.practiceControls) PracticeControlsTab();
     MenuTab *inputReplay = new (sMenuRuntime.tasProject) TasProjectTab();
     MenuTab *guide = new (sMenuRuntime.guide) GuideTab();
     MenuTab *practiceChildren[] = { inputReplay, camera, savestate, practice, rng, gameplay };
-    MenuTab *runChildren[] = { iling, stageLoader, records, pbSafety, timer };
+    MenuTab *runChildren[] = { iling, stageLoader, streaking, pbSafety, timer };
     MenuTab *displayChildren[] = { creation, layoutProfiles, display, timer, cosmetics };
     MenuTab *systemChildren[] = { binds, guide };
     mTabs[mNumTabs++] = starred;
@@ -6423,7 +6396,7 @@ int Menu::textWidth(const char *s, int sizeX) {
 }
 
 void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color color) {
-    color = warningText(color, mShown);
+
 #if defined(SUSAMUNE_VERSION_JP)
     s = JapaneseUi::text(s);
     if (JapaneseUi::draw(s, x, y, sizeX, sizeY, color, mOrtho)) return;
@@ -6444,7 +6417,7 @@ void Menu::drawText(const char *s, int x, int y, int sizeX, int sizeY, Color col
 #if ENABLE_SAVESTATE_DBG
 void Menu::drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
                             Color color) {
-    color = warningText(color, mShown);
+
 #if defined(SUSAMUNE_VERSION_JP)
     s = JapaneseUi::text(s);
     if (JapaneseUi::draw(s, x, y - mFontAscent * sizeY / mFontHeight,
@@ -6463,7 +6436,7 @@ void Menu::drawTextBaseline(const char *s, int x, int y, int sizeX, int sizeY,
 #endif
 
 void Menu::fillBox(int x, int y, int w, int h, Color color) {
-    color = warningForeground(color, mShown);
+
     // Restore the flat pos+color vertex state before filling. J2DFillBox draws
     // with whatever GX vertex descriptor is current, and J2DTextBox/JUTResFont
     // switch it to a textured layout; without this, any fill after a text draw
@@ -6510,11 +6483,11 @@ __attribute__((noinline)) void drawPolygon(J2DOrthoGraph *ortho,
 }  // namespace
 
 void Menu::fillPoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, false, warningForeground(color, mShown));
+    drawPolygon(mOrtho, xy, n, false, color);
 }
 
 void Menu::strokePoly(const s16 *xy, int n, Color color) {
-    drawPolygon(mOrtho, xy, n, true, warningForeground(color, mShown));
+    drawPolygon(mOrtho, xy, n, true, color);
 }
 
 void Menu::switchTab(int dir) {
@@ -6541,12 +6514,13 @@ u32 Menu::navigationInput(TMarioGamePad *pad) {
 // =====================================================================
 
 void Menu::toast(const char *msg) {
+    if (!gSettings.getBool(SETTING_SYSTEM_MESSAGES)) { mToastFrames = 0; return; }
     strncpy(mToastBuf, msg, sizeof(mToastBuf));
     mToastFrames = kToastFrames;
 }
 
 void Menu::drawToast() {
-    if (mToastFrames <= 0 || mToastBuf[0] == '\0') {
+    if (!gSettings.getBool(SETTING_SYSTEM_MESSAGES) || mToastFrames <= 0 || mToastBuf[0] == '\0') {
         return;
     }
     gCreationExtras.drawToast(this, mToastBuf);
@@ -6814,10 +6788,7 @@ void Menu::update(TMarioGamePad *pad) {
         switchTab(+1);
     }
 
-    const bool invalidBefore = rngControlInvalidatesIl();
     mTabs[mCurTab]->update(this, pad);
-    if (invalidBefore != rngControlInvalidatesIl())
-        gCreationExtras.update();
 }
 
 void Menu::draw(J2DOrthoGraph *ortho) {
@@ -6828,8 +6799,8 @@ void Menu::draw(J2DOrthoGraph *ortho) {
         gInputDisplay.draw(this);
         gMetadataDisplay.draw(this);
         gQftDisplay.beginOverlayFrame();
-        gQFTTimer.draw(this);
-        SplitStats::draw(this);
+        if (!SplitStats::draw(this)) gQFTTimer.draw(this);
+        gQftDisplay.drawTasFallback(this);
         gAttemptCounter.draw(this);
         gCreationExtras.draw(this);
         if (!MovementTimingDisplay::draw(this)) WallkickDisplay::draw(this);
@@ -6856,7 +6827,7 @@ void Menu::draw(J2DOrthoGraph *ortho) {
     // Title + accent underline.
     drawText("Moonshine", PANEL_X + PAD - 2, PANEL_Y + 12,
              TITLE_SZ, TITLE_SZ, cTitle());
-    drawText("V2.3.2 Frame By Frame", PANEL_X + PANEL_W - PAD - textWidth("V2.3.2 Frame By Frame", FOOT_SZ),
+    drawText("V2.3.3 Frame By Frame", PANEL_X + PANEL_W - PAD - textWidth("V2.3.3 Frame By Frame", FOOT_SZ),
              PANEL_Y + 21, FOOT_SZ, FOOT_SZ, col(255, 196, 90, 255));
     fillBox(PANEL_X + PAD, PANEL_Y + 12 + TITLE_SZ + 1, 260, 2, cAccent());
 
@@ -6895,19 +6866,6 @@ void Menu::draw(J2DOrthoGraph *ortho) {
     bgmStatsDraw(this);
 }
 
-void Menu::drawInvalidIlWarning() {
-    if (!rngControlInvalidatesIl()) return;
-    const char *text = "INVALID IL";
-    const int size = 18;
-    const int visibleBottom = 448;
-    const int bottomInset = 12;
-    const int x = 616 - textWidth(text, size);
-    const int y = visibleBottom - size - bottomInset;
-    static_assert(bottomInset >= 2, "INVALID IL warning exceeds the EFB");
-    fillBox(x - 4, y - 2, textWidth(text, size) + 8, size + 4,
-            col(0, 0, 0, 190));
-    drawText(text, x, y, size, size, col(255, 0, 0, 255));
-}
 
 // =====================================================================
 // Global instance

@@ -7,6 +7,11 @@
 #include "susamune/practice_session.hxx"
 #include "susamune/qft_timer.hxx"
 
+// Keep display/editor code in the existing upper span; neither heap moves.
+#if defined(__powerpc__)
+#pragma clang section text=".foxtrot.text"
+#endif
+
 namespace {
 
 bool sAnchorDrawn;
@@ -26,6 +31,7 @@ QftDisplay &gQftDisplay = *reinterpret_cast<QftDisplay *>(
 static_assert(sizeof(QftDisplay) <= SUSAMUNE_CONFIG_QFT_SIZE,
               "QFT display exceeds its MEM2 runtime slot");
 
+#pragma clang section text=""
 CreationStyle QftDisplay::defaults() {
     return CreationStyle{
         16, 416, 100, 255,
@@ -156,8 +162,17 @@ void QftDisplay::draw(Menu *menu, const char *text) const {
     }
 }
 
+#pragma clang section text=".foxtrot.text"
+
 bool QftDisplay::hasAnchor(const char *text) const {
     return sAnchorDrawn && text && strcmp(sAnchorText, text) == 0;
+}
+
+void QftDisplay::drawTasFallback(Menu *menu) const {
+    if (!menu || sAnchorDrawn ||
+        (!PracticeSession::assisted() && !gQFTTimer.practiceAssisted())) return;
+    menu->fillBox(12, 420, 35, 18, JUtility::TColor(8, 17, 31, 210));
+    menu->drawText("TAS", 14, 421, 14, 14, JUtility::TColor(130, 225, 255, 255));
 }
 
 bool QftDisplay::adjacentStyle(const char *anchorText, const char *text,

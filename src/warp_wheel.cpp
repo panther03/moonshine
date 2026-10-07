@@ -175,13 +175,7 @@ void armExitAreaWarp(const LevelWarp::Dest &dest) {
 }
 
 bool saveFlowActive() {
-    if (!gpMarDirector) return false;
-    if (gpMarDirector->mCurState == TMarDirector::STATE_SAVE_CARD) return true;
-    if (gpMarDirector->mCurState == TMarDirector::STATE_PAUSE_MENU &&
-        gpMarDirector->mPauseMenu &&
-        gpMarDirector->mPauseMenu->mState == TPauseMenu2::MENU_SAVING) {
-        return true;
-    }
+    // A displayed save box does not own storage. Only defer an actual write.
     return gpCardManager &&
         gpCardManager->getLastStatus() == CARD_ERROR_BUSY;
 }
@@ -1049,7 +1043,9 @@ u8 kick(TMarDirector *director, u8 state) {
     if (!sArmed) {
         return state;
     }
-    if (sQueuedSessionDeathRestart || sWaitForRetailDeathTail) return state;
+    // Automatic retries preserve retail's death sequence. A manual restart
+    // has already passed deferred session/result ownership before it is armed.
+    if (sWaitForRetailDeathTail) return state;
     // A requested warp remains armed, but the authoritative session report
     // gets the first departure. This also covers Shine-demo frames where the
     // result cannot safely own input yet.
@@ -1737,8 +1733,8 @@ void resolveDeferredRestart() {
     // A same-frame Shine result replaces the completed attempt with its own
     // retry. JP can carry the early Shine latch through that stage load; do not
     // let the old input become valid again when the new attempt starts.
-    // Death inputs are different: their requested restart must wait for the
-    // retail death animation and then own the one departure at its tail.
+    // Death inputs are different: keep the requested restart until the session
+    // has resolved it, then service the arm even while the death state is live.
     if (!sQueuedSessionDeathRestart && StageLoader::retryOwnsDeparture()) {
         sDeferredRestart = DEFERRED_RESTART_NONE;
         sDeferredRestartAfterResult = false;
@@ -1830,6 +1826,25 @@ u8 guardExitArea(u8 nextState) {
     return nextState;
 }
 
+// Native pause/save/death states do not call updateGameMode(), where ordinary warps
+// are serviced. Keep the same departure guards, then run the retail transition
+// cleanup instead of leaving a menu-selected destination armed indefinitely.
+static bool servicePausedWarp(TMarDirector *director) {
+    if (!director || !director->_260) return false;
+    const u8 state = director->mCurState;
+    if (state != TMarDirector::STATE_PAUSE_MENU &&
+        state != TMarDirector::STATE_SAVE_CARD &&
+        state != TMarDirector::STATE_DEATH) return false;
+    const u8 next = LevelWarp::kick(director, state);
+    if (next == state) return false;
+    if (state == TMarDirector::STATE_PAUSE_MENU && director->mPauseMenu)
+        director->mPauseMenu->setDrawEnd();
+    director->currentStateFinalize(next);
+    director->nextStateInitialize(next);
+    director->mCurState = next;
+    return true;
+}
+
 void update(TMarioGamePad *pad) {
     if (!gpMarDirector) {
         clearPrompt();
@@ -1856,13 +1871,18 @@ void update(TMarioGamePad *pad) {
         return;
     }
 
+    if (servicePausedWarp(gpMarDirector)) return;
+
     const u8 state = gpMarDirector->mCurState;
     const bool enteringDeath = state == TMarDirector::STATE_DEATH &&
                                !sDeathSequence;
     if (state == TMarDirector::STATE_DEATH) {
         sDeathSequence = true;
     }
-    if (state != TMarDirector::STATE_NORMAL) {
+    const bool saveDialogOpen = state == TMarDirector::STATE_SAVE_CARD ||
+        (state == TMarDirector::STATE_PAUSE_MENU && gpMarDirector->mPauseMenu &&
+         gpMarDirector->mPauseMenu->mState == TPauseMenu2::MENU_SAVING);
+    if (state != TMarDirector::STATE_NORMAL && !saveDialogOpen) {
         close();
         const u16 rawButtons = JUTGamePad::mPadStatus[0].mButton;
         if (sDeathSequence &&

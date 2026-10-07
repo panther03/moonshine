@@ -979,7 +979,7 @@ static void GuideScreen(void)
 
 		ClearScreen();
 		PrintCenter(BLACK, MENU_POS_Y, "Moonshine guide");
-		PrintCenter(BLACK, MENU_POS_Y + 20, "V2.3.2 Frame By Frame");
+		PrintCenter(BLACK, MENU_POS_Y + 20, "V2.3.3 Frame By Frame");
 		GRRLIB_Rectangle(MENU_POS_X, MENU_POS_Y + 92,
 			640 - MENU_POS_X*2, 286, 0xFFFFFFD8, true);
 		if (reading)

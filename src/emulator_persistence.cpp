@@ -16,13 +16,14 @@ namespace EmulatorPersistence {
 namespace {
 
 constexpr u32 kRecordMagic = 0x53554346u;  // 'SUCF'
-constexpr u16 kRecordVersion = 11;
+constexpr u16 kRecordVersion = 12;
 constexpr u32 kCfgSizeV6 = 5144;
 constexpr u32 kCfgSizeV7 = 5152;
 constexpr u32 kRecordPayloadSizeV8 = sizeof(SusamuneCfg) + sizeof(SusamuneMarioColorsCfg);
 constexpr u32 kRecordPayloadSizeV9 = kRecordPayloadSizeV8 + sizeof(SusamuneFluddColorsCfg);
 constexpr u32 kRecordPayloadSizeV10 = kRecordPayloadSizeV9 + sizeof(SusamuneILEpisodesCfg);
-constexpr u32 kRecordPayloadSize = kRecordPayloadSizeV10 + sizeof(SusamunePracticeDisplayStyleCfg);
+constexpr u32 kRecordPayloadSizeV11 = kRecordPayloadSizeV10 + sizeof(SusamunePracticeDisplayStyleCfg);
+constexpr u32 kRecordPayloadSize = kRecordPayloadSizeV11 + SUSAMUNE_CFG_SETTINGS_TAIL_SIZE;
 constexpr u32 kSectorSize = 0x2000;
 constexpr u32 kFileSize = kSectorSize * 2;
 constexpr char kFileName[] = "susamune_settings";
@@ -40,10 +41,13 @@ struct Record {
     SusamuneFluddColorsCfg fluddColors;
     SusamuneILEpisodesCfg ilEpisodes;
     SusamunePracticeDisplayStyleCfg practiceDisplays;
+    u8 settingsTail[SUSAMUNE_CFG_SETTINGS_TAIL_SIZE];
     u8 padding[kSectorSize - 32 - kRecordPayloadSize];
 };
 static_assert(sizeof(Record) == kSectorSize, "card record must fill one sector");
 static_assert(sizeof(SusamuneCfg) == kCfgSizeV7, "legacy card config prefix moved");
+static_assert(__builtin_offsetof(Record, settingsTail) == 32 + kRecordPayloadSizeV11,
+              "V12 settings must follow the complete unchanged V11 payload");
 
 struct RecordV1 {
     u32 magic;
@@ -126,6 +130,7 @@ struct State {
     SusamuneFluddColorsCfg fluddColors;
     SusamuneILEpisodesCfg ilEpisodes;
     SusamunePracticeDisplayStyleCfg practiceDisplays;
+    u8 settingsTail[SUSAMUNE_CFG_SETTINGS_TAIL_SIZE];
     DVDDiskID diskID;
     u32 requested;
     u32 completed;
@@ -170,7 +175,8 @@ void initBlank(SusamuneCfg *cfg) {
                  SUSAMUNE_CFG_FLAG_MOVEMENT_STYLE |
                  SUSAMUNE_CFG_FLAG_NATIVE_TIMER_STYLE |
                  SUSAMUNE_CFG_FLAG_MARIO_COLORS | SUSAMUNE_CFG_FLAG_FLUDD_COLORS |
-                 SUSAMUNE_CFG_FLAG_IL_EPISODES | SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE;
+                 SUSAMUNE_CFG_FLAG_IL_EPISODES | SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE |
+                 SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
     cfg->ilingPbs.magic = SUSAMUNE_ILING_PB_MAGIC;
     cfg->ilingPbs.version = SUSAMUNE_ILING_PB_VERSION;
     cfg->ilingPbs.count = SUSAMUNE_ILING_PB_LEGACY_SLOT_COUNT;
@@ -330,6 +336,8 @@ void publishILEpisodes() {
 }
 
 void publishPracticeDisplays() {
+    memcpy((void *)SUSAMUNE_CFG_SETTINGS_TAIL(&sState->cfg), sState->settingsTail, sizeof(sState->settingsTail));
+    DCStoreRange((void *)SUSAMUNE_CFG_SETTINGS_TAIL(&sState->cfg), sizeof(sState->settingsTail));
     memcpy(SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR, &sState->practiceDisplays,
            sizeof(sState->practiceDisplays));
     DCStoreRange(SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR, sizeof(sState->practiceDisplays));
@@ -438,6 +446,16 @@ bool validV9(const Record *source) {
            checksum(record) == record->checksum;
 }
 
+bool validV11(const Record *source) {
+    Record *record = const_cast<Record *>(source);
+    return record->magic == kRecordMagic && record->version == 11 &&
+           record->payloadSize == kRecordPayloadSizeV11 &&
+           record->gameVersion == SUSAMUNE_GAME_VERSION &&
+           record->cfg.magic == SUSAMUNE_CFG_MAGIC &&
+           record->cfg.version == SUSAMUNE_CFG_VERSION &&
+           checksum(record) == record->checksum;
+}
+
 bool validV10(const Record *source) {
     Record *record = const_cast<Record *>(source);
     return record->magic == kRecordMagic && record->version == 10 &&
@@ -538,6 +556,7 @@ s32 writeRecordLocked() {
     memcpy(&record->fluddColors, &sState->fluddColors, sizeof(sState->fluddColors));
     memcpy(&record->ilEpisodes, &sState->ilEpisodes, sizeof(sState->ilEpisodes));
     memcpy(&record->practiceDisplays, &sState->practiceDisplays, sizeof(sState->practiceDisplays));
+    memcpy(record->settingsTail, sState->settingsTail, sizeof(sState->settingsTail));
     record->checksum = checksum(record);
     OSUnlockMutex(&sState->mutex);
 
@@ -737,6 +756,7 @@ void initState() {
     initFluddColors(&sState->fluddColors);
     initILEpisodes(&sState->ilEpisodes);
     SusamunePracticeDisplayStyleInit(&sState->practiceDisplays);
+    memset(sState->settingsTail, SUSAMUNE_CFG_UNSET, sizeof(sState->settingsTail));
     publishMarioColors();
     publishFluddColors();
     publishILEpisodes();
@@ -792,6 +812,7 @@ s32 loadRecords(void *mountWork, Record *record) {
                           slot * kSectorSize);
         if (result != CARD_ERROR_READY) break;
         const bool current = valid(record);
+        const bool v11 = !current && validV11(record);
         const bool v10 = !current && validV10(record);
         const bool v9 = !current && validV9(record);
         const bool v8 = !current && validV8(record);
@@ -803,17 +824,17 @@ s32 loadRecords(void *mountWork, Record *record) {
         const bool v2 = !current && !v5 && !v4 && !v3 && validV2(record);
         const bool v1 =
             !current && !v5 && !v4 && !v3 && !v2 && validV1(record);
-        if ((current || v10 || v9 || v8 || v7 || v6 || v5 || v4 || v3 || v2 || v1) &&
+        if ((current || v11 || v10 || v9 || v8 || v7 || v6 || v5 || v4 || v3 || v2 || v1) &&
             (!haveRecord || newer(record->generation, bestGeneration))) {
             initMarioColors(&sState->marioColors);
             initFluddColors(&sState->fluddColors);
             initILEpisodes(&sState->ilEpisodes);
-            if (current || v10 || v9 || v8) {
+            if (current || v11 || v10 || v9 || v8) {
                 memcpy(&sState->cfg, &record->cfg, sizeof(sState->cfg));
                 memcpy(&sState->marioColors, &record->marioColors,
                        sizeof(sState->marioColors));
-                if (current || v10 || v9) memcpy(&sState->fluddColors, &record->fluddColors, sizeof(sState->fluddColors));
-                if (current || v10) memcpy(&sState->ilEpisodes, &record->ilEpisodes, sizeof(sState->ilEpisodes));
+                if (current || v11 || v10 || v9) memcpy(&sState->fluddColors, &record->fluddColors, sizeof(sState->fluddColors));
+                if (current || v11 || v10) memcpy(&sState->ilEpisodes, &record->ilEpisodes, sizeof(sState->ilEpisodes));
             } else if (v7) {
                 migrateRecordV7(&sState->cfg, &sState->marioColors, &record->cfg);
             } else if (v6) {
@@ -829,11 +850,14 @@ s32 loadRecords(void *mountWork, Record *record) {
                                  reinterpret_cast<const u8 *>(&record->cfg),
                                  oldSize, v4 || v5, v5);
             }
-            if (current) memcpy(&sState->practiceDisplays, &record->practiceDisplays,
+            if (current || v11) memcpy(&sState->practiceDisplays, &record->practiceDisplays,
                                 sizeof(sState->practiceDisplays));
             else SusamunePracticeDisplayStyleFromWallkick(&sState->practiceDisplays, &sState->cfg.wallkickStyle);
             sState->cfg.flags |= SUSAMUNE_CFG_FLAG_FLUDD_COLORS | SUSAMUNE_CFG_FLAG_IL_EPISODES |
                                 SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE;
+            if (current) memcpy(sState->settingsTail, record->settingsTail, sizeof(sState->settingsTail));
+            else memset(sState->settingsTail, SUSAMUNE_CFG_UNSET, sizeof(sState->settingsTail));
+            sState->cfg.flags |= SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
             bestGeneration = record->generation;
             sState->activeRecord = slot;
             sState->initialSave = !current;
@@ -972,6 +996,7 @@ u32 commit() {
            sizeof(sState->fluddColors));
     memcpy(&sState->ilEpisodes, SUSAMUNE_IL_EPISODES_LIVE_PTR,
            sizeof(sState->ilEpisodes));
+    memcpy(sState->settingsTail, (const void *)SUSAMUNE_CFG_SETTINGS_TAIL(&sState->cfg), sizeof(sState->settingsTail));
     memcpy(&sState->practiceDisplays, SUSAMUNE_PRACTICE_DISPLAY_STYLE_LIVE_PTR,
            sizeof(sState->practiceDisplays));
     const u32 ticket = ++sState->requested;

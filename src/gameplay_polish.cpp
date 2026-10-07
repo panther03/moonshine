@@ -12,6 +12,10 @@
 #include "susamune/settings.hxx"
 #include "susamune/split_events.hxx"
 
+extern "C" void *gpEmitterManager4D2;
+extern "C" void susamuneRetailHudParticles(JDrama::TViewObj *, u32, JDrama::TGraphics *)
+    asm("perform__15TEmitterViewObjFUlPQ26JDrama9TGraphics");
+
 namespace {
 
 bool pauseOpen() {
@@ -92,6 +96,18 @@ void requestSavePrompt(TMarDirector *director) {
 }
 
 }  // namespace
+
+extern "C" __attribute__((section(".foxtrot.text")))
+void susamunePracticeHudParticles(JDrama::TViewObj *view,
+                                  u32 cue, JDrama::TGraphics *graphics) {
+    static_assert(sizeof(JDrama::TViewObj) == 0x10, "emitter manager offset changed");
+    // Coin sparkles belong to the separate 2D emitter pass, not the HUD pane.
+    // Keep animation/lifetimes running and leave all world emitters alone.
+    if (sCinemaHidden && gpEmitterManager4D2 &&
+        *reinterpret_cast<void **>(reinterpret_cast<u8 *>(view) + 0x10) == gpEmitterManager4D2)
+        cue &= ~8u;
+    susamuneRetailHudParticles(view, cue, graphics);
+}
 
 extern "C" void susamuneFireRideYoshi(TMarDirector *director, TYoshi *yoshi) {
     director->fireRideYoshi(yoshi);

@@ -78,7 +78,7 @@ extern "C" __declspec(dllexport) int runAdaptive(StateSlotPool*p,StatePoolMemory
  sPool=*p;sPoolMemory=*m;capacity=StatePoolMemoryCapacity(m);staging=t;stagingSize=ts;work=w;fault=0;trapCount=secondCalls=0;lastCompact=lastQuick=-1;
  StateCodec::WriteSpan output[3]={{t,ts},{0,0},{0,0}};poolWriteSpans(p->used,capacity-p->used,output+1);
  StateCodec::Result result;
- const bool fits=compressCandidate(source,count,rawSize,slot,result);
+ u32 sizes[3]={};const bool fits=compressCandidate(source,count,rawSize,slot,result,sizes);
  *p=sPool;*out=result;return trapCount?-1:fits;
 }
 ''', encoding="ascii")

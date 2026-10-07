@@ -21,6 +21,8 @@ int count();
 const char *label(int entry);
 const char *shortLabel(int entry);
 bool canChooseEpisode(int entry);
+bool choosesPlazaState(int entry);
+const char *plazaStateName(int choice);
 int selectedEpisode(int entry);
 void setEpisode(int entry, int episode);
 void resetEpisodeChoices();
@@ -96,6 +98,8 @@ void onSavestateSaved();
 void onSavestateLoaded();
 // Revoke PB, Records and challenge credit without changing the QFT clock.
 void invalidateForAssist(u8 reasons = Assist::OTHER);
+u8 rejectionCause();
+const char *rejectionText(u8 cause);
 bool achievementChimeBlocked();
 
 // PB result banner, drawn through Menu's shared no-allocation renderer.

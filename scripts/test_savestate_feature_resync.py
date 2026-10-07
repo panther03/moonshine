@@ -14,10 +14,8 @@ SAVESTATE = (ROOT / "src" / "savestate.cpp").read_text(encoding="utf-8")
 class SavestateFeatureResyncTests(unittest.TestCase):
     def test_snapshot_records_the_only_rewound_patch_features(self):
         self.assertIn("SETTING_FRUIT_NEVER_TIMEOUT", FEATURES)
-        self.assertRegex(
-            FEATURES,
-            r"id == SETTING_FAST_TEXT && addr >= 0x80500000u",
-        )
+        self.assertIn("SAVESTATE_FAST_TEXT     = 1 << 1", FEATURES)
+        self.assertNotIn("id == SETTING_FAST_TEXT && addr >= 0x80500000u", FEATURES)
         self.assertIn("u8 featuresSavestateState();", FEATURES_HXX)
         self.assertIn("h->feature_state = featuresSavestateState();", SAVESTATE)
 

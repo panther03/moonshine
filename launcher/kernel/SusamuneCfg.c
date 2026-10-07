@@ -60,6 +60,7 @@ still dropped, since those sections are regenerated wholesale.
 #include "susamune/susamune_cfg.h"
 #include "susamune/data_paths.h"
 #include "susamune/layout_profile.h"
+#include "susamune/failure_banner_style.h"
 #include "susamune/mod_bin.h"
 
 // Set by DIinit() from the disc header; SusamuneCfgInit() runs after it.
@@ -130,7 +131,7 @@ static const char *const FluddColorKeys[SUSAMUNE_FLUDD_COLORS_COUNT] =
 // Enough for the whole file: the settings plus display payloads for all
 // three versions, section headers, and the comment banner.
 // A file larger than this is refused rather than truncated (see WriteIniFile).
-#define SUSAMUNE_INI_BUF_SIZE 49152
+#define SUSAMUNE_INI_BUF_SIZE MOONSHINE_INI_BUFFER_LIMIT
 
 // Longest section name we build: "settings" + '_' + "pal" + NUL.
 #define SUSAMUNE_SECTION_NAME_MAX 24
@@ -5484,7 +5485,7 @@ static void ApplyWallkickStyleKey(struct SusamuneWallkickStyleCfg *cfg,
 	}
 }
 
-static void ApplyMovementOverlayStyleKey(
+static bool ApplyMovementOverlayStyleKey(
 	struct SusamuneMovementOverlayStyleCfg *cfg, const char *prefix,
 	const char *key, const char *text, u32 colors)
 {
@@ -5497,7 +5498,7 @@ static void ApplyMovementOverlayStyleKey(
 	const char *field;
 
 	if (strncmp(key, prefix, prefixLen) != 0 || key[prefixLen] != '_')
-		return;
+		return false;
 	field = key + prefixLen + 1;
 	if (strcmp(field, "x") == 0 && ParseU16(text, &v16)) cfg->x = v16;
 	else if (strcmp(field, "y") == 0 && ParseU16(text, &v16)) cfg->y = v16;
@@ -5525,10 +5526,12 @@ static void ApplyMovementOverlayStyleKey(
 				cfg->rgb[i][0] = rgb[0];
 				cfg->rgb[i][1] = rgb[1];
 				cfg->rgb[i][2] = rgb[2];
-				return;
+				return true;
 			}
 		}
+		return false;
 	}
+	return true;
 }
 
 static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
@@ -5538,6 +5541,24 @@ static void ApplyMovementStyleKey(struct SusamuneMovementStyleCfg *cfg,
 	                             SUSAMUNE_ROLLOUT_STYLE_COLOR_COUNT);
 	ApplyMovementOverlayStyleKey(&cfg->dust, "dust", key, text,
 	                             SUSAMUNE_DUST_STYLE_COLOR_COUNT);
+}
+
+static void ApplyFailureBannerStyleKey(struct SusamuneWallkickStyleCfg *wallkick,
+	const char *key, const char *text)
+{
+	struct MoonshineFailureStyle failure;
+	struct SusamuneMovementOverlayStyleCfg style;
+	if (strncmp(key, "streak_failure_", 15) != 0) return;
+	MoonshineFailureStyleRead(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
+	if (!MoonshineFailureStyleValid(&failure))
+		MoonshineFailureStyleInit(&failure);
+	memset(&style, 0, sizeof(style));
+	memcpy(&style, &failure.x, sizeof(failure) - sizeof(failure.magic));
+	if (!ApplyMovementOverlayStyleKey(&style, "streak_failure", key, text, 1)) return;
+	memcpy(&failure.x, &style, sizeof(failure) - sizeof(failure.magic));
+	MoonshineFailureStyleWrite(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
 }
 
 static const char *const PracticeDisplayKeys[SUSAMUNE_PRACTICE_DISPLAY_COUNT] = {
@@ -5787,6 +5808,7 @@ static void ParseIni(char *text, struct SusamuneCfg *cfg)
 			ApplyCreationKey(&cfg->creation, Trim(line), Trim(eq + 1));
 			ApplyWallkickStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
 			ApplyMovementStyleKey(&cfg->movementStyle, Trim(line), Trim(eq + 1));
+			ApplyFailureBannerStyleKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
 			practiceStylesPresent |= ApplyPracticeDisplayStyleKey(Trim(line), Trim(eq + 1));
 			ApplyNativeTimerStyleKey(&cfg->nativeTimerStyle, Trim(line), Trim(eq + 1));
 			ApplyNativeTimerModesKey(&cfg->wallkickStyle, Trim(line), Trim(eq + 1));
@@ -6145,6 +6167,19 @@ static void EmitPracticeDisplayStyles(FIL *f, int *err)
 	}
 }
 
+static void EmitFailureBannerStyle(FIL *f, int *err,
+	const struct SusamuneWallkickStyleCfg *wallkick)
+{
+	struct MoonshineFailureStyle failure;
+	struct SusamuneMovementOverlayStyleCfg style;
+	MoonshineFailureStyleRead(&failure, wallkick,
+		SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR);
+	if (!MoonshineFailureStyleValid(&failure)) return;
+	memset(&style, 0, sizeof(style));
+	memcpy(&style, &failure.x, sizeof(failure) - sizeof(failure.magic));
+	EmitMovementOverlayStyle(f, err, "streak_failure", &style, 1);
+}
+
 static void EmitNativeTimerStyle(FIL *f, int *err,
 	                             const struct SusamuneNativeTimerStyleCfg *cfg)
 {
@@ -6354,6 +6389,7 @@ static void EmitCreationSection(FIL *f, int *err,
 	EmitFluddColors(f, err, FluddColorsBlock());
 	EmitILEpisodes(f, err);
 	EmitPracticeDisplayStyles(f, err);
+	EmitFailureBannerStyle(f, err, &cfg->wallkickStyle);
 	if (cfg->wallkickStyle.nativeTimerModesMagic == SUSAMUNE_NATIVE_TIMER_MODES_MAGIC)
 		Emit(f, err, line, (u32)_sprintf(line, "native_timer_custom_mask = %u\r\n",
 		     (((u32)cfg->wallkickStyle.nativeTimerCustomMask[0] << 8) |
@@ -6422,7 +6458,7 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	const char *path = SusamuneCfgIniPath();
 	char  tempPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
 	char  backupPath[SUSAMUNE_INI_TRANSACTION_PATH_MAX];
-	char *buf;
+	char *buf = NULL;
 	char *line;
 	UINT  read = 0;
 	FSIZE_t fileSize = 0;
@@ -6437,11 +6473,6 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	bool  wroteQftDisplay = false;
 	bool  wroteCreation = false;
 	bool  hadOriginal = false;
-
-	buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
-	if (buf == NULL)
-		return FR_NOT_ENOUGH_CORE;
-	buf[0] = '\0';
 
 	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
 	    !BuildIniSiblingPath(backupPath, sizeof(backupPath), path, ".bak"))
@@ -6479,7 +6510,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 			free(buf);
 			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
 		}
-		ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1, &read);
+		buf = (char*)malloca((u32)fileSize + 1, 32);
+		if (buf == NULL)
+		{
+			closeRet = f_close(&f);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, (u32)fileSize, &read);
 		closeRet = f_close(&f);
 		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
 		{
@@ -6494,6 +6531,13 @@ static int WriteIniFile(const struct SusamuneCfg *cfg)
 	{
 		free(buf);
 		return ret;
+	}
+	else
+	{
+		buf = (char*)malloca(1, 32);
+		if (buf == NULL)
+			return FR_NOT_ENOUGH_CORE;
+		buf[0] = '\0';
 	}
 
 	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);
@@ -6846,6 +6890,7 @@ void SusamuneCfgInit(void)
 	BuildSectionName(QftDisplaySection, SUSAMUNE_INI_SECTION_QFT_DISPLAY, region);
 	BuildSectionName(CreationSection, SUSAMUNE_INI_SECTION_CREATION, region);
 
+	cfg->flags |= SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;
 	for (i = 0; i < SUSAMUNE_CFG_TOTAL_SETTINGS; i++)
 		SusamuneCfgSetSetting(cfg, i, SUSAMUNE_CFG_UNSET);
 	for (i = 0; i < SUSAMUNE_CFG_MAX_BINDS; i++)
@@ -6913,7 +6958,7 @@ void SusamuneCfgInit(void)
 	                 SUSAMUNE_CFG_FLAG_MARIO_COLORS |
 	                 SUSAMUNE_CFG_FLAG_FLUDD_COLORS |
 	                 SUSAMUNE_CFG_FLAG_IL_EPISODES |
-	                 SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE |
+	                 SUSAMUNE_CFG_FLAG_PRACTICE_DISPLAY_STYLE | SUSAMUNE_CFG_FLAG_SETTINGS_TAIL |
 	                 SUSAMUNE_CFG_FLAG_STATE_POOL_EXPANSION |
 	                 SUSAMUNE_CFG_FLAG_STATE_CODEC_RELOCATED |
 	                 MOONSHINE_LAYOUT_CFG_FLAG;
@@ -6947,7 +6992,7 @@ void SusamuneCfgInit(void)
 		}
 		else
 		{
-			buf = (char*)malloca(SUSAMUNE_INI_BUF_SIZE, 32);
+			buf = (char*)malloca((u32)fileSize + 1, 32);
 			if (buf == NULL)
 			{
 				closeRet = f_close(&f);
@@ -6956,7 +7001,7 @@ void SusamuneCfgInit(void)
 			else
 			{
 				read = 0;
-				ret = f_read(&f, buf, SUSAMUNE_INI_BUF_SIZE - 1,
+				ret = f_read(&f, buf, (u32)fileSize,
 				             &read);
 				closeRet = f_close(&f);
 				if (ret == FR_OK && read == fileSize && closeRet == FR_OK)
@@ -7009,6 +7054,7 @@ void SusamuneCfgInit(void)
 	sync_after_write(fluddColors, sizeof(*fluddColors));
 	sync_after_write(SUSAMUNE_IL_EPISODES_PHYS_PTR, sizeof(struct SusamuneILEpisodesCfg));
 	sync_after_write(SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR, sizeof(struct SusamunePracticeDisplayStyleCfg));
+	sync_after_write((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
 	sync_after_write(progress, sizeof(struct SusamuneProgressCfg));
 	sync_after_write(playlists, sizeof(struct SusamuneStagePlaylistsCfg));
 	sync_after_write(targets, sizeof(struct SusamuneStageTargetsCfg));
@@ -7052,6 +7098,7 @@ void SusamuneCfgService(void)
 	sync_before_read(FluddColorsBlock(), sizeof(struct SusamuneFluddColorsCfg));
 	sync_before_read(SUSAMUNE_IL_EPISODES_PHYS_PTR, sizeof(struct SusamuneILEpisodesCfg));
 	sync_before_read(SUSAMUNE_PRACTICE_DISPLAY_STYLE_PHYS_PTR, sizeof(struct SusamunePracticeDisplayStyleCfg));
+	sync_before_read((void *)SUSAMUNE_CFG_SETTINGS_TAIL(cfg), SUSAMUNE_CFG_SETTINGS_TAIL_SIZE);
 	seq = cfg->saveSeq;
 
 	ret = WriteIniFile(cfg);

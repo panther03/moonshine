@@ -67,14 +67,18 @@ extern "C" __declspec(dllexport) void rate(float value){cadence=value;}
 
     def test_allowlist_contains_only_audited_presentation_settings(self):
         expected = {f"SETTING_FAVORITES_{i}" for i in range(11)} | {
-            f"SETTING_FAVORITES_EXTRA_{i}" for i in range(8)} | {
+            f"SETTING_FAVORITES_EXTRA_{i}" for i in range(10)} | {
             "SETTING_RNG_FAVORITES", "SETTING_NATIVE_TIMER_X", "SETTING_NATIVE_TIMER_Y",
             "SETTING_NATIVE_TIMER_SCALE", "SETTING_FREE_CAMERA_SPEED",
             "SETTING_FREE_CAMERA_SENSITIVITY",
             "SETTING_FREE_CAMERA_SMOOTHING", "SETTING_FREE_CAMERA_HIDE_HUD",
             "SETTING_FREE_CAMERA_STRAFE_REVERSE", "SETTING_METADATA_HORIZONTAL",
             "SETTING_GHOST_INPUTS", "SETTING_TAS_BANNER",
-            "SETTING_GB_SKIP_DISPLAY", "SETTING_JUMP_DISPLAY"}
+            "SETTING_GB_SKIP_DISPLAY", "SETTING_JUMP_DISPLAY",
+            "SETTING_SYSTEM_MESSAGES", "SETTING_SAVESTATE_ERRORS",
+            "SETTING_STREAK_FAILURE_BANNER", "SETTING_STREAK_FAILURE_X",
+            "SETTING_STREAK_FAILURE_Y", "SETTING_STREAK_FAILURE_SIZE",
+            "SETTING_STREAK_FAILURE_DURATION"}
         actual = {name for i, name in enumerate(self.ids) if self.lib.excluded(i)}
         self.assertEqual(actual, expected)
 

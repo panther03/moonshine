@@ -35,7 +35,11 @@ class PracticeDisplayEditorTests(unittest.TestCase):
 #define SETTING_ENUM(name,key) name,
 enum SettingId { SUSAMUNE_SETTING_LIST(SETTING_ENUM) SETTING_COUNT };
 #undef SETTING_ENUM
-struct Settings {static const char *name(SettingId){return "Setting";}};
+struct Settings {
+ static const char *name(SettingId){return "Setting";}
+ int get(SettingId id)const{return id==SETTING_STREAK_FAILURE_SIZE?5:
+  id==SETTING_STREAK_FAILURE_X?7:id==SETTING_STREAK_FAILURE_Y?17:0;}
+} gSettings;
 #define API extern "C" __declspec(dllexport)
 extern "C" void *memset(void*p,int v,unsigned long long n){u8*b=(u8*)p;while(n--)*b++=(u8)v;return p;}
 extern "C" void *memcpy(void*d,const void*s,unsigned long long n){u8*a=(u8*)d;const u8*b=(const u8*)s;while(n--)*a++=*b++;return d;}
@@ -69,6 +73,7 @@ const u8 kHealthDefaults[2][3]={{255,255,255},{0,255,255}};
             "CreationExtras::beginOverlayEditor", "CreationExtras::beginWallkickEditor",
             "CreationExtras::beginRolloutEditor", "CreationExtras::beginDustEditor",
             "CreationExtras::beginPracticeDisplayEditor", "CreationExtras::beginNativeTimerEditor",
+            "CreationExtras::beginFailureBannerEditor",
             "CreationExtras::beginColorEditor", "CreationExtras::beginWordEditor",
             "CreationExtras::adoptPracticeDisplays", "CreationExtras::stagePracticeDisplaysInto",
             "CreationExtras::updateEditor"))
@@ -95,7 +100,7 @@ static u32 visualCopy(u8*out){
 #define COPY(v) memcpy(out+n,&state.v,sizeof(state.v));n+=sizeof(state.v)
  COPY(mWallkickStyle);COPY(mWallkickRgb);COPY(mRolloutStyle);COPY(mRolloutRgb);
  COPY(mDustStyle);COPY(mDustRgb);COPY(mPracticeDisplays);COPY(mNativeTimerStyle);
- COPY(mColors);COPY(mDefaultColors);COPY(mWordStyle);COPY(mWordRgb);COPY(mWords);
+ COPY(mColors);COPY(mDefaultColors);COPY(mWordStyle);COPY(mWordRgb);COPY(mWords);COPY(mFailureBanner);
 #undef COPY
  return n;
 }
@@ -122,7 +127,7 @@ API void begin(unsigned target){
  else if(target==2)state.beginDustEditor();else if(target<6)state.beginPracticeDisplayEditor(target-3);
  else if(target==6)state.beginNativeTimerEditor();
  else if(target==7)state.beginColorEditor(0,SUSAMUNE_CREATION_COLOR_COUNT,"All HUD");
- else state.beginWordEditor(0);
+ else if(target==8)state.beginWordEditor(0);else state.beginFailureBannerEditor();
 }
 API u32 editing(){return state.editing();}
 API u32 slots(){return state.mEditor.mTextSlots;}
@@ -132,7 +137,7 @@ API void edit(unsigned option){
  TMarioGamePad pad={};
  if(option==0)pad.mButtons.mRapidInput=TMarioGamePad::DPAD_RIGHT;
  else if(option==1)pad.mButtons.mInput=pad.mButtons.mFrameInput=TMarioGamePad::R;
- else{state.mEditor.mOption=OPTION_TEXT_L;pad.mButtons.mInput=pad.mButtons.mFrameInput=TMarioGamePad::CSTICK_RIGHT;}
+ else{state.mEditor.mOption=OPTION_TEXT_L;pad.mButtons.mInput=pad.mButtons.mFrameInput=TMarioGamePad::CSTICK_LEFT;}
  state.updateEditor(&pad);
 }
 API void finish(unsigned keep){
@@ -181,7 +186,7 @@ API unsigned drawn(unsigned field){if(field==0)return draws;if(field==1)return d
         return bytes(data[:length])
 
     def test_all_old_and_new_editor_backups_restore_exactly_on_cancel(self):
-        for target, slots in enumerate((7, 5, 7, 4, 7, 2, 15, 25, 32)):
+        for target, slots in enumerate((7, 5, 7, 4, 7, 2, 15, 25, 32, 1)):
             with self.subTest(target=target):
                 self.lib.reset()
                 before = self.snapshot()
@@ -196,7 +201,7 @@ API unsigned drawn(unsigned field){if(field==0)return draws;if(field==1)return d
                 self.assertEqual((self.lib.editing(), self.lib.dirty()), (0, 0))
 
     def test_confirmed_edit_survives_later_canceled_edit_and_scratch_reuse(self):
-        for target in range(9):
+        for target in range(10):
             with self.subTest(target=target):
                 self.lib.reset()
                 before = self.snapshot()
@@ -206,7 +211,7 @@ API unsigned drawn(unsigned field){if(field==0)return draws;if(field==1)return d
                 saved = self.snapshot()
                 self.assertNotEqual(saved, before)
                 self.assertEqual(self.lib.dirty(), 1)
-                self.lib.begin((target + 1) % 9)
+                self.lib.begin((target + 1) % 10)
                 self.lib.edit(2)
                 self.lib.finish(0)
                 self.assertEqual(self.snapshot(), saved)

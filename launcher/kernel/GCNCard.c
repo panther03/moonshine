@@ -602,6 +602,24 @@ int GCNCard_Load(int slot)
 	}
 
 #if GCNCARD_ENABLE_SLOT_B
+	const u32 cardOffset = slot == 0 ? 0 : memCard[0].size;
+#else
+	const u32 cardOffset = 0;
+#endif
+	/* This fork reserves 3 MiB for cards and ISO cache, not upstream's
+	 * 16 MiB card allowance. Refuse before copying or modifying any image. */
+	if (cardOffset > NIN_MEM2_DISC_CACHE_SIZE ||
+		fd.obj.objsize > NIN_MEM2_DISC_CACHE_SIZE - cardOffset)
+	{
+		dbgprintf("EXI: Memory card images exceed the 3 MiB reservation. Files unchanged.\r\n");
+		f_close(&fd);
+		BootStatusError(-10, -5);
+		mdelay(4000);
+		Shutdown();
+		return -5;
+	}
+
+#if GCNCARD_ENABLE_SLOT_B
 	if (slot == 0)
 	{
 		// Slot A starts at GCNCard_base.
@@ -612,18 +630,6 @@ int GCNCard_Load(int slot)
 	else
 	{
 		// Slot B starts immediately after Slot A.
-		// Make sure both cards fit within 16 MB.
-		if (memCard[0].size + fd.obj.objsize > (16*1024*1024))
-		{
-			// Not enough memory for both cards.
-			// Disable Slot B.
-			dbgprintf("EXI: Slot A is %u MB; not enough space for Slot %c, which is %u MB.\r\n",
-					"EXI: Slot %c has been disabled.\r\n",
-					memCard[0].size / 1024 / 1024, (slot+'A'),
-					fd.obj.objsize / 1024 / 1024, (slot+'A'));
-			f_close(&fd);
-			return -4;
-		}
 		ctx->base = memCard[0].base + memCard[0].size;
 	}
 #else /* !GCNCARD_ENABLE_SLOT_B */

@@ -18,7 +18,7 @@ INPUT = struct.Struct(">IHbbbbBBBBbB")
 SPLIT = struct.Struct(">IIHBB")
 
 
-def teaching_file(inputs=None, splits=None, base=None, flags=0):
+def teaching_file(inputs=None, splits=None, base=None, flags=0, fludd=None):
     if base is None:
         base = build_ghost(version=4)
     if inputs is None:
@@ -28,14 +28,17 @@ def teaching_file(inputs=None, splits=None, base=None, flags=0):
     if splits is None:
         splits = [(102, 0x1AF7E430, 0, 0, 0),
                   (104, 0x1AF7E430, 0, 1, 0)]
-    data = b"".join(INPUT.pack(*item) for item in inputs)
+    if fludd is not None:
+        assert len(fludd) == len(inputs)
+    data = b"".join(INPUT.pack(*item) + (fludd[i] if fludd is not None else b"")
+                    for i, item in enumerate(inputs))
     data += b"".join(SPLIT.pack(*item) for item in splits)
-    section = struct.pack(">IHH6I", 0x53475449, 1, 32, len(inputs),
+    section = struct.pack(">IHH6I", 0x53475449, 2 if fludd is not None else 1, 32, len(inputs),
                           len(splits), flags, zlib.crc32(data), 0, 0) + data
     out = bytearray(base + section)
-    struct.pack_into(">H", out, 4, 5)
+    struct.pack_into(">H", out, 4, 6 if fludd is not None else 5)
     struct.pack_into(">I", out, 8, len(out))
-    struct.pack_into(">I", out, 24, 3)
+    struct.pack_into(">I", out, 24, 7 if fludd is not None else 3)
     struct.pack_into(">I", out, 72, len(out) - 256)
     return rechecksum_ghost(bytes(out))
 
@@ -50,6 +53,42 @@ def mutate_section(data, offset, value):
 
 
 class TeachingTests(unittest.TestCase):
+    def test_v6_all_nozzles_aim_and_emission(self):
+        for nozzle in range(6):
+            for pitch in (0, 1024, 3072, 4095):
+                observation = bytes([0x18 | nozzle, 0x81, 127, 30, 255,
+                                     0xf0 | (pitch >> 8), pitch & 255, 70])
+                result = ghost.validate_ghost(teaching_file(fludd=[observation] * 3))
+                self.assertEqual(result['version'], 6)
+                self.assertEqual(result['teaching']['input_count'], 3)
+        ghost.validate_ghost(teaching_file(fludd=[bytes(8)] * 3))
+
+    def test_v6_invalid_observation_and_version_pair(self):
+        data = teaching_file(fludd=[bytes(8)] * 3)
+        for sample in (bytes([1,0,0,0,0,0,0,0]), bytes([0,1,0,0,0,0,0,0]),
+                       bytes([14,0,0,0,0,0,0,0]), bytes([8,0,0,0,0,0,0,1]),
+                       bytes([8,0,0,0,0,4,1,0]), bytes([0x38,0,0,0,0,0,0,0])):
+            with self.subTest(sample=sample), self.assertRaises(ghost.FormatError):
+                ghost.validate_ghost(mutate_section(data, 32 + 16, sample))
+        with self.assertRaises(ghost.FormatError):
+            ghost.validate_ghost(mutate_section(data, 4, b'\x00\x01'))
+        with self.assertRaises(ghost.FormatError):
+            ghost.validate_ghost(mutate_section(teaching_file(), 4, b'\x00\x02'))
+
+    def test_v6_maximum_reuses_legacy_input_budget(self):
+        samples = [(0,0,0,0,0,0,0)] + [(0,0,0,0,4,0,0)] * 17982
+        inputs = [(i*2,0,0,0,0,0,0,0,0,0,0,0) for i in range(35965)]
+        base = build_ghost(version=4, samples=samples, start_qf=0)
+        data = teaching_file(inputs, [], base, fludd=[bytes(8)] * len(inputs))
+        self.assertEqual(ghost.validate_ghost(data)['end_qf'], 71928)
+        self.assertEqual(36000 * 24, 54000 * 16)
+        self.assertLessEqual(len(data), 1298016)
+        # A long legacy file remains valid, but cannot masquerade as V6.
+        base = build_ghost(version=4, samples=samples + [(0,0,0,0,4,0,0)], start_qf=0)
+        ghost.validate_ghost(teaching_file([], [], base))
+        with self.assertRaises(ghost.FormatError):
+            ghost.validate_ghost(teaching_file([], [], base, fludd=[]))
+
     def test_v5_input_split_and_envelope_round_trip(self):
         data = teaching_file()
         result = ghost.validate_ghost(data)
@@ -151,7 +190,7 @@ class TeachingTests(unittest.TestCase):
   int r=BeginCanonicalValidation(p,n,0,false); unsigned int passes=0;
   if(r!=VALIDATE_OK)return r;
   do { u32 before=ValidationOffset; r=ContinueCanonicalValidation();
-   if(ValidationOffset<=before || ValidationOffset-before>0x4000 || ++passes>200)return -2;
+   if(ValidationOffset-before>0x4000 || ++passes>200 || (r<0 && ValidationOffset<=before))return -2;
   } while(r<0);
   return r;
  }
@@ -169,6 +208,7 @@ class TeachingTests(unittest.TestCase):
             decoder.validate.restype = ctypes.c_int
             try:
                 valid = [build_ghost(version=3), build_ghost(version=4), teaching_file(),
+                         teaching_file(fludd=[bytes([0x18, 0, 25, 0, 0, 0, 0, 65])] * 3),
                          teaching_file(base=build_ghost(version=4, run_flags=0x21)),
                          teaching_file(inputs=[], splits=[]),
                          teaching_file(inputs=[], splits=[(104, 1, 0, 0, 0)])]
@@ -179,6 +219,8 @@ class TeachingTests(unittest.TestCase):
                 for data in valid:
                     self.assertEqual(decoder.validate(data, len(data)), 1)
                 bad = [teaching_file(base=build_ghost(version=4, run_flags=0x20)),
+                       teaching_file(fludd=[bytes([0x18, 0, 0, 0, 0, 4, 1, 65])] * 3),
+                       mutate_section(teaching_file(fludd=[bytes(8)] * 3), 4, b'\x00\x01'),
                        mutate_section(teaching_file(), 48, struct.pack(">I", 100)),
                        mutate_section(teaching_file(), 15, b"\x07"),
                        mutate_section(teaching_file(), 32 + 3 * 16 + 12 + 10, b"\x00")]

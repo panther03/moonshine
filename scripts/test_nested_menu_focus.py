@@ -173,8 +173,8 @@ extern "C" __declspec(dllexport) unsigned exercise(unsigned scenario) {
     def test_custom_protected_entry_also_focuses_the_child(self):
         self.assertEqual(self.library.exercise(2), 0x1010100)
 
-    def test_unavailable_page_never_focuses_or_activates(self):
-        self.assertEqual(self.library.exercise(3), 0)
+    def test_removed_rng_gate_no_longer_hides_a_page(self):
+        self.assertEqual(self.library.exercise(3), 0x1010100)
 
     def test_decoded_child_without_focus_skips_the_stale_release_callback(self):
         self.assertEqual(self.library.decodedEntry(0), 0x1010100)

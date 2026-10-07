@@ -852,15 +852,16 @@ void drawJpPositiveDelta(Menu *menu, const CreationStyle &style,
 }
 #endif
 
-void draw(Menu *menu) {
+bool draw(Menu *menu) {
     if (!sState || !menu || !gSettings.getBool(SETTING_LEVEL_SPLITS) ||
         sState->overlayFrames == 0 || !sState->overlayText[0] ||
         sState->overlayAnchorQf < 0) {
-        return;
+        return false;
     }
 
     char anchor[20];
     formatAnchorQf(sState->overlayAnchorQf, anchor, sizeof(anchor));
+    gQftDisplay.draw(menu, anchor);
     CreationStyle style;
 #if defined(SUSAMUNE_VERSION_JP)
     char layoutText[sizeof(sState->overlayText)];
@@ -878,16 +879,7 @@ void draw(Menu *menu) {
 #else
     if (!gQftDisplay.adjacentStyle(anchor, sState->overlayText, &style)) {
 #endif
-        if (gQftDisplay.hasAnchor(anchor)) return;
-        // Coordinate/boss checkpoints have no native QFT freezer. Render the
-        // captured clock in the user's compact style for the same lifetime.
-        gQftDisplay.draw(menu, anchor);
-#if defined(SUSAMUNE_VERSION_JP)
-        if (!gQftDisplay.adjacentStyle(anchor, deltaLayout, &style)) return;
-#else
-        if (!gQftDisplay.adjacentStyle(anchor, sState->overlayText, &style))
-            return;
-#endif
+        return true;
     }
     static const u8 kColors[][3] = {
         {245, 95, 85},
@@ -900,11 +892,12 @@ void draw(Menu *menu) {
     if (customPlus) {
         drawJpPositiveDelta(menu, style, kColors[color], sState->overlayText,
                             deltaLayout);
-        return;
+        return true;
     }
 #endif
     Creation::drawTextBox(menu, style, &kColors[color], 1,
                           sState->overlayText, true);
+    return true;
 }
 
 }  // namespace SplitStats

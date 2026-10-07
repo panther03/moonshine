@@ -38,18 +38,18 @@ class FullRedsContracts(unittest.TestCase):
         self.assertEqual(slots, list(range(126, 136)))
         self.assertIn("const int kEntryFullRedsFirst = 122;", ILING)
         self.assertIn("const int kEntryFullRedsLast = 131;", ILING)
-        self.assertIn('static_assert(kEntryCount == 132', ILING)
+        self.assertIn('static_assert(kEntryCount == 133', ILING)
 
     def test_projection_groups_appended_entries_without_renumbering(self) -> None:
         self.assertRegex(
             ILING,
             r"kInsertAfter\[\]\s*=\s*\{\s*"
-            r"4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84\s*\}",
+            r"4, 9, 19, 27, 37, 41, 48, 55, 59, 73, 84, 120\s*\}",
         )
         self.assertRegex(
             ILING,
             r"kInsertedEntry\[\]\s*=\s*\{\s*"
-            r"122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131\s*\}",
+            r"122, 123, 124, 125, 121, 126, 127, 128, 129, 130, 131, 132\s*\}",
         )
         loader = MENU[MENU.index("class StageLoaderTab") :]
         self.assertIn("ILing::menuEntryAt(position)", loader)
@@ -153,7 +153,7 @@ class FullRedsContracts(unittest.TestCase):
         record = record[: record.index("}  // namespace")]
         for call in (
             "Records::onILResult(entry,",
-            "StageLoader::onILResult(entry, qf, sRecordsEligible);",
+            "StageLoader::onILResult(entry, qf,",
             "recordPB(entry, qf);",
             "SplitStats::onILResult(entry, qf);",
         ):

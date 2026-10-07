@@ -132,8 +132,8 @@ class ReleasePackagingTests(unittest.TestCase):
                    segments=[dict(address=hex(manifest["base_addr"]+s["offset"]), initialized_bytes=4,
                                   runtime_bytes=s["memory_size"], sha256=release.sha(bytes.fromhex(s["code"])+bytes(s["memory_size"]-4)))
                              for s in manifest["segments"]],
-                   japanese_ui=dict(offset=0x4AA8C0, extent=0x1B000, outside_dol=True,
-                                    ui_language="en", zeroed=True, bytes=0, sha256=release.sha(bytes(0x1B000))))
+                   japanese_ui=dict(offset=0x4AA8C0, extent=0x19000, outside_dol=True,
+                                    ui_language="en", zeroed=True, bytes=0, sha256=release.sha(bytes(0x19000))))
         layout = dict(source_crc32=row["source_crc32"], iso_size=12345)
         release.checked_iso_row(row, manifest, layout, data, asset, "en")
         translated = copy.deepcopy(row)
@@ -149,7 +149,7 @@ class ReleasePackagingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.checked_iso_row(bad, manifest, layout, data, asset, "en")
 
-    def test_four_exact_language_packages_share_sd_layout_without_tester_files(self):
+    def test_four_exact_language_packages_share_sd_layout_and_current_checklist(self):
         for name, path in release.FILES.items():
             self.put(path, ("Final release: "+name).encode())
         self.put("launcher/themes/japanese/background.png", b"\x89PNG\r\n\x1a\n"+bytes(8)+struct.pack(">II",1024,480))
@@ -163,15 +163,16 @@ class ReleasePackagingTests(unittest.TestCase):
         with patch.object(release.package_launcher, "launcher_files", side_effect=app):
             packages = release.archive_contents(args, {"build_checksum":"DEADBEEF"}, patches)
         self.assertEqual(set(packages), {
-            "Moonshine_ENGLISH-MENUS_Launcher_V2.3.2_US-PAL-JP.zip",
-            "Moonshine_JAPANESE-MENUS_Launcher_V2.3.2_US-PAL-JP.zip",
-            "Moonshine_ENGLISH-MENUS_Dolphin_V2.3.2_US-PAL-JP.zip",
-            "Moonshine_JAPANESE-MENUS_Dolphin_V2.3.2_JP.zip",
+            "Moonshine_ENGLISH-MENUS_Launcher_V2.3.3_US-PAL-JP.zip",
+            "Moonshine_JAPANESE-MENUS_Launcher_V2.3.3_US-PAL-JP.zip",
+            "Moonshine_ENGLISH-MENUS_Dolphin_V2.3.3_US-PAL-JP.zip",
+            "Moonshine_JAPANESE-MENUS_Dolphin_V2.3.3_JP.zip",
         })
         for name, (language, kind, files) in packages.items():
             self.assertTrue(name.isascii())
-            self.assertFalse(any("FOXTROT" in n or "TESTING" in n or "RC1" in n for n in files))
+            self.assertFalse(any("FOXTROT" in n or "RC1" in n for n in files))
             base = prefix if kind == "launcher" else "moonshine_dolphin/"
+            self.assertEqual(files[base+"TESTING.md"], b"Final release: TESTING.md")
             self.assertEqual(files[base+"language.txt"], (language+"\n").encode())
             for entry in release.FILES:
                 self.assertIn(base+entry, files)

@@ -89,8 +89,10 @@ void update();
 void draw(Menu *menu);
 
 // ILing owns attempt identity and reports only exact catalogue routes here.
-void onILAttemptStarted(int entry);
+void onILAttemptStarted(int entry, bool continuation = false);
 void onILAttemptEnded();
+// Restored practice attempts retain the live streak without adding a finish.
+bool onSavestateLoaded();
 void onILResult(int entry, s32 qf, bool eligible);
 void onILWarpCancelled();
 // Once an assist invalidates any attempt, the whole playlist run is excluded

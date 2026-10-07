@@ -88,6 +88,14 @@ patches = [
     # targeted fruit stop. This is the unique SlotStart semantic call.
     {'jp': 0x802d0f78, 'us': 0x800be8e8, 'pal': 0x800b7f88,
      'sym': 'susamuneForceKingBooFruit', 'type': PatchType.BL},
+    # FLUDD's three nozzle emission paths. Preserve the retail call/result;
+    # observe accepted water only. No extra particle emission or RNG calls.
+    {'jp': 0x8014ac84, 'us': 0x8026b788, 'pal': 0x80263514,
+     'sym': 'susamuneGhostWaterEmit', 'type': PatchType.BL},
+    {'jp': 0x8014b5ac, 'us': 0x8026c130, 'pal': 0x80263ebc,
+     'sym': 'susamuneGhostWaterEmit', 'type': PatchType.BL},
+    {'jp': 0x8014c0d4, 'us': 0x8026ccfc, 'pal': 0x80264a88,
+     'sym': 'susamuneGhostWaterEmit', 'type': PatchType.BL},
     # Ricco cranes: retail rand still runs once; the shims forward the live
     # actor from each caller's nonvolatile register so its roll can be retained.
     {'jp': 0x801a5ed0, 'us': 0x801ce318, 'pal': 0x801c61d0,

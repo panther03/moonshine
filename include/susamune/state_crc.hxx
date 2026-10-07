@@ -6,7 +6,8 @@ namespace StateCrc {
 const unsigned int kWorkspaceBytes = 4096;
 const unsigned int kWorkspaceAlignment = 4;
 
-// Borrows the idle codec workspace. Initialize again after any codec operation;
+// Borrows the same 4 KiB of the existing idle codec workspace.
+// Initialize again after any codec operation;
 // retain exclusive ownership until every checksum span has been consumed.
 bool init(void *workspace, unsigned int workspaceBytes);
 

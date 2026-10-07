@@ -4,6 +4,7 @@
 #include "susamune/creation.hxx"
 #include "susamune/susamune_cfg.h"
 #include "susamune/practice_display_style.h"
+#include "susamune/failure_banner_style.h"
 
 class J2DPicture;
 class J2DPane;
@@ -20,6 +21,9 @@ void drawCreationKeyboard(Menu *menu, const char *title, const char *text,
 bool updateCreationKeyboardText(TMarioGamePad *pad, char *text, u8 &length,
                                 u8 capacity, u8 &page, bool &uppercase,
                                 u8 &cursor);
+bool updateCreationKeyboardButtons(u32 pressed, char *text, u8 &length,
+                                   u8 capacity, u8 &page, bool &uppercase,
+                                   u8 &cursor);
 const char *wallkickDisplayLabel(int index);
 const char *practiceDisplayName(unsigned display);
 void formatPracticeDisplay(char *out, unsigned capacity, unsigned display,
@@ -28,7 +32,7 @@ void formatPracticeDisplay(char *out, unsigned capacity, unsigned display,
 class CreationExtras {
 public:
     enum {
-        MENU_ROW_COUNT = 24,
+        MENU_ROW_COUNT = 25,
         HUD_PANE_COUNT = 25,
         PREVIEW_PANE_COUNT = 2,
     };
@@ -71,6 +75,8 @@ public:
     void beginAchievementBannerEditor();
     void beginToastEditor();
     void beginPbBannerEditor();
+    void beginFailureBannerEditor();
+    void drawFailureBanner(Menu *menu, const char *name, const char *status) const;
     void beginColorEditor(int first, int count, const char *title,
                           const char *names = nullptr);
     void toggleTimerLabel();
@@ -131,6 +137,7 @@ private:
         EDIT_NATIVE_TIMER,
         EDIT_HEALTH,
         EDIT_PRACTICE_DISPLAY,
+        EDIT_FAILURE_BANNER,
     };
 
     static CreationStyle defaultWordStyle(int index);
@@ -160,6 +167,7 @@ private:
     CreationStyle mStageSessionStyle;
     CreationStyle mColorStyle;
     CreationStyle mNativeTimerStyle;
+    MoonshineFailureStyle mFailureBanner;
     u8 mHealthRgb[2][3];
     u8 mColors[SUSAMUNE_CREATION_COLOR_COUNT][3];
     u8 mDefaultColors[SUSAMUNE_CREATION_COLOR_COUNT][3];
@@ -167,6 +175,7 @@ private:
     union {
         u8 mColorBackup[SUSAMUNE_CREATION_COLOR_COUNT][3];
         u8 mWordBackup[45][3];
+        char mTextBackup[SUSAMUNE_CREATION_WORD_TEXT_SIZE];
     };
     u8 mWordRgb[SUSAMUNE_CREATION_WORD_COUNT]
                [SUSAMUNE_CREATION_WORD_CHARS][3];
@@ -178,7 +187,6 @@ private:
     SusamunePracticeDisplayStyle mPracticeDisplays[3];
     char mWords[SUSAMUNE_CREATION_WORD_COUNT]
                [SUSAMUNE_CREATION_WORD_TEXT_SIZE];
-    char mTextBackup[SUSAMUNE_CREATION_WORD_TEXT_SIZE];
     J2DPicture *mHudPictures[HUD_PANE_COUNT];
     J2DScreen *mHudScreen;
     J2DPane *mPreviewPanes[PREVIEW_PANE_COUNT];

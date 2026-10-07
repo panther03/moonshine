@@ -68,7 +68,6 @@ enum OperationPhase
 	OP_PERSONAL_SCAN_OPEN,
 	OP_PERSONAL_SCAN_NEXT,
 	OP_SCAN_ENVELOPES,
-	OP_SCAN_HEADERS,
 	OP_SCAN_ACTIVE_HEADERS,
 	OP_SAVE_OPEN,
 	OP_SAVE_DATA,
@@ -163,7 +162,7 @@ static u16 ImportedCatalogCount;
 static u32 CatalogDurationQf;
 static u32 GhostAckSeq;
 static u32 ScanFile;
-static u8 ScanHeaderAttempts;
+static struct SusamuneGhostSlotInfo ScanBankInfo[GHOST_BANK_COUNT];
 static int ScanIoError;
 static enum OperationPhase Phase;
 static u32 IoOffset;
@@ -181,12 +180,64 @@ static u32 AutoReuseSlot;
 static u32 PageOrdinal;
 static u64 PageDuration;
 
+// Four adjacent pages per namespace, inside the existing ARM data reservation.
+// Only metadata is cached; loads and mutations always revalidate their files.
+#define GHOST_LIST_CACHE_ENTRIES 64u
+struct GhostListCache
+{
+	struct SusamuneGhostCatalogEntry entries[GHOST_LIST_CACHE_ENTRIES];
+	u64 duration;
+	u32 first;
+	u32 count;
+	u32 total;
+	u32 nextSlot;
+	u16 profile;
+	bool valid;
+};
+static struct GhostListCache ListCache[2];
+static bool ScanCaching;
+
+static struct GhostListCache *RequestListCache(void)
+{
+	return &ListCache[Request.profile == SUSAMUNE_GHOST_IMPORTED_PROFILE];
+}
+
+static void AppendPageEntry(u32 id, const struct SusamuneGhostSlotInfo *info,
+	                       const char *leaf)
+{
+	struct SusamuneGhostCatalogEntry *entry = NULL;
+	struct GhostListCache *cache = RequestListCache();
+	if (ScanCaching && PageOrdinal >= cache->first &&
+	    PageOrdinal - cache->first < GHOST_LIST_CACHE_ENTRIES)
+		entry = &cache->entries[cache->count++];
+	if (entry)
+	{
+		entry->id = id;
+		entry->info = *info;
+		if (leaf) memcpy(entry->leaf, leaf, sizeof(entry->leaf));
+		else memset(entry->leaf, 0, sizeof(entry->leaf));
+	}
+	if (PageOrdinal >= Page.first && Page.count < SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES)
+	{
+		struct SusamuneGhostCatalogEntry *out = &Page.entries[Page.count++];
+		if (entry) *out = *entry;
+		else
+		{
+			out->id = id;
+			out->info = *info;
+			if (leaf) memcpy(out->leaf, leaf, sizeof(out->leaf));
+		}
+	}
+	++PageOrdinal;
+}
+
 
 static const u8 *ValidationBytes;
 static u32 ValidationSize;
 static u32 ValidationOffset;
 static u32 ValidationPoseEnd;
 static u32 ValidationInputEnd;
+static u32 ValidationInputStride;
 static u32 ValidationTeachingCrc;
 static u32 ValidationPreviousInputQf;
 static u32 ValidationInputCount;
@@ -477,7 +528,8 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	version = ReadBe16(header + 4);
 	if (version != SUSAMUNE_GHOST_FILE_VERSION_V3 &&
 	    version != SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-	    version != SUSAMUNE_GHOST_FILE_VERSION_V5)
+	    version != SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+	    version != SUSAMUNE_GHOST_FILE_VERSION_V6)
 		return VALIDATE_FORWARD;
 	if (ReadBe16(header + 6) != SUSAMUNE_GHOST_FILE_HEADER_SIZE)
 		return VALIDATE_INVALID;
@@ -492,20 +544,24 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	required = ReadBe32(header + 24);
 	if (!SusamuneGhostRunFlagsValid(ReadBe32(header + 28)))
 		return VALIDATE_INVALID;
-	if ((required & ~(version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	if ((required & ~(version == SUSAMUNE_GHOST_FILE_VERSION_V6
+	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6
+	                    : version == SUSAMUNE_GHOST_FILE_VERSION_V5
 	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5
 	                    : version == SUSAMUNE_GHOST_FILE_VERSION_V4
 	                    ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V4
 	                    : SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V3)) != 0)
 		return VALIDATE_FORWARD;
 	if (version >= SUSAMUNE_GHOST_FILE_VERSION_V4 &&
-	    required != (version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	    required != (version == SUSAMUNE_GHOST_FILE_VERSION_V6
+	        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V6
+	        : version == SUSAMUNE_GHOST_FILE_VERSION_V5
 	        ? SUSAMUNE_GHOST_SUPPORTED_REQUIRED_FEATURES_V5
 	        : SUSAMUNE_GHOST_REQUIRED_EXTENDED_CODEC))
 		return VALIDATE_INVALID;
 
 	if (sampleCount < SUSAMUNE_GHOST_MIN_SAMPLE_COUNT ||
-	    sampleCount > SUSAMUNE_GHOST_MAX_SAMPLE_COUNT)
+	    sampleCount > SusamuneGhostPoseLimit(version))
 		return VALIDATE_INVALID;
 	segmentCount = ReadBe16(
 		header + SUSAMUNE_GHOST_V4_SEGMENT_COUNT_OFFSET);
@@ -526,7 +582,7 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	             SUSAMUNE_GHOST_V4_SAMPLE_DATA_SIZE_OFFSET) !=
 	        sampleCount * SUSAMUNE_GHOST_POSE_SAMPLE_SIZE ||
 	    payloadSize != fileSize - SUSAMUNE_GHOST_FILE_HEADER_SIZE ||
-	    (version == SUSAMUNE_GHOST_FILE_VERSION_V5
+	    (version >= SUSAMUNE_GHOST_FILE_VERSION_V5
 	        ? fileSize < SUSAMUNE_GHOST_V4_SAMPLE_DATA_OFFSET +
 	            sampleCount * SUSAMUNE_GHOST_POSE_SAMPLE_SIZE +
 	            SUSAMUNE_GHOST_TEACHING_HEADER_SIZE ||
@@ -575,7 +631,7 @@ static enum ValidateResult ValidateCanonicalHeader(const u8 *header,
 	if (startQf > SUSAMUNE_GHOST_QF_MAX || endQf > SUSAMUNE_GHOST_QF_MAX ||
 	    endQf < startQf || ReadBe32(header + 64) == 0 ||
 	    ReadBe32(header + 64) != endQf - startQf ||
-	    ReadBe32(header + 64) > SUSAMUNE_GHOST_MAX_DURATION_QF)
+	    ReadBe32(header + 64) > SusamuneGhostDurationLimit(version))
 		return VALIDATE_INVALID;
 	if (resultQf != SUSAMUNE_GHOST_RESULT_QF_NONE &&
 	    (resultQf < startQf || resultQf > endQf))
@@ -693,14 +749,17 @@ static enum ValidateResult BeginCanonicalValidation(const u8 *bytes,
 	ValidationPreviousInputQf = 0;
 	ValidationPreviousSplitQf = 0;
 	ValidationTeachingCrc = SUSAMUNE_GHOST_CRC32_INIT;
-	if (ReadBe16(bytes + 4) == SUSAMUNE_GHOST_FILE_VERSION_V5)
+	ValidationInputStride = SusamuneGhostInputStride(ReadBe16(bytes + 4));
+	if (ReadBe16(bytes + 4) >= SUSAMUNE_GHOST_FILE_VERSION_V5)
 	{
 		const u8 *teaching = bytes + ValidationPoseEnd;
-		if (!SusamuneGhostTeachingHeaderValid(teaching, size - ValidationPoseEnd))
+		if (!SusamuneGhostTeachingHeaderValid(teaching, size - ValidationPoseEnd) ||
+		    teaching[5] != (ReadBe16(bytes + 4) == SUSAMUNE_GHOST_FILE_VERSION_V6
+		        ? SUSAMUNE_GHOST_TEACHING_FLUDD_VERSION : SUSAMUNE_GHOST_TEACHING_VERSION))
 			return VALIDATE_INVALID;
 		ValidationInputEnd = ValidationPoseEnd +
 		    SUSAMUNE_GHOST_TEACHING_HEADER_SIZE +
-		    ReadBe32(teaching + 8) * SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+		    ReadBe32(teaching + 8) * ValidationInputStride;
 	}
 
 	ValidationBytes = bytes;
@@ -751,7 +810,7 @@ static int ContinueCanonicalValidation(void)
 			stride = SUSAMUNE_GHOST_TEACHING_HEADER_SIZE;
 		} else if (ValidationOffset < ValidationInputEnd) {
 			phaseEnd = ValidationInputEnd;
-			stride = SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+			stride = ValidationInputStride;
 		} else {
 			phaseEnd = ValidationSize;
 			stride = SUSAMUNE_GHOST_SPLIT_SAMPLE_SIZE;
@@ -796,11 +855,13 @@ static int ContinueCanonicalValidation(void)
 			if (ValidationOffset < ValidationInputEnd) {
 				if (!SusamuneGhostTeachingInputValid(sample,
 				        ReadBe32(ValidationBytes + 56), ReadBe32(ValidationBytes + 60),
-				        ValidationPreviousInputQf, ValidationInputCount == 0))
+				        ValidationPreviousInputQf, ValidationInputCount == 0) ||
+				    (ValidationVersion == SUSAMUNE_GHOST_FILE_VERSION_V6 &&
+				     !SusamuneGhostFluddValid(sample + 16)))
 					return VALIDATE_INVALID;
 				ValidationPreviousInputQf = ReadBe32(sample);
 				ValidationInputCount++;
-				ValidationOffset += SUSAMUNE_GHOST_INPUT_SAMPLE_SIZE;
+				ValidationOffset += ValidationInputStride;
 			} else {
 				const u8 *first = ValidationBytes + ValidationInputEnd;
 				if (!SusamuneGhostTeachingSplitValid(sample,
@@ -889,7 +950,7 @@ static int ContinueCanonicalValidation(void)
 	if (ValidationOffset != ValidationSize)
 		return VALIDATE_INVALID;
 
-	if (ValidationVersion == SUSAMUNE_GHOST_FILE_VERSION_V5 &&
+	if (ValidationVersion >= SUSAMUNE_GHOST_FILE_VERSION_V5 &&
 	    ((ValidationTeachingCrc ^ SUSAMUNE_GHOST_CRC32_XOR_OUT) !=
 	        ReadBe32(ValidationBytes + ValidationPoseEnd + 20) ||
 	     ValidationInputCount != ReadBe32(ValidationBytes + ValidationPoseEnd + 8) ||
@@ -1042,10 +1103,11 @@ static void BuildExportPath(char *path, u16 profile, const u8 *header)
 
 static enum ReadResult ReadEnvelope(u16 profile, u32 slot, u8 bank,
 	                                struct SusamuneGhostStorageEnvelope *envelope,
+	                                u8 *header,
 	                                int *ioError)
 {
 	char path[GHOST_PATH_SIZE];
-	u8 raw[SUSAMUNE_GHOST_ENVELOPE_SIZE];
+	u8 raw[SUSAMUNE_GHOST_ENVELOPE_SIZE + SUSAMUNE_GHOST_FILE_HEADER_SIZE];
 	FIL file;
 	UINT read = 0;
 	UINT readSize;
@@ -1053,6 +1115,7 @@ static enum ReadResult ReadEnvelope(u16 profile, u32 slot, u8 bank,
 	FSIZE_t size;
 	int ret;
 	int closeRet;
+	enum ValidateResult validate;
 
 	BuildGhostPath(path, profile, slot, bank);
 	ret = f_open_char(&file, path, FA_READ | FA_OPEN_EXISTING);
@@ -1079,7 +1142,8 @@ static enum ReadResult ReadEnvelope(u16 profile, u32 slot, u8 bank,
 	if (read >= 6 && ReadBe32(raw) == SUSAMUNE_GHOST_ENVELOPE_MAGIC &&
 	    ReadBe16(raw + 4) > SUSAMUNE_GHOST_ENVELOPE_VERSION)
 		return READ_UNSAFE;
-	if (size < sizeof(raw) || ReadBe32(raw) != SUSAMUNE_GHOST_ENVELOPE_MAGIC)
+	if (size < SUSAMUNE_GHOST_ENVELOPE_SIZE ||
+	    ReadBe32(raw) != SUSAMUNE_GHOST_ENVELOPE_MAGIC)
 		return READ_INVALID;
 
 	DecodeEnvelope(raw, envelope);
@@ -1102,12 +1166,27 @@ static enum ReadResult ReadEnvelope(u16 profile, u32 slot, u8 bank,
 		if (envelope->payloadSize != 0 || envelope->durationQf != 0 ||
 		    envelope->payloadChecksum != 0 || size != sizeof(*envelope))
 			return READ_INVALID;
+		return READ_VALID;
 	}
 	else if (envelope->payloadSize < SUSAMUNE_GHOST_FILE_HEADER_SIZE ||
 	         size != sizeof(*envelope) + envelope->payloadSize)
 	{
 		return READ_INVALID;
 	}
+
+	// The envelope and canonical header come from the same bounded read.
+	// Full payload CRC, poses and teaching data remain checked on load.
+	memcpy(header, raw + SUSAMUNE_GHOST_ENVELOPE_SIZE,
+	       SUSAMUNE_GHOST_FILE_HEADER_SIZE);
+	validate = ValidateCanonicalHeader(header,
+	                                   SUSAMUNE_GHOST_FILE_HEADER_SIZE,
+	                                   profile, false);
+	if (validate == VALIDATE_FORWARD)
+		return READ_UNSAFE;
+	if (validate != VALIDATE_OK ||
+	    ReadBe32(header + 8) != envelope->payloadSize ||
+	    ReadBe32(header + 64) != envelope->durationQf)
+		return READ_INVALID;
 	return READ_VALID;
 }
 
@@ -1246,71 +1325,8 @@ static void FillSlotInfo(const u8 *header)
 
 static void InsertImportCandidate(void)
 {
-	if (PageOrdinal >= Page.first && Page.count < SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES)
-	{
-		struct SusamuneGhostCatalogEntry *entry = &Page.entries[Page.count++];
-		entry->id = 0;
-		entry->info = ImportCandidate.info;
-		memcpy(entry->leaf, ImportCandidate.leaf, sizeof(entry->leaf));
-	}
-	++PageOrdinal;
+	AppendPageEntry(0, &ImportCandidate.info, ImportCandidate.leaf);
 	PageDuration += ImportCandidate.info.durationQf;
-}
-
-static enum ReadResult ReadCanonicalHeader(u16 profile, u32 slot,
-	                                       u8 bankIndex,
-	                                       u8 *header,
-	                                       int *ioError)
-{
-	struct BankInfo *bank = &Catalog[0].bank[bankIndex];
-	char path[GHOST_PATH_SIZE];
-	FIL file;
-	UINT read = 0;
-	int ret;
-	int closeRet;
-	enum ValidateResult validate;
-
-	BuildGhostPath(path, profile, slot, bankIndex);
-	ret = f_open_char(&file, path, FA_READ | FA_OPEN_EXISTING);
-	if (ret == FR_NO_FILE)
-		return READ_INVALID;
-	if (ret != FR_OK)
-	{
-		*ioError = ret;
-		return READ_IO;
-	}
-	if (f_size(&file) !=
-	    sizeof(struct SusamuneGhostStorageEnvelope) + bank->payloadSize)
-	{
-		closeRet = f_close(&file);
-		if (closeRet != FR_OK)
-		{
-			*ioError = closeRet;
-			return READ_IO;
-		}
-		return READ_INVALID;
-	}
-	ret = f_lseek(&file, sizeof(struct SusamuneGhostStorageEnvelope));
-	if (ret == FR_OK)
-		ret = f_read(&file, header, SUSAMUNE_GHOST_FILE_HEADER_SIZE, &read);
-	closeRet = f_close(&file);
-	if (ret != FR_OK || read != SUSAMUNE_GHOST_FILE_HEADER_SIZE ||
-	    closeRet != FR_OK)
-	{
-		*ioError = ret != FR_OK ? ret :
-		           closeRet != FR_OK ? closeRet : FR_DISK_ERR;
-		return READ_IO;
-	}
-
-	validate = ValidateCanonicalHeader(header,
-	                                   SUSAMUNE_GHOST_FILE_HEADER_SIZE,
-	                                   profile, false);
-	if (validate == VALIDATE_FORWARD)
-		return READ_UNSAFE;
-	if (validate != VALIDATE_OK || ReadBe32(header + 8) != bank->payloadSize ||
-	    ReadBe32(header + 64) != bank->durationQf)
-		return READ_INVALID;
-	return READ_VALID;
 }
 
 static void DispatchRequest(void);
@@ -1341,6 +1357,8 @@ static void PublishBusy(void)
 static void FinishRequest(int status, u32 payloadSize, u32 generation)
 {
 	volatile struct SusamuneGhostStorageMailbox *mailbox = GhostBlock();
+	if (status != SUSAMUNE_GHOST_STATUS_OK)
+		RequestListCache()->valid = false;
 	mailbox->response.responseMagic = SUSAMUNE_GHOST_STORAGE_MAGIC;
 	mailbox->response.protocolVersion = SUSAMUNE_GHOST_STORAGE_VERSION;
 	mailbox->response.flags = GhostSupported ? SUSAMUNE_GHOST_RESPONSE_READY : 0;
@@ -1361,6 +1379,7 @@ static void FinishRequest(int status, u32 payloadSize, u32 generation)
 
 static void InvalidateRequestCatalog(void)
 {
+	RequestListCache()->valid = false;
 	if (Request.profile == SUSAMUNE_GHOST_IMPORTED_PROFILE)
 		ImportedCatalogReady = false;
 	else
@@ -1390,6 +1409,7 @@ static bool PersonalSlotValid(u32 slot)
 
 static void InitPage(void)
 {
+	struct GhostListCache *cache = RequestListCache();
 	memset(&Page, 0, sizeof(Page));
 	Page.magic = SUSAMUNE_GHOST_CATALOG_PAGE_MAGIC;
 	Page.version = SUSAMUNE_GHOST_CATALOG_PAGE_VERSION;
@@ -1397,16 +1417,63 @@ static void InitPage(void)
 	PageOrdinal = 0;
 	PageDuration = 0;
 	AutoReuseSlot = SUSAMUNE_GHOST_SLOT_AUTO;
+	ScanCaching = Request.command == SUSAMUNE_GHOST_CMD_LIST ||
+	              Request.command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN;
+	if (ScanCaching)
+	{
+		cache->valid = false;
+		cache->profile = Request.profile;
+		cache->first = Page.first - Page.first % GHOST_LIST_CACHE_ENTRIES;
+		cache->count = 0;
+	}
 }
 
 static void PublishPage(void)
 {
+	if (ScanCaching)
+	{
+		struct GhostListCache *cache = RequestListCache();
+		cache->total = PageOrdinal;
+		cache->duration = PageDuration;
+		cache->nextSlot = Page.nextSlot;
+		cache->valid = true;
+		ScanCaching = false;
+	}
 	Page.totalCount = PageOrdinal;
 	Page.totalDurationQfLo = (u32)PageDuration;
 	Page.totalDurationQfHi = (u32)(PageDuration >> 32);
 	memcpy((void*)SUSAMUNE_GHOST_STORAGE_DATA_PHYS_PTR, &Page, sizeof(Page));
 	sync_after_write((void*)SUSAMUNE_GHOST_STORAGE_DATA_PHYS_PTR, sizeof(Page));
 	FinishRequest(SUSAMUNE_GHOST_STATUS_OK, sizeof(Page), 0);
+}
+
+static bool PublishCachedPage(void)
+{
+	struct GhostListCache *cache = RequestListCache();
+	u32 count;
+	u32 offset;
+	if (!(Request.flags & SUSAMUNE_GHOST_REQUEST_CACHED_LIST) ||
+	    !cache->valid || cache->profile != Request.profile ||
+	    Request.slot < cache->first || Request.slot > cache->total)
+		return false;
+	offset = Request.slot - cache->first;
+	count = cache->total - Request.slot;
+	if (count > SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES)
+		count = SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES;
+	if (offset > cache->count || count > cache->count - offset)
+		return false;
+	memset(&Page, 0, sizeof(Page));
+	Page.magic = SUSAMUNE_GHOST_CATALOG_PAGE_MAGIC;
+	Page.version = SUSAMUNE_GHOST_CATALOG_PAGE_VERSION;
+	Page.first = Request.slot;
+	Page.count = count;
+	Page.nextSlot = cache->nextSlot;
+	memcpy(Page.entries, &cache->entries[offset], count * sizeof(Page.entries[0]));
+	PageOrdinal = cache->total;
+	PageDuration = cache->duration;
+	ScanCaching = false;
+	PublishPage();
+	return true;
 }
 
 static void BeginSingleSlot(u32 slot)
@@ -1417,7 +1484,6 @@ static void BeginSingleSlot(u32 slot)
 	CatalogProfile = Request.profile;
 	ScanSlot = slot;
 	ScanFile = 0;
-	ScanHeaderAttempts = 0;
 	ScanIoError = FR_OK;
 	Phase = OP_SCAN_ENVELOPES;
 }
@@ -1549,13 +1615,7 @@ static void FinishSingleSlot(void)
 			AutoReuseSlot = ScanSlot;
 		if (CatalogCount || CatalogUnsafe)
 		{
-			if (PageOrdinal >= Page.first && Page.count < SUSAMUNE_GHOST_CATALOG_PAGE_ENTRIES)
-			{
-				struct SusamuneGhostCatalogEntry *entry = &Page.entries[Page.count++];
-				entry->id = ScanSlot;
-				entry->info = Catalog[0].info;
-			}
-			++PageOrdinal;
+			AppendPageEntry(ScanSlot, &Catalog[0].info, NULL);
 			PageDuration += CatalogDurationQf;
 		}
 		Phase = OP_PERSONAL_SCAN_NEXT;
@@ -1580,84 +1640,38 @@ static void FinishSingleSlot(void)
 static void ScanEnvelopePass(void)
 {
 	struct SusamuneGhostStorageEnvelope envelope;
+	u8 header[SUSAMUNE_GHOST_FILE_HEADER_SIZE];
 	enum ReadResult result;
-	if (ScanFile == 2)
-	{
-		ScanFile = 0;
-		Phase = OP_SCAN_HEADERS;
-		return;
-	}
-	result = ReadEnvelope(Request.profile, ScanSlot, (u8)ScanFile, &envelope, &ScanIoError);
+	result = ReadEnvelope(Request.profile, ScanSlot, (u8)ScanFile,
+	                      &envelope, header, &ScanIoError);
 	if (result == READ_IO)
 	{
 		FinishIoError(ScanIoError);
 		return;
 	}
 	if (result == READ_VALID)
+	{
 		CopyEnvelopeInfo(&Catalog[0].bank[ScanFile], &envelope);
+		if ((envelope.flags & SUSAMUNE_GHOST_ENVELOPE_TOMBSTONE) == 0)
+			FillInfo(&ScanBankInfo[ScanFile], header, envelope.generation, 0);
+	}
 	else
 		Catalog[0].bank[ScanFile].state = result == READ_UNSAFE ? BANK_UNSAFE :
 		                                result == READ_MISSING ? BANK_EMPTY : BANK_INVALID;
 	++ScanFile;
-}
-
-static void ScanHeaderPass(void)
-{
-	u8 header[SUSAMUNE_GHOST_FILE_HEADER_SIZE];
-	enum ReadResult result;
-	u8 bank;
-	if (ScanFile == 2)
+	if (ScanFile == GHOST_BANK_COUNT)
 	{
 		RecomputeSlot();
 		Phase = OP_SCAN_ACTIVE_HEADERS;
-		return;
 	}
-	bank = (u8)ScanFile++;
-	if (Catalog[0].bank[bank].state != BANK_VALID ||
-		(Catalog[0].bank[bank].flags & SUSAMUNE_GHOST_ENVELOPE_TOMBSTONE)) return;
-	result = ReadCanonicalHeader(Request.profile, ScanSlot, bank, header, &ScanIoError);
-	if (result == READ_IO)
-	{
-		FinishIoError(ScanIoError);
-		return;
-	}
-	if (result != READ_VALID)
-		Catalog[0].bank[bank].state = result == READ_UNSAFE ? BANK_UNSAFE : BANK_INVALID;
 }
 
 static void ScanActiveHeaderPass(void)
 {
-	u8 header[SUSAMUNE_GHOST_FILE_HEADER_SIZE];
-	enum ReadResult result;
 	struct SlotCatalog *slot = &Catalog[0];
-	u8 bank;
-	if (slot->unsafe || slot->activeBank < 0 ||
-	    (slot->bank[(u8)slot->activeBank].flags & SUSAMUNE_GHOST_ENVELOPE_TOMBSTONE))
-	{
-		FinishSingleSlot();
-		return;
-	}
-	bank = (u8)slot->activeBank;
-	if (ScanHeaderAttempts & (1u << bank))
-	{
-		slot->bank[bank].state = BANK_INVALID;
-		RecomputeSlot();
-		return;
-	}
-	ScanHeaderAttempts |= (u8)(1u << bank);
-	result = ReadCanonicalHeader(Request.profile, ScanSlot, bank, header, &ScanIoError);
-	if (result == READ_IO)
-	{
-		FinishIoError(ScanIoError);
-		return;
-	}
-	if (result != READ_VALID)
-	{
-		slot->bank[bank].state = result == READ_UNSAFE ? BANK_UNSAFE : BANK_INVALID;
-		RecomputeSlot();
-		return;
-	}
-	FillSlotInfo(header);
+	if (!slot->unsafe && slot->activeBank >= 0 &&
+	    (slot->bank[(u8)slot->activeBank].flags & SUSAMUNE_GHOST_ENVELOPE_TOMBSTONE) == 0)
+		slot->info = ScanBankInfo[(u8)slot->activeBank];
 	FinishSingleSlot();
 }
 
@@ -2567,11 +2581,14 @@ static void StartRequest(void)
 	Request.flags = request->flags;
 	Request.expectedGeneration = request->expectedGeneration;
 	AutoProbe = false;
+	ScanCaching = false;
 	PublishBusy();
 
 	if (request->requestMagic != SUSAMUNE_GHOST_STORAGE_MAGIC ||
 	    request->protocolVersion != SUSAMUNE_GHOST_STORAGE_VERSION ||
-	    request->reserved != 0 || Request.flags != 0)
+	    request->reserved != 0 ||
+	    (Request.flags & ~SUSAMUNE_GHOST_REQUEST_CACHED_LIST) != 0 ||
+	    (Request.flags != 0 && Request.command != SUSAMUNE_GHOST_CMD_LIST))
 	{
 		FinishRequest(request->requestMagic == SUSAMUNE_GHOST_STORAGE_MAGIC &&
 		              request->protocolVersion > SUSAMUNE_GHOST_STORAGE_VERSION
@@ -2596,6 +2613,9 @@ static void StartRequest(void)
 		FinishRequest(SUSAMUNE_GHOST_STATUS_INVALID_SLOT, 0, 0);
 		return;
 	}
+	if (Request.command == SUSAMUNE_GHOST_CMD_SAVE ||
+	    Request.command == SUSAMUNE_GHOST_CMD_DELETE)
+		RequestListCache()->valid = false;
 	if (Request.command == SUSAMUNE_GHOST_CMD_LIST || Request.command == SUSAMUNE_GHOST_CMD_IMPORT_SCAN)
 	{
 		if (Request.payloadSize || Request.expectedGeneration ||
@@ -2603,7 +2623,7 @@ static void StartRequest(void)
 			FinishRequest(SUSAMUNE_GHOST_STATUS_INVALID_REQUEST, 0, 0);
 			return;
 		}
-		EnsureCatalog();
+		if (!PublishCachedPage()) EnsureCatalog();
 		return;
 	}
 	if (Request.profile == SUSAMUNE_GHOST_IMPORTED_PROFILE)
@@ -2688,6 +2708,8 @@ void SusamuneGhostInit(void)
 		? SUSAMUNE_GHOST_REGION_US : SUSAMUNE_GHOST_REGION_PAL;
 	GhostSupported = SusamuneCfgStorageAvailable() && GhostRegion != NULL;
 	GhostAckSeq = 0;
+	memset(ListCache, 0, sizeof(ListCache));
+	ScanCaching = false;
 	CatalogReady = false;
 	CatalogUnsafe = false;
 	ImportedCatalogReady = false;
@@ -2744,9 +2766,6 @@ void SusamuneGhostService(void)
 			break;
 		case OP_SCAN_ENVELOPES:
 			ScanEnvelopePass();
-			break;
-		case OP_SCAN_HEADERS:
-			ScanHeaderPass();
 			break;
 		case OP_SCAN_ACTIVE_HEADERS:
 			ScanActiveHeaderPass();

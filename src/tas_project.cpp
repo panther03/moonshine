@@ -2,6 +2,7 @@
 #include "susamune/practice_session.hxx"
 #include "susamune/savestate.hxx"
 #include "susamune/state_storage.hxx"
+#include "susamune/state_compatibility.h"
 #include <Dolphin/string.h>
 extern SavestateManager *gSavestateMgr;
 #include <Dolphin/mem.h>
@@ -70,7 +71,7 @@ SusamuneTasRequest context(u32 role, u32 component) {
     SusamuneTasRequest request = {};
     request.projectId = sPending.projectId;
     request.componentId = component;
-    request.projectGeneration = sOpening ? sPending.generation : sSaved.generation;
+    request.projectGeneration = sPending.generation;
     request.role = role;
     request.expectedProjectCrc = sOpening ? sPending.checksum : sPreviousCrc;
     request.checksum = SusamuneTasRequestCrc(&request);
@@ -100,7 +101,8 @@ void nextExport() {
         if (!valid(sRefs[sRole])) { ++sRole; continue; }
         const auto &old = sSaved.components[sRole];
         // A smaller repacked RAM state must replace an older, larger file too.
-        if (old.componentId && sRefs[sRole].key[0] == sPublishedKeys[sRole][0] &&
+        if (sPending.projectId == sSaved.projectId && old.componentId &&
+            sRefs[sRole].key[0] == sPublishedKeys[sRole][0] &&
             sRefs[sRole].key[1] == sPublishedKeys[sRole][1] &&
             old.packedBytes <= gSavestateMgr->slotInfo(sRefs[sRole].slot).packedBytes) {
             sPending.components[sRole] = old; ++sPending.componentCount; ++sRole; continue;
@@ -303,10 +305,14 @@ bool save(const char *text) {
     }
     PracticeSession::pauseEditing();
     sPending = sSaved;
+    // Legacy components stay immutable; their first new save gets its own project.
+    if (sPending.buildCrc != SUSAMUNE_STATE_COMPATIBILITY_ID) {
+        sPending.projectId = sPending.generation = sPending.checksum = 0;
+    }
     sPending.magic = SUSAMUNE_TAS_MAGIC; sPending.version = SUSAMUNE_TAS_VERSION;
     memset(sPending.name, 0, sizeof(sPending.name));
     for (u32 i = 0; i < 31 && text[i]; ++i) sPending.name[i] = text[i];
-    sPreviousCrc = sSaved.checksum;
+    sPreviousCrc = sPending.checksum;
     if (!sPending.projectId) {
         if (!StateStorage::projectBegin(sPending.name)) { failed(SUSAMUNE_STATE_UNAVAILABLE); return false; }
         sPhase = BEGIN_SAVE;
@@ -399,7 +405,7 @@ void update() {
                 h.configId != sPending.configId || h.sceneKey != sPending.sceneKey ||
                 !SusamuneTasTapeHeaderValid(&h)) { failed(SUSAMUNE_STATE_BAD_FILE); return; }
             sPending.tape = {result.id, h.headerCrc, h.packedSize};
-            sPending.generation = sSaved.generation + 1;
+            ++sPending.generation;
             if (!sPending.generation) { finish("TAS save version limit reached; use a new project."); return; }
             sPending.checksum = SusamuneTasManifestCrc(&sPending);
             if (!SusamuneTasManifestValid(&sPending) || !StateStorage::projectCommit(sPending, sPreviousCrc)) {

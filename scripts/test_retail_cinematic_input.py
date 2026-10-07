@@ -37,6 +37,7 @@ TMarDirector *stageDirector() {return actualType==1 ? &stage : nullptr;}
 TMovieDirector *movieDirector() {return actualType==2 ? &movie : nullptr;}
 ''' + context + r'''
 }
+namespace GhostFludd {void beginFrame(){}}
 static bool watching, sFrameFrozen, sObserverMarioBaselineFinalized, sObserverStageReady;
 static bool sObserverPastEnd;
 static int sObserverPhase, anchored;

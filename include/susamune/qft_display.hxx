@@ -15,6 +15,7 @@ public:
 
     void beginOverlayFrame();
     void draw(Menu *menu, const char *text) const;
+    void drawTasFallback(Menu *menu) const;
     bool hasAnchor(const char *text) const;
     bool adjacentStyle(const char *anchorText, const char *text,
                        CreationStyle *out) const;

@@ -1346,9 +1346,10 @@ class SplitContractTests(unittest.TestCase):
         splits = SPLITS.read_text(encoding="utf-8")
         begin = menu.index("gQftDisplay.beginOverlayFrame();")
         qft = menu.index("gQFTTimer.draw(this);", begin)
-        split = menu.index("SplitStats::draw(this);", qft)
+        split = menu.index("SplitStats::draw(this)", begin)
         self.assertLess(begin, qft)
-        self.assertLess(qft, split)
+        self.assertLess(split, qft)
+        self.assertIn("if (!SplitStats::draw(this)) gQFTTimer.draw(this);", menu)
         display = QFT_DISPLAY.read_text(encoding="utf-8")
         self.assertIn("sAnchorDrawn = true;", display)
         self.assertIn("strcmp(sAnchorText, text) == 0", display)
@@ -1357,7 +1358,7 @@ class SplitContractTests(unittest.TestCase):
             "gQftDisplay.adjacentStyle(anchor, sState->overlayText, &style)",
             splits,
         )
-        self.assertIn("if (gQftDisplay.hasAnchor(anchor)) return;", splits)
+        self.assertEqual(splits.count("gQftDisplay.draw(menu, anchor);"), 1)
         self.assertIn("gQftDisplay.draw(menu, anchor);", splits)
         self.assertIn("const int anchorRight", display)
         self.assertIn("const int rightX = anchorRight + 10 + pad;", display)
@@ -1369,7 +1370,7 @@ class SplitContractTests(unittest.TestCase):
 
     def test_split_display_toggle_and_jp_plus_are_presentation_only(self) -> None:
         source = SPLITS.read_text(encoding="utf-8")
-        draw = source[source.index("void draw(Menu *menu)") :]
+        draw = source[source.index("bool draw(Menu *menu)") :]
         self.assertIn(
             "!gSettings.getBool(SETTING_LEVEL_SPLITS)", draw
         )

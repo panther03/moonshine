@@ -1,6 +1,6 @@
 #include "susamune/mario_colors.hxx"
 #include "susamune/mario_color_texture.hxx"
-#include "susamune/retail_input.hxx"
+#include "susamune/model_color_draw.hxx"
 
 #include "Dolphin/GX.h"
 #include "Dolphin/mem.h"
@@ -49,19 +49,8 @@ static_assert(__builtin_offsetof(TMarioCap, mCap1) == 0x10 &&
 static_assert(__builtin_offsetof(J3DModel, mShapePackets) == 0x84,
               "retail shape packet array moved");
 
-bool mem1(const void *pointer, u32 size) {
-    const u32 address = reinterpret_cast<u32>(pointer);
-    return address >= 0x80000000u && address < 0x81800000u &&
-           size <= 0x81800000u - address;
-}
-
-bool live() {
-    return gpMarDirector && RetailInput::stageDirector() == gpMarDirector &&
-        gpMarDirector == sDraw.director &&
-        gpMarDirector->_260 &&
-        gpMarDirector->mCurState >= TMarDirector::STATE_GAME_STARTING &&
-        gpMarioAddress && gpMarioAddress == sDraw.mario;
-}
+using ModelColorDraw::mem1;
+bool live() { return ModelColorDraw::live(sDraw.director, sDraw.mario); }
 
 const ResTIMG *mainTexture(J3DModelData *data) {
     if (!mem1(data, sizeof(*data)) || !mem1(data->_AC, 8)) return nullptr;
@@ -78,14 +67,6 @@ const ResTIMG *mainTexture(J3DModelData *data) {
         !mem1(pixels, MarioColorTexture::kAtlasBytes)) return nullptr;
     return &image;
 }
-
-void initTexture(GXTexObj &object, const ResTIMG &image, const void *pixels) {
-    GXInitTexObj(&object, const_cast<void *>(pixels), 256, 256, GX_TF_CMPR,
-                 image.mWrapSMode, image.mWrapTMode, GX_FALSE);
-    GXInitTexObjLOD(&object, image.mFilterMinMode, image.mFilterMagMode,
-                    0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-}
-
 PacketCallback &callback(J3DShapePacket *packet) {
     return *reinterpret_cast<PacketCallback *>(reinterpret_cast<u8 *>(packet) + 0x10);
 }
@@ -137,13 +118,7 @@ void drawPacket(J3DShapePacket *packet, int phase) {
         return;
     }
 }
-
-bool supportedModel(J3DModel *model, u16 shapes) {
-    return mem1(model, sizeof(*model)) &&
-        mem1(model->mModelData, sizeof(J3DModelData)) &&
-        model->mModelData->mShapeNum == shapes &&
-        mem1(model->mShapePackets, shapes * 0x34u);
-}
+using ModelColorDraw::supportedModel;
 
 void install(J3DModel *model, u16 shape, u8 parts, u8 glasses = 0) {
     J3DShapePacket *packet = reinterpret_cast<J3DShapePacket *>(
@@ -169,6 +144,16 @@ void onStageSetup() {
     sDraw.mario = gpMarioAddress;
 }
 
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    if (!keep || !live() || !sDraw.packetCount || sDraw.packetCount > 16) return false;
+    for (u32 i = 0; i < sDraw.packetCount; ++i) {
+        J3DShapePacket *packet = sDraw.packets[i].packet;
+        if (!mem1(packet, 0x34) || callback(packet) != drawPacket ||
+            !keep(&callback(packet))) return false;
+    }
+    return true;
+}
+
 void update() {
     if (!live() || !mem1(gpMarioAddress->mModelData, 12)) return;
     J3DModel *body = gpMarioAddress->mModelData->mModel;
@@ -192,8 +177,8 @@ void update() {
         MarioColorTexture::recolor(pixels, sAtlas, sDraw.colors, mask);
         DCStoreRange(sAtlas, sizeof(sAtlas));
         GXInvalidateTexAll();
-        initTexture(sDraw.originalTexture, *texture, pixels);
-        initTexture(sDraw.customTexture, *texture, sAtlas);
+        ModelColorDraw::initTexture(sDraw.originalTexture, *texture, pixels, 256, 256);
+        ModelColorDraw::initTexture(sDraw.customTexture, *texture, sAtlas, 256, 256);
         sDraw.source = texture;
         sDraw.textureReady = true;
     }

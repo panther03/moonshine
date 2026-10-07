@@ -37,7 +37,7 @@ class ShadowAssetChecksumTests(unittest.TestCase):
         limits = production[production.index("#define SHADOW_INPUT_SIZE"):
                             production.index("typedef enum ShadowSourceKind")]
         block = production[production.index('if (memcmp((const void *)spec->payload, "J3D2bmd3"'):
-                           production.index("\tDCFlushRange((void *)spec->payload")]
+                           production.index("\ndone:\n\treturn status;", production.index("static int ValidatePayload("))]
         constants = (ROOT / "include/susamune/ghost_model_asset.h").read_text()
         statuses = "\n".join(re.findall(
             r"^#define SUSAMUNE_GHOST_MODEL_STATUS_(?:RESOURCE_MISSING|BAD_CHECKSUM|BAD_YAZ0|BAD_RARC|READ_FAILED)\s+-\d+",

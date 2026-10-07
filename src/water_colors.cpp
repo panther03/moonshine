@@ -1,5 +1,6 @@
 #include "susamune/water_colors.hxx"
 #include "susamune/fludd_colors.hxx"
+#include "susamune/ghost_fludd.hxx"
 #include "susamune/retail_input.hxx"
 
 #include "Dolphin/GX.h"
@@ -77,19 +78,21 @@ void drawWater(void *self, u32 cue, JDrama::TGraphics *graphics) {
     if (!live() || self != gpModelWaterManager || !normalWater() ||
         !(cue & kWaterDraw) || !custom()) {
         retailWater(self, cue, graphics);
-        return;
+    } else {
+        // Mixed cues finish gameplay before lending the renderer its palette.
+        if (cue & ~kWaterDraw) retailWater(self, cue & ~kWaterDraw, graphics);
+        const GXColor base = gModelWaterManagerWaterColor[0];
+        const GXColor shine = color(self, 0x5d20), shade = color(self, 0x5d24);
+        replace(gModelWaterManagerWaterColor[0], FluddColors::WATER);
+        replace(color(self, 0x5d20), FluddColors::WATER_HIGHLIGHT, true);
+        replace(color(self, 0x5d24), FluddColors::WATER_HIGHLIGHT, true);
+        retailWater(self, cue & kWaterDraw, graphics);
+        gModelWaterManagerWaterColor[0] = base;
+        color(self, 0x5d20) = shine;
+        color(self, 0x5d24) = shade;
     }
-    // Mixed cues finish gameplay before lending the renderer its palette.
-    if (cue & ~kWaterDraw) retailWater(self, cue & ~kWaterDraw, graphics);
-    const GXColor base = gModelWaterManagerWaterColor[0];
-    const GXColor shine = color(self, 0x5d20), shade = color(self, 0x5d24);
-    replace(gModelWaterManagerWaterColor[0], FluddColors::WATER);
-    replace(color(self, 0x5d20), FluddColors::WATER_HIGHLIGHT, true);
-    replace(color(self, 0x5d24), FluddColors::WATER_HIGHLIGHT, true);
-    retailWater(self, cue & kWaterDraw, graphics);
-    gModelWaterManagerWaterColor[0] = base;
-    color(self, 0x5d20) = shine;
-    color(self, 0x5d24) = shade;
+    // Draw after the water-composite pass, not into its silhouette mask.
+    if (live() && self == gpModelWaterManager && (cue & 0x80u)) GhostFludd::draw(graphics);
 }
 
 void drawSplash(void *self, u32 cue, JDrama::TGraphics *graphics) {

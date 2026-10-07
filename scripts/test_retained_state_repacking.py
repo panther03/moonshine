@@ -31,6 +31,7 @@ class RetainedStateRepackingTests(unittest.TestCase):
                 body = body.replace('    // A retained source', '    testStage=200+slot; lastRepack = result;\n    // A retained source')
             if name == 'bool compressCandidate(':
                 body = body.replace('    StateCodec::WriteSpan output', '    testStage=10; ++candidateCalls;\n    StateCodec::WriteSpan output')
+                body = body.replace('StateCodec::compress(', 'countedCompress(')
             body = body.replace('StateSlotPoolCommitBanked(', 'observedCommit(')
             functions += body + '\n'
         source = r'''
@@ -45,7 +46,7 @@ extern "C" int memcmp(const void*a,const void*b,__SIZE_TYPE__ n){const u8*x=(con
 struct SavestateManager {enum{kSlotCount=3};};
 struct StoredState {u8 sidecars[512];u32 generation,rawSize,packedSize,adler32,parentEpisode,metadataTag;};
 StoredState sSlots[3];StateSlotPool sPool;StatePoolMemory sPoolMemory;
-u32 sPackedChecksums[3],sDurableSlots,testStagingBytes,repackCalls[3][2],candidateCalls;
+u32 sPackedChecksums[3],sDurableSlots,testStagingBytes,repackCalls[3][2],candidateCalls,candidateModes[3];
 StateCodec::Result lastRepack;volatile u32 testStage;
 static bool observedCommit(StateSlotPool*p,const StatePoolMemory*m,u32 slot,u32 n,const u8*t,u32 size){
  testStage=300+slot;bool result=StateSlotPoolCommitBanked(p,m,slot,n,t,size);testStage=400+slot;return result;}
@@ -54,11 +55,14 @@ u8 *staging;void *work;
 #define SUSAMUNE_STATE_STAGING_SIZE testStagingBytes
 #define SUSAMUNE_STATE_CODEC_WORKSPACE_SIZE 0x4e000u
 void *codecWorkspace(){return work;}
+StateCodec::Result countedCompress(void*w,u32 ws,const StateCodec::ReadSpan*s,u32 n,
+ const StateCodec::WriteSpan*d,u32 dn,bool compact=false,bool quick=false){
+ ++candidateModes[quick?0:compact?2:1];return StateCodec::compress(w,ws,s,n,d,dn,compact,quick);}
 ''' + functions + r'''
 #define API extern "C" __declspec(dllexport)
 API void setup(StatePoolMemory*m,u8*t,u32 ts,void*w){
  sPoolMemory=*m;staging=t;testStagingBytes=ts;work=w;memset(&sPool,0,sizeof(sPool));
- memset(sSlots,0,sizeof(sSlots));memset(repackCalls,0,sizeof(repackCalls));candidateCalls=0;sDurableSlots=7;
+ memset(sSlots,0,sizeof(sSlots));memset(repackCalls,0,sizeof(repackCalls));memset(candidateModes,0,sizeof(candidateModes));candidateCalls=0;sDurableSlots=7;
 }
 API u32 measure(const void*p,u32 n,u32 mode){StateCodec::ReadSpan source={p,n};
  return StateCodec::compress(work,0x4e000,&source,1,0,0,mode==2,mode==0).compressedBytes;}
@@ -72,7 +76,7 @@ API int install(u32 slot,const void*p,u32 n,u32 mode){
  sPackedChecksums[slot]=packedChecksum(sPool.slots[slot].offset,s.packedSize);return 1;
 }
 API int save(u32 slot,const void*p,u32 n){StateCodec::ReadSpan source={p,n};StateCodec::Result r;
- bool fits=compressCandidate(&source,1,n,slot,r);if(!fits)fits=repackForCandidate(&source,1,n,slot,r);
+ u32 sizes[3]={};bool fits=compressCandidate(&source,1,n,slot,r,sizes,2);if(!fits)fits=repackForCandidate(&source,1,n,slot,r,sizes);
  return fits;
 }
 API const StateSlotPool *pool(){return &sPool;}
@@ -81,6 +85,7 @@ API u32 metaSize(){return sizeof(StoredState);}
 API u32 checksum(u32 slot){return sPackedChecksums[slot];}
 API u32 calls(u32 slot,u32 mode){return repackCalls[slot][mode];}
 API u32 candidates(){return candidateCalls;}
+API u32 modeCalls(u32 mode){return candidateModes[mode];}
 API u32 stage(){return testStage;}
 API u32 durable(){return sDurableSlots;}
 API const StateCodec::Result *last(){return &lastRepack;}
@@ -141,6 +146,9 @@ API void corrupt(u32 slot,u32 correctCrc){StatePoolMemorySpan piece;
         for i in (0,1):self.check_retained(i,raw,before[i])
         self.assertEqual(self.lib.calls(0,0),1)
         self.assertEqual(self.lib.candidates(),2)
+        # The first quick result still cannot fit after this retained repack.
+        # Its measured size must skip that entire repeat, while fast is retried.
+        self.assertEqual([self.lib.modeCalls(mode) for mode in range(3)], [1, 2, 0])
         self.assertTrue(self.work.guards() and self.staging.guards() and all(b.guards() for b in self.banks))
 
     def test_refusal_with_tiny_staging_preserves_all_retained_bytes(self):
@@ -150,7 +158,7 @@ API void corrupt(u32 slot,u32 correctCrc){StatePoolMemorySpan piece;
         before=[(self.packed(i),self.metadata(i)) for i in (0,1)]
         self.assertEqual(self.lib.save(2,owner,len(raw)),0)
         for i in (0,1):self.assertEqual((self.packed(i),self.metadata(i)),before[i])
-        self.assertEqual(self.lib.candidates(),1)
+        self.assertEqual([self.lib.modeCalls(mode) for mode in range(3)], [1, 1, 1])
         self.assertEqual([[self.lib.calls(i,m) for m in range(2)] for i in (0,1)],[[1,1],[1,1]])
 
     def test_bad_retained_checksum_cannot_be_reencoded_or_republished(self):
@@ -175,7 +183,7 @@ API void corrupt(u32 slot,u32 correctCrc){StatePoolMemorySpan piece;
         for i in (0,1):
             self.check_retained(i,raw,before[i])
             self.assertEqual([self.lib.calls(i,m) for m in (0,1)],[1,1])
-        self.assertEqual(self.lib.candidates(),2)
+        self.assertEqual([self.lib.modeCalls(mode) for mode in range(3)], [1, 1, 2])
 
     def test_previously_fast_states_can_compact_for_a_later_save(self):
         raw=random.Random(907).randbytes(200000)+(random.Random(508).randbytes(8192)+b'A'*2048)*60
@@ -189,7 +197,7 @@ API void corrupt(u32 slot,u32 correctCrc){StatePoolMemorySpan piece;
         for i in (0,1):
             self.check_retained(i,raw,before[i])
             self.assertEqual([self.lib.calls(i,m) for m in (0,1)],[0,1])
-        self.assertEqual(self.lib.candidates(),2)
+        self.assertEqual([self.lib.modeCalls(mode) for mode in range(3)], [1, 1, 2])
 
     def test_malformed_retained_stream_with_correct_crc_preserves_all_slots(self):
         raw=random.Random(908).randbytes(200000);owner=C.create_string_buffer(raw)
@@ -214,7 +222,7 @@ API void corrupt(u32 slot,u32 correctCrc){StatePoolMemorySpan piece;
         self.assertEqual([self.lib.calls(0,m) for m in (0,1)],[0,0])
         self.assertLess(len(self.packed(1)),quick)
         self.assertLess(len(self.packed(2)),quick)
-        self.assertEqual(self.lib.candidates(),1)
+        self.assertEqual([self.lib.modeCalls(mode) for mode in range(3)], [1, 1, 1])
 
     def test_existing_deflate_states_skip_fast_pass_and_fitting_save_does_no_extra_work(self):
         raw=random.Random(903).randbytes(100000);owner=C.create_string_buffer(raw)

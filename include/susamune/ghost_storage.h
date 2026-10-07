@@ -56,6 +56,9 @@ struct SusamuneGhostStorageEnvelope {
 #define SUSAMUNE_GHOST_CMD_LIST   4u
 #define SUSAMUNE_GHOST_CMD_EXPORT 5u
 #define SUSAMUNE_GHOST_CMD_IMPORT_SCAN 6u
+// Page navigation may reuse checked metadata; explicit refreshes always scan.
+// Optional protocol-5 request hint, valid only with CMD_LIST.
+#define SUSAMUNE_GHOST_REQUEST_CACHED_LIST 0x00000001u
 // Source compatibility for earlier callers; protocol 5 uses slot as a page offset.
 #define SUSAMUNE_GHOST_CMD_IMPORT SUSAMUNE_GHOST_CMD_IMPORT_SCAN
 

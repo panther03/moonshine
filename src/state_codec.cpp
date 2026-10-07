@@ -3,6 +3,36 @@
 #endif
 
 #include "../vendor/miniz/state_miniz_config.h"
+#include "../vendor/miniz/miniz.h"
+#if defined(__powerpc__)
+// A single named text section otherwise keeps unused miniz convenience APIs
+// alive with the streaming codec. Separate their sections so the linker can
+// discard them, including an out-of-line initializer when all callers inline it.
+#define MINIZ_SEPARATE_API(name) \
+    extern "C" __typeof__(name) name \
+        __attribute__((section(".foxtrot.text.miniz." #name)));
+MINIZ_SEPARATE_API(mz_free)
+MINIZ_SEPARATE_API(miniz_def_alloc_func)
+MINIZ_SEPARATE_API(miniz_def_free_func)
+MINIZ_SEPARATE_API(miniz_def_realloc_func)
+MINIZ_SEPARATE_API(tdefl_init)
+MINIZ_SEPARATE_API(tdefl_compress_buffer)
+MINIZ_SEPARATE_API(tdefl_create_comp_flags_from_zip_params)
+MINIZ_SEPARATE_API(tdefl_get_adler32)
+MINIZ_SEPARATE_API(tdefl_get_prev_return_status)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_heap)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_mem)
+MINIZ_SEPARATE_API(tdefl_compress_mem_to_output)
+MINIZ_SEPARATE_API(tdefl_write_image_to_png_file_in_memory)
+MINIZ_SEPARATE_API(tdefl_write_image_to_png_file_in_memory_ex)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_callback)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_heap)
+MINIZ_SEPARATE_API(tinfl_decompress_mem_to_mem)
+#undef MINIZ_SEPARATE_API
+#endif
+// Both Quick blocks and Deflate use the same checked Adler implementation.
+// Keep one copy rather than inlining its packed-byte loop into each caller.
+extern "C" __typeof__(mz_adler32) mz_adler32 __attribute__((noinline));
 #include "../vendor/miniz/miniz.c"
 #include "../vendor/miniz/miniz_tdef.c"
 #include "../vendor/miniz/miniz_tinfl.c"
@@ -16,6 +46,7 @@
 #pragma clang section text=".foxtrot.text" rodata=".foxtrot.rodata" data=".foxtrot.data" bss=".foxtrot.bss"
 #endif
 #include "susamune/state_codec.hxx"
+#include "susamune/state_slot_pool.h"
 
 namespace StateCodec {
 namespace {
@@ -33,6 +64,25 @@ struct QuickWorkspace {
     unsigned char raw[kQuickBlock];
     unsigned char packed[LZ4_COMPRESSBOUND(kQuickBlock)];
 };
+
+// This workspace always reserves LZ4's complete worst-case output. Keep the
+// same compressor/table selection as LZ4_compress_fast_extState, without
+// linking its two additional limited-output compressor specializations.
+__attribute__((noinline, section(".text.moonshineQuickLz4")))
+int quickLz4Block(QuickWorkspace *work, const unsigned char *bytes, unsigned int raw) {
+    if (!raw || raw > kQuickBlock) return 0;
+    LZ4_stream_t_internal *ctx =
+        &LZ4_initStream(&work->state, sizeof(work->state))->internal_donotuse;
+    const char *source = reinterpret_cast<const char *>(bytes);
+    char *dest = reinterpret_cast<char *>(work->packed);
+    if (raw < LZ4_64Klimit)
+        return LZ4_compress_generic(ctx, source, dest, raw, NULL, 0,
+            notLimited, byU16, noDict, noDictIssue, 1);
+    const tableType_t table = sizeof(void *) == 4 && (uptrval)source > LZ4_DISTANCE_MAX
+        ? byPtr : byU32;
+    return LZ4_compress_generic(ctx, source, dest, raw, NULL, 0,
+        notLimited, table, noDict, noDictIssue, 1);
+}
 const unsigned int kWorkSize =
     ((sizeof(tdefl_compressor) > sizeof(InflateWorkspace)
         ? sizeof(tdefl_compressor) : sizeof(InflateWorkspace)) + 31u) & ~31u;
@@ -52,7 +102,7 @@ bool overlaps(const void *a, unsigned int as, const void *b, unsigned int bs) {
     return ap < bp + bs && bp < ap + as;
 }
 
-Status checkSource(void *workspace, unsigned int workspaceBytes,
+__attribute__((noinline)) Status checkSource(void *workspace, unsigned int workspaceBytes,
                    const ReadSpan *source, unsigned int count,
                    unsigned int *total) {
     *total = 0;
@@ -106,7 +156,7 @@ struct PackSink {
     unsigned int written;
 };
 
-int packOutput(const void *data, int length, void *context) {
+__attribute__((noinline)) int packOutput(const void *data, int length, void *context) {
     PackSink *sink = static_cast<PackSink *>(context);
     if (length < 0 || static_cast<unsigned int>(length) > kMaxSize - sink->written)
         return 0;
@@ -120,7 +170,7 @@ int packOutput(const void *data, int length, void *context) {
         if (offset >= span.size) { offset -= span.size; continue; }
         const unsigned int room = span.size - offset;
         const unsigned int amount = remaining < room ? remaining : room;
-        memcpy(static_cast<unsigned char *>(span.data) + offset, bytes, amount);
+        StateSlotPoolCopyForward(static_cast<unsigned char *>(span.data) + offset, bytes, amount);
         bytes += amount;
         remaining -= amount;
         offset = 0;
@@ -135,11 +185,11 @@ struct ScatterSink {
     CopyBytes copy;
     void *context;
 
-    unsigned char *reserve(unsigned int size) {
-        if (copy) return NULL;
+    unsigned char *reserve(unsigned int size, DirectBytes direct) {
         while (index < count && offset == spans[index].size) { ++index; offset = 0; }
         if (index == count || size > spans[index].size - offset) return NULL;
         unsigned char *destination = static_cast<unsigned char *>(spans[index].data) + offset;
+        if (copy && (!direct || !direct(context, destination, size))) return NULL;
         offset += size;
         return destination;
     }
@@ -202,7 +252,7 @@ struct SpanReader {
         else offset += size;
     }
 
-    const unsigned char *take(unsigned int size, unsigned char *scratch) {
+    __attribute__((noinline)) const unsigned char *take(unsigned int size, unsigned char *scratch) {
         unsigned int room;
         const unsigned char *data = peek(&room);
         if (data && size <= room) {
@@ -246,9 +296,7 @@ Result quickPack(void *workspace, const ReadSpan *source, unsigned int sourceCou
         const unsigned int raw = rawBytes - done < kQuickBlock ? rawBytes - done : kQuickBlock;
         const unsigned char *bytes = reader.take(raw, work->raw);
         if (!bytes) return {CODEC_ERROR, 0, rawBytes, 0};
-        const int packed = LZ4_compress_fast_extState(&work->state,
-            reinterpret_cast<const char *>(bytes), reinterpret_cast<char *>(work->packed),
-            raw, sizeof(work->packed), 1);
+        const int packed = quickLz4Block(work, bytes, raw);
         if (packed <= 0) return {CODEC_ERROR, 0, rawBytes, 0};
         adler = mz_adler32(adler, bytes, raw);
         const bool plain = static_cast<unsigned int>(packed) >= raw;
@@ -267,7 +315,8 @@ Status quickPass(void *workspace, const ReadSpan *source, unsigned int sourceCou
                  unsigned int outputCount, unsigned int expectedRaw,
                  unsigned int expectedAdler, CopyBytes copy, void *copyContext,
                  const StreamSource *stream = NULL,
-                 EmitBytes emit = NULL, void *emitContext = NULL) {
+                 EmitBytes emit = NULL, void *emitContext = NULL,
+                 DirectBytes directPolicy = NULL) {
     QuickWorkspace *work = static_cast<QuickWorkspace *>(workspace);
     SpanReader reader = {source, sourceCount, 0, 0, stream, 0};
     ScatterSink sink = {output, outputCount, 0, 0, copy, copyContext};
@@ -290,21 +339,24 @@ Status quickPass(void *workspace, const ReadSpan *source, unsigned int sourceCou
             (plain ? packed != raw : packed >= raw)) return CORRUPT_STREAM;
         const unsigned char *bytes = reader.take(packed, work->packed);
         if (!bytes) return CORRUPT_STREAM;
-        // Filtered restores must never write old runtime-owner bytes directly.
-        unsigned char *direct = output && !plain ? sink.reserve(raw) : NULL;
+        // Only a checked whole block with no retained/redirected owner bytes may
+        // bypass the copy policy. The permission callback never sees split spans.
+        unsigned char *direct = output && !plain ? sink.reserve(raw, directPolicy) : NULL;
         if (!plain) {
             if (LZ4_decompress_safe(reinterpret_cast<const char *>(bytes),
                     reinterpret_cast<char *>(direct ? direct : work->raw), packed, raw) != static_cast<int>(raw))
                 return CORRUPT_STREAM;
             bytes = direct ? direct : work->raw;
         }
-        adler = mz_adler32(adler, bytes, raw);
+        // Repacking validates the same complete raw Adler in the destination
+        // encoder. Avoid hashing each decoded Quick block twice on that path.
+        if (!emit) adler = mz_adler32(adler, bytes, raw);
         if (emit && !emit(emitContext, bytes, raw)) return CODEC_ERROR;
         if (output && !direct && !sink.put(bytes, raw)) return CODEC_ERROR;
         consumed += packed;
         decoded += raw;
     }
-    return consumed == compressedBytes && adler == expectedAdler ? SUCCESS : CORRUPT_STREAM;
+    return consumed == compressedBytes && (emit || adler == expectedAdler) ? SUCCESS : CORRUPT_STREAM;
 }
 
 Status inflatePass(void *workspace, const ReadSpan *source,
@@ -313,14 +365,15 @@ Status inflatePass(void *workspace, const ReadSpan *source,
                    unsigned int expectedRaw, unsigned int expectedAdler,
                    CopyBytes copy = 0, void *copyContext = 0,
                    const StreamSource *stream = NULL,
-                   EmitBytes emit = NULL, void *emitContext = NULL) {
+                   EmitBytes emit = NULL, void *emitContext = NULL,
+                   DirectBytes directPolicy = NULL) {
     SpanReader probe = {source, sourceCount, 0, 0, stream, 0};
     unsigned char prefix[4];
     const unsigned char *magic = compressedBytes >= 4 ? probe.take(4, prefix) : NULL;
     if (magic && readWord(magic) == kQuickMagic)
         return quickPass(workspace, source, sourceCount, compressedBytes, output,
                          outputCount, expectedRaw, expectedAdler, copy, copyContext,
-                         stream, emit, emitContext);
+                         stream, emit, emitContext, directPolicy);
     InflateWorkspace *work = static_cast<InflateWorkspace *>(workspace);
     tinfl_init(&work->state);
     ScatterSink sink = {output, outputCount, 0, 0, copy, copyContext};
@@ -361,6 +414,7 @@ Status inflatePass(void *workspace, const ReadSpan *source,
 
 } // namespace
 
+__attribute__((section(".foxtrot.text.codecWorkspaceSize")))
 unsigned int workspaceSize() { return kWorkSize; }
 
 Result compress(void *workspace, unsigned int workspaceBytes,
@@ -433,9 +487,12 @@ Result repack(void *workspace, unsigned int workspaceBytes,
     result.status = inflatePass(workspace, source, sourceCount, packedBytes, NULL, 0,
                                 expectedRaw, expectedAdler, NULL, NULL, NULL, deflateBytes, state);
     if (result.status != SUCCESS) return result;
-    if (tdefl_compress_buffer(state, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE ||
-        tdefl_get_adler32(state) != expectedAdler) {
+    if (tdefl_compress_buffer(state, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE) {
         result.status = CODEC_ERROR;
+        return result;
+    }
+    if (tdefl_get_adler32(state) != expectedAdler) {
+        result.status = CORRUPT_STREAM;
         return result;
     }
     result.compressedBytes = sink.written;
@@ -457,7 +514,7 @@ Status validate(void *workspace, unsigned int workspaceBytes,
                        expectedRaw, expectedAdler);
 }
 
-Status validateRestore(void *workspace, unsigned int workspaceBytes,
+__attribute__((noinline)) Status validateRestore(void *workspace, unsigned int workspaceBytes,
                   const ReadSpan *source, unsigned int sourceCount,
                   const WriteSpan *output, unsigned int outputCount,
                   unsigned int expectedRaw, unsigned int expectedAdler) {
@@ -495,7 +552,7 @@ Status decompressVerified(void *workspace, unsigned int workspaceBytes,
                   const ReadSpan *source, unsigned int sourceCount,
                   const WriteSpan *output, unsigned int outputCount,
                   unsigned int expectedRaw, unsigned int expectedAdler,
-                  CopyBytes copy, void *copyContext) {
+                  CopyBytes copy, void *copyContext, DirectBytes direct) {
     unsigned int compressedBytes, capacity;
     Status status = checkSource(workspace, workspaceBytes, source, sourceCount, &compressedBytes);
     if (status != SUCCESS) return status;
@@ -503,7 +560,8 @@ Status decompressVerified(void *workspace, unsigned int workspaceBytes,
     if (status != SUCCESS) return status;
     if (!expectedRaw || capacity != expectedRaw) return INVALID_ARGUMENT;
     status = inflatePass(workspace, source, sourceCount, compressedBytes,
-                         output, outputCount, expectedRaw, expectedAdler, copy, copyContext);
+                         output, outputCount, expectedRaw, expectedAdler, copy, copyContext,
+                         NULL, NULL, NULL, direct);
     return status == SUCCESS ? SUCCESS : COMMIT_FAILED;
 }
 

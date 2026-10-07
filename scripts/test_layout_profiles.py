@@ -251,6 +251,7 @@ class LayoutProfileMenuTests(unittest.TestCase):
         raw=raw[raw.index('class RawPromptInput {'):raw.index('#endif')]
         keyboard_source=(ROOT/'src/creation_extras.cpp').read_text()
         keyboard='\n'.join(re.findall(r'^const char gCreation\w+\[[^\]]*\] = [^\n]+;', keyboard_source, re.M))
+        keyboard+='\n'+function_source(ROOT/'src/creation_extras.cpp', 'bool updateCreationKeyboardButtons(')
         keyboard+='\n'+function_source(ROOT/'src/creation_extras.cpp', 'bool updateCreationKeyboardText(')
         bind_raw='\n'.join(function_source(ROOT/'include/susamune/binds.hxx', signature)
                            for signature in ('bool wasPressedRaw(', 'bool wasPressedSubsetRaw('))
@@ -315,7 +316,7 @@ void drawCreationKeyboard(Menu*,const char*,const char*,u8,bool,u8){}
 void drawValueRow(Menu*,int,int,int,const char*,const char*,bool,bool,bool){}
 void drawHelpLine(Menu*,int,int,int,int,const char*){}
 class MenuTab{public:virtual const char*title()const=0;virtual const char*summary()const=0;
-virtual bool available()const=0;virtual bool grabsInput()const=0;virtual bool suppressesBinds()const=0;
+virtual bool grabsInput()const=0;virtual bool suppressesBinds()const=0;
 virtual bool fullScreen()const=0;virtual void focus()=0;virtual bool back()=0;
 virtual void update(Menu*,TMarioGamePad*)=0;virtual void draw(Menu*,int,int,int,int)=0;};
 namespace LayoutProfiles{

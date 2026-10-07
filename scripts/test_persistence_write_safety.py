@@ -296,6 +296,13 @@ class IniCopyThroughSafetyTests(unittest.TestCase):
             self.assertLess(final_close, commit)
             self.assertIn("err = FR_NOT_ENOUGH_CORE;", body[output_cap:final_close])
 
+    def test_loader_and_kernel_share_the_complete_file_limit(self) -> None:
+        for source, cap in ((self.loader_source, "SUSA_INI_BUF_SIZE"),
+                            (self.kernel_source, "SUSAMUNE_INI_BUF_SIZE")):
+            self.assertIn(f"#define {cap} MOONSHINE_INI_BUFFER_LIMIT", source)
+        shared = (ROOT / "include/susamune/susamune_cfg.h").read_text()
+        self.assertIn("#define MOONSHINE_INI_BUFFER_LIMIT 65536u", shared)
+
     def test_timeout_keeps_the_original_request_pending(self) -> None:
         for path in (SETTINGS, SETTINGS_EMULATOR):
             poll = function_body(

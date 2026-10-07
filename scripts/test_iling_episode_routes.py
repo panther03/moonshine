@@ -25,7 +25,7 @@ class EpisodeRouteTests(unittest.TestCase):
         code = '#include "susamune/iling_episodes.h"\n'
         code += 'typedef unsigned char u8;typedef unsigned int u32;\n'
         code += 'struct TGameSequence {' + sequence[sequence.index('    enum Area {'):sequence.index('    void set(')] + '};\n'
-        code += 'namespace LevelWarp {struct Dest {u8 area,episode,gameInt3;};u8 parentArea(u8);}\n'
+        code += 'namespace LevelWarp {struct Dest {enum {POST_CORONA=0x80};u8 area,episode,gameInt3;};u8 parentArea(u8);}\n'
         # Fast Any% origins have separate lifecycle coverage; these are the normal IL choices.
         code += 'namespace StageLoader {bool fastAnyStart(int){return false;}}\n'
         code += re.search(r'(?:constexpr|const) u8 kParentAreas\[\].*?\n};', warp, re.S).group(0)
@@ -37,7 +37,7 @@ class EpisodeRouteTests(unittest.TestCase):
         for name in ('kEntryFullRedsFirst', 'kEntryFullRedsLast', 'kEntryNoki3Inside'):
             code += re.search(r'const int ' + name + r' = \d+;', source).group(0)
         for name in ('validEntry', 'pbSlot', 'episodeChoiceIndex', 'parentOrSelf',
-                     'selectedStart', 'selectedEpisode', 'setEpisode', 'entryFinish',
+                     'selectedStart', 'choosesPlazaState', 'selectedEpisode', 'setEpisode', 'entryFinish',
                      'isBonusShine', 'sameCourse', 'sameCourseEpisode', 'sameEpisodeShine'):
             code += function(source, name)
         code += r'''
@@ -68,10 +68,10 @@ API void reset(){for(auto&v:sEpisodeChoices)v=0;gSettings.dirty=0;sRunning=false
     def setUp(self):
         self.lib.reset()
 
-    def test_only_requested_twenty_entries_can_choose_episode(self):
+    def test_twenty_episode_routes_and_gelato_plaza_state_have_choices(self):
         selected = [self.lib.slot(i) for i in range(self.lib.count()) if self.lib.supported(i)]
-        self.assertEqual(set(selected), set(range(100,107)) | {29,59,69} | set(range(126,136)))
-        self.assertEqual(len(selected),20)
+        self.assertEqual(set(selected), set(range(100,107)) | {29,59,69,112} | set(range(126,136)))
+        self.assertEqual(len(selected),21)
         for i in range(self.lib.count()):
             self.assertEqual(self.lib.original(i),self.lib.destination(i))
             if not self.lib.supported(i):
@@ -88,10 +88,12 @@ API void reset(){for(auto&v:sEpisodeChoices)v=0;gSettings.dirty=0;sRunning=false
             for episode in range(8):
                 self.lib.choose(i,episode)
                 expected = original if episode==default else (parents.get(area,area)<<16)|(episode<<8)|episode
+                if slot == 112:
+                    expected = (1 << 16) | ([0,1,5,2,7,8,9,2][episode] << 8) | 9 | (0x80 if episode == 7 else 0)
                 self.assertEqual(self.lib.destination(i),expected,(i,slot,episode))
                 self.assertEqual(self.lib.episode(i),episode)
                 self.assertEqual(self.lib.slot(i),slot)
-        self.assertEqual(self.lib.dirty(),160)
+        self.assertEqual(self.lib.dirty(),168)
 
     def test_bad_indices_and_episode_values_leave_choices_untouched(self):
         for entry in (-1,self.lib.count(),999):

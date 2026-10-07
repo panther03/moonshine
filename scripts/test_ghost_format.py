@@ -585,7 +585,7 @@ class GhostFileTests(unittest.TestCase):
 
     def test_forward_version_and_feature_are_distinct(self) -> None:
         for version in (ghost_format.GHOST_VERSION_V1,
-                        ghost_format.GHOST_VERSION_V2, 6):
+                        ghost_format.GHOST_VERSION_V2, 7):
             with self.subTest(version=version), \
                  self.assertRaises(ghost_format.UnsupportedVersion):
                 ghost_format.validate_ghost(build_ghost(version=version))

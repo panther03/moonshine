@@ -47,10 +47,12 @@ extern "C" void*memset(void*d,int c,__SIZE_TYPE__ n){u8*a=(u8*)d;while(n--)*a++=
         code += function(card, 'checksum') + function(card, 'valid')
         code += r'''
 static Settings settings;
-static SusamuneCfg cfg;
+static union {SusamuneCfg config;u8 bytes[0x1a20];} storage;
+static SusamuneCfg &cfg = storage.config;
 static Record record;
 #define API extern "C" __declspec(dllexport)
-API void reset(unsigned count){settings.resetDefaults();memset(&cfg,0xa5,sizeof(cfg));cfg.count=count;}
+API void reset(unsigned count){settings.resetDefaults();memset(&storage,0xa5,sizeof(storage));cfg.flags &= ~SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;cfg.count=count;}
+API void capability(unsigned enabled){if(enabled)cfg.flags|=SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;else cfg.flags&=~SUSAMUNE_CFG_FLAG_SETTINGS_TAIL;}
 API unsigned write(unsigned index,unsigned value){return SusamuneCfgSetSetting(&cfg,index,(u8)value);}
 API unsigned read(unsigned index){return SusamuneCfgGetSetting(&cfg,index);}
 API unsigned get(unsigned index){return settings.get((SettingId)index);}
@@ -68,10 +70,10 @@ API unsigned category(unsigned index){return Settings::category((SettingId)index
 API unsigned cardRoundtrip(unsigned oldCount){
  memset(&record,0,sizeof(record));record.magic=kRecordMagic;record.version=kRecordVersion;
  record.payloadSize=kRecordPayloadSize;record.gameVersion=SUSAMUNE_GAME_VERSION;
- settings.stageInto(&record.cfg);record.cfg.magic=SUSAMUNE_CFG_MAGIC;record.cfg.version=SUSAMUNE_CFG_VERSION;
+ settings.stageInto(&cfg);record.cfg=cfg;memcpy(record.settingsTail,(const void*)SUSAMUNE_CFG_SETTINGS_TAIL(&cfg),32);record.cfg.magic=SUSAMUNE_CFG_MAGIC;record.cfg.version=SUSAMUNE_CFG_VERSION;
  if(oldCount){record.cfg.count=128;memset(record.cfg.extraValues,0x7f,sizeof(record.cfg.extraValues));}
  record.checksum=checksum(&record);if(!valid(&record))return 0;
- settings.resetDefaults();settings.adopt(&record.cfg);return 1;
+ cfg=record.cfg;memcpy((void*)SUSAMUNE_CFG_SETTINGS_TAIL(&cfg),record.settingsTail,32);settings.resetDefaults();settings.adopt(&cfg);return 1;
 }
 API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(&record);}
 '''
@@ -104,6 +106,42 @@ API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(
         self.assertEqual(before[32:64], b'\xa5'*32)
         self.assertEqual(before[192:], b'\xa5'*(5152-192))
 
+    def test_advertised_tail_is_bounded_and_does_not_touch_neighbouring_fields(self):
+        self.lib.reset(151)
+        self.lib.capability(1)
+        before = bytes(self.lib.byteAt(i) for i in range(0x1a20))
+        for index in (141, 142, 173):
+            self.assertEqual(self.lib.write(index, 19), 1)
+            self.assertEqual(self.lib.read(index), 19)
+        self.assertEqual(self.lib.byteAt(31), 19)
+        self.assertEqual(self.lib.byteAt(0x1a00), 19)
+        self.assertEqual(self.lib.byteAt(0x1a1f), 19)
+        for index in (174, 65535, 0xffffffff):
+            self.assertEqual(self.lib.write(index, 8), 0)
+            self.assertEqual(self.lib.read(index), 255)
+        after = bytes(self.lib.byteAt(i) for i in range(0x1a20))
+        self.assertEqual(after[32:0x1a00], before[32:0x1a00])
+        self.assertEqual(after[0x1a01:0x1a1f], before[0x1a01:0x1a1f])
+        self.lib.capability(0)
+        self.assertEqual(self.lib.read(142), 255)
+        self.assertEqual(self.lib.write(142, 4), 0)
+        self.assertEqual(self.lib.byteAt(0x1a00), 19)
+
+    def test_tail_controls_default_without_capability_and_roundtrip_when_advertised(self):
+        self.lib.reset(151)
+        self.lib.adopt()
+        self.assertEqual([self.lib.get(i) for i in range(142, 149)], [1, 1, 1, 8, 17, 5, 5])
+        self.lib.capability(1)
+        expected = [0, 0, 0, 12, 20, 8, 4, 0x7f, 0x35]
+        for index, value in enumerate(expected, 142):
+            self.lib.set(index, value)
+        self.lib.stage()
+        self.assertEqual([self.lib.read(i) for i in range(142, 151)], expected)
+        self.assertEqual(self.lib.cardRoundtrip(0), 1)
+        self.assertEqual([self.lib.get(i) for i in range(142, 151)], expected)
+        self.assertEqual(self.lib.cardRoundtrip(1), 1)
+        self.assertEqual([self.lib.get(i) for i in range(142, 149)], [1, 1, 1, 8, 17, 5, 5])
+
     def test_old_count_and_unset_keep_defaults_while_new_count_clamps_values(self):
         for count in (0, 128):
             self.lib.reset(count)
@@ -128,7 +166,7 @@ API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(
         self.lib.set(128, 4)
         self.lib.set(129, 1)
         self.lib.stage()
-        self.assertEqual(self.lib.count(), 142)
+        self.assertEqual(self.lib.count(), 151)
         self.assertEqual([self.lib.read(i) for i in (128,129)], [4,1])
         self.assertEqual(bytes(self.lib.byteAt(i) for i in range(192,320)), b'\xa5'*128)
 
@@ -161,7 +199,7 @@ API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(
         self.assertEqual(self.lib.get(138), 1)
         self.lib.set(138, 0)
         self.lib.stage()
-        self.assertEqual(self.lib.count(), 142)
+        self.assertEqual(self.lib.count(), 151)
         self.assertEqual(self.lib.read(138), 0)
         self.assertEqual(self.lib.cardRoundtrip(0), 1)
         self.assertEqual(self.lib.get(138), 0)
@@ -223,10 +261,10 @@ API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(
 
     def test_jump_and_buttslide_alias_toggle_independently_without_new_wire_bytes(self):
         self.assertEqual(self.lib.name(141), b'Jump display')
-        self.assertEqual(self.lib.name(142), b'Buttslide display')
-        self.assertEqual(self.lib.category(141), self.lib.category(142))
+        self.assertEqual(self.lib.name(151), b'Buttslide display')
+        self.assertEqual(self.lib.category(141), self.lib.category(151))
         for mask in range(4):
-            for setting, bit in ((141, 1), (142, 2)):
+            for setting, bit in ((141, 1), (151, 2)):
                 for direction in (-1, 1):
                     self.lib.reset(142)
                     self.lib.set(141, mask)
@@ -235,7 +273,7 @@ API unsigned corruptExtra(unsigned i){record.cfg.extraValues[i]^=1;return valid(
                     self.assertEqual(self.lib.get(141), mask ^ bit)
                     self.assertEqual(self.lib.label(setting), b'Off' if mask & bit else b'On')
                     self.lib.stage()
-                    self.assertEqual(self.lib.count(), 142)
+                    self.assertEqual(self.lib.count(), 151)
                     self.assertEqual(self.lib.read(141), mask ^ bit)
                     self.assertEqual(self.lib.read(142), 255)
                     self.assertEqual(self.lib.cardRoundtrip(0), 1)

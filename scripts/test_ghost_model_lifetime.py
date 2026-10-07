@@ -44,6 +44,8 @@ class GhostModelLifetimeTests(unittest.TestCase):
         self.assertLess(release, reload_model)
         begin = function_body("void beginFrame()")
         self.assertIn("loadPendingStage()", begin)
+        self.assertIn("sLoadedAlternative != selectedAlternative()", begin)
+        self.assertIn("loadModel(sLoadedAlternative)", body)
 
     def test_mario_draw_buffers_drop_retired_ghost_packets(self) -> None:
         body = function_body("bool retirePlayerDrawBuffers()")

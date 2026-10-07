@@ -21,6 +21,7 @@ class MarioDrawLifecycleTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         work = Path(cls.temp.name)
         source = (ROOT / "src/mario_colors_draw.cpp").read_text()
+        shared = (ROOT / "include/susamune/model_color_draw.hxx").read_text()
         structs = source[source.index("typedef void (*PacketCallback)"):
                          source.index("static_assert(")]
         code = r'''
@@ -44,6 +45,11 @@ void GXSetTevColorS10(int,GXColorS10){}void GXSetTevColorIn(int,int,int,int,int)
 void GXSetTevColorOp(int,int,int,int,int,int){}void GXLoadTexObj(GXTexObj*,int){customLoads++;}
 void DCStoreRange(void*,unsigned){}void GXInvalidateTexAll(){}
 namespace MarioColorTexture {const unsigned kAtlasBytes=32768;void recolor(const u8*,u8*,const u8(*)[3],u8){}}
+'''
+        code += "namespace ModelColorDraw {bool mem1(const void*p,unsigned){return p!=0;}\n"
+        code += function(shared, "live") + function(shared, "supportedModel")
+        code += "void initTexture(GXTexObj&,const ResTIMG&,const void*,u16,u16){} }\n"
+        code += r'''
 namespace MarioColors{
 enum{CAP,SHIRT,OVERALLS,GLOVES,SHOES,SUNGLASSES,SUNSHINE_SHIRT,PART_COUNT};
 unsigned enabledMask;u8 color[3]={255,255,255};
@@ -51,12 +57,13 @@ bool enabled(unsigned p){return enabledMask&(1u<<p);}const u8*rgb(unsigned){retu
 '''
         code += structs
         code += r'''
-bool mem1(const void*p,unsigned){return p!=0;}
+using ModelColorDraw::mem1;
+using ModelColorDraw::supportedModel;
 ResTIMG texture={};const ResTIMG*mainTexture(J3DModelData*){return &texture;}
 void initTexture(GXTexObj&,const ResTIMG&,const void*){}
 '''
         code += "\n".join(function(source, n) for n in (
-            "live", "callback", "drawPacket", "supportedModel", "install",
+            "live", "callback", "drawPacket", "install",
             "onStageSetup", "update"))
         code += r'''
 J3DShapePacket packets[15];J3DModelData data[8];J3DModel models[8];

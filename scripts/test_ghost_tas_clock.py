@@ -32,6 +32,7 @@ class GhostTasClockTests(unittest.TestCase):
 #include "susamune/susamune_cfg.h"
 typedef unsigned int u32; typedef unsigned short u16;
 typedef unsigned char u8; typedef int s32; typedef long long s64;
+namespace GhostFludd {void capture(SusamuneGhostFluddSample&) {}}
 struct Timer {
  s32 qf; u32 serial; bool stopped;
  bool currentQf(s32 *out, bool *stop=0) { *out=qf; if(stop)*stop=stopped; return true; }
@@ -40,7 +41,7 @@ struct Timer {
 struct Track {
  SusamuneGhostInputSample *inputs; u32 inputCount;
  SusamuneGhostSplitSample splits[6]; u8 splitCount;
- bool completed; u16 segmentCount; u8 teachingFlags; u32 runFlags; u32 endQf;
+ u16 formatVersion; bool completed; u16 segmentCount; u8 teachingFlags; u32 runFlags; u32 endQf;
 } sRecord;
 SusamuneGhostInputSample inputs[4096];
 SusamuneGhostClock sRecordClock;
@@ -55,7 +56,7 @@ bool observerRunning() { return sObserverPhase==5 || sObserverPhase==6; }
 bool observerStatsSuppressed() { return observerRunning(); }
 '''
         body = "\n".join(function(source, signature) for signature in (
-            "s32 recordQf(", "void frameControl(", "void captureInput(",
+            "SusamuneGhostInputSample &inputAt(", "s32 recordQf(", "void frameControl(", "void captureInput(",
             "void captureSplit(", "s32 observerQf("))
         wrapper = r'''
 extern "C" {
@@ -64,7 +65,7 @@ __declspec(dllexport) void reset() {
  sAttemptSerial=1;sRecordClock.ready=false;sRecordClock.omittedQf=0;
  sRecord.inputs=inputs;sRecord.inputCount=0;sRecord.splitCount=0;
  sRecord.completed=false;sRecord.segmentCount=1;sRecord.teachingFlags=0;
- sRecord.runFlags=0;sRecording=true;sObserverPhase=0;
+ sRecord.formatVersion=5;sRecord.runFlags=0;sRecording=true;sObserverPhase=0;
  sFrameFrozen=false;sFrameAssisted=false;
  frameControl(false,false);
 }

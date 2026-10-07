@@ -57,7 +57,9 @@ class Menu {public:u32 navigationInput(TMarioGamePad*p){return p->mButtons.mRapi
  void toast(const char*){}void factoryReset(){} };
 void CreationEditor::draw(Menu*,const char*,const char*)const{}
 '''
-        code = prelude + raw + re.sub(r"^#include[^\n]*", "", (ROOT / "src/creation_color.cpp").read_text(), flags=re.M)
+        shared = (ROOT / "include/susamune/model_color_editor.hxx").read_text()
+        shared = re.sub(r"^#(?:include|ifndef|define|endif)[^\n]*", "", shared, flags=re.M)
+        code = prelude + raw + shared + re.sub(r"^#include[^\n]*", "", (ROOT / "src/creation_color.cpp").read_text(), flags=re.M)
         code += creation[creation.index("enum EditOption"):creation.index("inline int clampi")]
         code += function(creation, "clampi")
         code += "namespace LayoutEditor {" + function(layout, "updatePositionScale") + "}\n"
@@ -193,12 +195,13 @@ struct Extras{bool editing(){return false;}void updateEditor(TMarioGamePad*){}
  void beginSavestateFeedbackEditor(){}void beginNativeTimerEditor(){}
  void beginWallkickEditor(){}void beginRolloutEditor(){}void beginDustEditor(){}
  void beginPracticeDisplayEditor(unsigned){}}gCreationExtras;
+struct Qft{bool editing(){return false;}void updateEditor(TMarioGamePad*){}void beginEditor(){}}gQftDisplay;
 int wrap(int value,int n){return (value+n)%n;}
 const u8 kAppearanceMarioSettings[]={1,2,3};const u8 otherSettings[]={4};
 class CategorySettingsTab{public:
  int mSel=0,mMode=1;bool appearance=true;struct Page{const u8*ids;}page={kAppearanceMarioSettings};
  bool isAppearance()const{return appearance;}const Page&currentPage()const{return page;}
- bool hasFactoryReset()const{return false;}bool hasFeedbackEditor()const{return false;}
+ bool hasFactoryReset()const{return false;}bool hasTimerEditors()const{return false;}bool hasFeedbackEditor()const{return false;}
  bool hasMovementEditors()const{return false;}bool hasNativeTimerEditor()const{return false;}
  bool resetConfirm()const{return false;}bool pageRoot()const{return !mMode;}
  bool hasPages()const{return true;}bool isStarred()const{return false;}

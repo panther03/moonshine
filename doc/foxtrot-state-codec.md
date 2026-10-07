@@ -35,11 +35,22 @@ No external dictionary or file-provided destination is accepted.
 
 Quick compression trades some density for speed. If its complete candidate cannot
 fit after reclaiming the selected slot, Save retries one-probe greedy miniz
-Deflate, then eight-probe lazy Deflate before refusing. All modes concatenate the
+Deflate. Capacity failure can repack retained quick states before trying
+eight-probe lazy Deflate, as described below. All modes concatenate the
 same static/root/stage and used ghost-prefix spans without a full raw copy.
 `MINIZ_PORTABLE_FAST_DEFLATE` uses byte-safe little-endian reads on PowerPC and all
 15 hash bits of its existing table. The selected mode is reused for recompression.
 A nearly full pool can therefore make Save slower; there is no automatic eviction.
+
+Within one synchronous Save, the three complete measured candidate sizes are
+kept on the stack. If retained-state repacking frees some room, a retry skips
+compression modes whose measured output still cannot fit. It retries the first
+mode that now fits, using the same immutable source and unchanged codec. The
+sizes never survive the operation or influence a later save. Private host checks
+using two real PAL Plaza capture sets at an artificially pressured capacity
+reduced candidate passes from six to four with byte-identical final streams.
+Ordinary saves that do not repack are unchanged. This reduces redundant work;
+it does not remove the stronger-compression delay or establish a Wii time limit.
 
 Output spans are capacities: the save path supplies the 4 MiB transient area and
 up to two free pool-bank spans. On exhaustion the sink counts while discarding
@@ -224,9 +235,13 @@ existing upper linker span.
 
 ## Crowded memory slots
 
-An ordinary save still tries the quick format, fast Deflate, then compact
-Deflate only as capacity requires. If the new state still cannot fit, it can
-re-encode the other retained slots. Their complete compressed bytes remain
+An ordinary save first tries the quick format and fast Deflate. If neither fits,
+it tries shrinking retained quick states to fast Deflate before spending a
+compact pass on the incoming state. This avoids a full dense compression pass
+when the crowded pool needs retained-state repacking anyway. The incoming
+compact fallback and compact retained-state fallbacks remain available afterward.
+
+Re-encoding retained slots keeps their complete compressed bytes
 intact until a smaller replacement has been produced
 and checked. The second compressor borrows the first 312 KiB of the existing
 4 MiB temporary area; its output uses the remaining temporary area and unused
@@ -236,7 +251,7 @@ The fallback tries each originally quick retained slot at most once with fast
 Deflate. Every retained slot can then get one compact attempt, including Deflate
 states from an earlier save or import. This extra save time occurs only after
 a capacity refusal. It regenerates the new candidate only when the recovered
-space could hold its previously measured compact size, and
+space could hold its previously measured candidate size, and
 stops when the save succeeds. Ordinary saves that fit do no retained-state work.
 
 Repacking checks the old packed CRC and the decoded size/Adler checksum. A

@@ -26,6 +26,7 @@ bool captureWithReader(Data &, const Layout &, ReadWord, void *,
                        unsigned int build, unsigned int config);
 bool valid(const Data &);
 bool matches(const Data &saved, const Data &live);
+bool reidentify(Data &, unsigned int build);
 unsigned int failureAddress();
 
 // Use only the locally captured, matched live profile, after validating all

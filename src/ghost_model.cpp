@@ -4,6 +4,7 @@
 #include "Dolphin/MTX.h"
 #include "Dolphin/OS.h"
 #include "Dolphin/mem.h"
+#include "Dolphin/string.h"
 #include "JSystem/J3D/J3DDrawBuffer.hxx"
 #include "JSystem/J3D/J3DModel.hxx"
 #include "JSystem/J3D/J3DModelLoaderDataBase.hxx"
@@ -12,15 +13,22 @@
 #include "JSystem/JKernel/JKRFileLoader.hxx"
 #include "JSystem/JKernel/JKRHeap.hxx"
 #include "SMS/Player/Mario.hxx"
+#include "SMS/Map/Map.hxx"
+#include "SMS/Camera/CubeManagerBase.hxx"
 #include "SMS/Player/MarioDraw.hxx"
 #include "SMS/Player/Yoshi.hxx"
+#include "SMS/Player/Watergun.hxx"
+#include "Dolphin/math.h"
 #include "SMS/MoveBG/ResetFruit.hxx"
+#include "SMS/MarioUtil/ShadowUtil.hxx"
 #include "SMS/Strategic/LiveActor.hxx"
 #include "SMS/Strategic/Strategy.hxx"
 #include "SMS/System/MarDirector.hxx"
 #include "susamune/addresses.hxx"
 #include "susamune/checksum.hxx"
 #include "susamune/ghost.hxx"
+#include "susamune/ghost_fludd.hxx"
+#include "susamune/ghost_mario_model.hxx"
 #include "susamune/ghost_model_asset.h"
 #include "susamune/ghost_storage.h"
 #include "susamune/menu.hxx"
@@ -32,9 +40,20 @@ public:
 };
 
 extern TScreenTexture *gpScreenTexture;
+extern "C" u8 nozzleBmdData[6][0x1c];
+extern "C" f32 ghostSquareRoot(f32) asm("sqrtf__3stdFf");
+extern "C" void ghostFluddTransform(const void *, f32, u16, J3DTransformInfo *)
+    asm("calcTransform__18J3DAnmTransformKeyCFfUsP16J3DTransformInfo");
 
-void SMS_InitPacket_MatColor(J3DModel *, u16, GXChannelID,
-                             const GXColor *);
+// Retail lighting routes: the light manager owns the buffers and installs the
+// matching environment lights when they are drawn, after model submission.
+extern "C" void *gpLightManager;
+extern "C" u8 j3dSys[];
+extern "C" void ghostLightEntry(void *, int)
+    asm("changeLightDrawBuffer__15TLightWithDBSetFi");
+extern "C" void ghostLightExit(void *)
+    asm("resetLightDrawBuffer__15TLightWithDBSetFv");
+
 J3DMtxCalc *J3DNewMtxCalcAnm(u32, J3DAnmTransform *);
 
 namespace GhostModel {
@@ -43,7 +62,8 @@ namespace {
 enum Appearance {
     APPEARANCE_SHADOW = 0,
     APPEARANCE_PIANTA = 1,
-    APPEARANCE_COUNT = 2,
+    APPEARANCE_MARIO = 2,
+    MODEL_SLOT_COUNT = 2,
 };
 
 struct AssetHeader {
@@ -63,6 +83,7 @@ struct ModelSlot {
     J3DModelData *data;
     J3DModel *model;
     J3DMtxCalc *mtxCalc;
+    J3DMtxCalc *upperCalc;
     bool opaque;
     bool opacityConfigured;
     bool colorCallbacksInstalled;
@@ -72,6 +93,8 @@ enum AttachmentKind {
     ATTACHMENT_NONE,
     ATTACHMENT_YOSHI,
     ATTACHMENT_HELD,
+    ATTACHMENT_FLUDD,
+    ATTACHMENT_NOZZLE,
 };
 
 struct AttachmentPacketState {
@@ -82,6 +105,7 @@ struct AttachmentPacketState {
 
 struct AttachmentModel {
     J3DModelData *data;
+    J3DModelData *sourceData;
     J3DModel *model;
     int runner;
     AttachmentKind kind;
@@ -158,6 +182,9 @@ static_assert(SUSAMUNE_GHOST_MODEL_HEAP_SIZE >=
 static_assert(SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE >=
                   kModelAllocationPreflight + kFixedExpHeapOverhead,
               "secondary model heap cannot satisfy its preflight");
+static_assert(SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE >=
+                  GhostMarioModel::kAllocationPreflight + kFixedExpHeapOverhead,
+              "Mario must fit the existing secondary heap");
 static_assert(SUSAMUNE_MOD_ATTACHMENT_HEAP_SIZE >=
                   kAttachmentInstanceMax * 2u + kFixedExpHeapOverhead,
               "attachment heap cannot hold two worst-case instances");
@@ -173,12 +200,14 @@ static_assert(SUSAMUNE_GHOST_MAX_SAMPLE_DATA_SIZE +
                   SUSAMUNE_GHOST_SEGMENT_TABLE_OFFSET,
               "Shadow work copy overlaps the record segment table");
 
-ModelSlot sSlots[APPEARANCE_COUNT];
+ModelSlot sSlots[MODEL_SLOT_COUNT];
+Appearance sLoadedAlternative = APPEARANCE_PIANTA;
 JKRExpHeap *sAttachmentHeap;
-AttachmentModel sAttachmentModels[2];
+const int kAttachments = 6; // held/Yoshi, body, nozzle for each runner
+AttachmentModel sAttachmentModels[kAttachments];
 bool sRegistered;
 bool sPrepared[2];
-AttachmentModel *sPreparedAttachments[2];
+AttachmentModel *sPreparedAttachments[kAttachments];
 bool sSubmitted[2];
 Ghost::VisualState sVisualStates[2];
 bool sHaveVisualState[2];
@@ -305,7 +334,7 @@ u8 ghostAlpha() {
     return kOpacity[choice];
 }
 
-J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi) {
+J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi, bool upper = false) {
     if (!gpMarioOriginal || !gpMarioOriginal->mModelData ||
         !gpMarioOriginal->mModelData->_04 ||
         logicalId > SUSAMUNE_GHOST_ANIMATION_ID_MAX) {
@@ -313,7 +342,8 @@ J3DAnmTransform *marioAnimation(u16 logicalId, bool ridingYoshi) {
     }
     // Retail bypasses gMarioAnimeData for 0xB6..0xC6 rider poses.
     const u16 bckId = ridingYoshi
-        ? logicalId : gMarioAnimeData[logicalId].mAnimID;
+        ? logicalId : upper ? gMarioAnimeData[logicalId].mAnimFluddID
+                           : gMarioAnimeData[logicalId].mAnimID;
     if (bckId >= kMarioBckCount) return nullptr;
     u8 *common = static_cast<u8 *>(gpMarioOriginal->mModelData->_04);
     J3DAnmTransform **animations =
@@ -375,11 +405,29 @@ bool configureOpacity(ModelSlot &slot, bool opaque) {
     return true;
 }
 
+void bodyPacketCallback(J3DShapePacket *packet, int stage) {
+    if (stage != 0) return;
+    const GXColor *original = *reinterpret_cast<const GXColor **>(
+        reinterpret_cast<u8 *>(packet) + kShapePacketUserAreaOffset);
+    GXColor color = *original;
+    color.a = sGhostColor.a;
+    GXSetChanMatColor(GX_COLOR0A0, color);
+}
+
 bool installColorCallbacks(ModelSlot &slot) {
     if (!slot.data || !slot.model) return false;
     if (slot.colorCallbacksInstalled) return true;
-    for (u16 i = 0; i < slot.data->getMaterialNum(); ++i)
-        SMS_InitPacket_MatColor(slot.model, i, GX_COLOR0A0, &sGhostColor);
+    // The retail helper writes complete XF RGBA regardless of GX_ALPHA0.
+    // Keep each private material's native RGB and change only ghost opacity.
+    for (u16 i = 0; i < slot.data->getMaterialNum(); ++i) {
+        u8 *material = reinterpret_cast<u8 *>(slot.data->mMaterials[i]);
+        const u8 *color = *reinterpret_cast<u8 **>(material + 0x20);
+        J3DShape *shape = *reinterpret_cast<J3DShape **>(material + 0x04);
+        u8 *packet = reinterpret_cast<u8 *>(slot.model->mShapePackets) +
+            static_cast<u32>(shape->_4) * kShapePacketStride;
+        *reinterpret_cast<const void **>(packet + kShapePacketUserAreaOffset) = color + 4;
+        *reinterpret_cast<void (**)(J3DShapePacket *, int)>(packet + kShapePacketCallbackOffset) = bodyPacketCallback;
+    }
     slot.colorCallbacksInstalled = true;
     return true;
 }
@@ -447,15 +495,12 @@ void attachmentPacketCallback(J3DShapePacket *packet, int phase) {
     GXSetChanMatColor(GX_COLOR0A0, state->channelColor);
     if (state->tintTevColor)
         GXSetTevColorS10(GX_TEVREG2, state->tevColor);
-    const bool opaque = state->channelColor.a == 255;
-    if (!opaque) {
-        GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    }
-    GXSetBlendMode(opaque ? GX_BM_NONE : GX_BM_BLEND,
-                   opaque ? GX_BL_ONE : GX_BL_SRCALPHA,
-                   opaque ? GX_BL_ZERO : GX_BL_INVSRCALPHA,
-                   GX_LO_COPY);
-    GXSetZMode(GX_TRUE, GX_LEQUAL, opaque ? GX_TRUE : GX_FALSE);
+    // Full ghost opacity must retain the material's own glass/water blend.
+    if (state->channelColor.a == 255) return;
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA,
+                  GX_LO_COPY);
+    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
 }
 
 void installAttachmentCallbacks(AttachmentModel &attachment) {
@@ -527,16 +572,75 @@ J3DModel *yoshiSource() {
 
 void restoreHeap(JKRHeap *heap);
 
+// Existing V6 samples do not store the separate pump frame. Reconstruct a
+// deterministic ping-pong pose from the recorded timeline; pause/seek do not
+// advance it and the live player's animation state is never used.
+f32 pumpFrame(const Ghost::VisualState &state, s16 end) {
+    if (end <= 0) return 0;
+    const u32 span = static_cast<u32>(end) * 4u;
+    const u32 phase = state.visualQf % (span * 2u);
+    return static_cast<f32>(phase > span ? span * 2u - phase : phase) * 0.25f;
+}
+
+
+MActor *fluddActor(u8 nozzle, bool body) {
+    TWaterGun *gun = gpMarioOriginal ? gpMarioOriginal->mFludd : nullptr;
+    if (!gun || nozzle >= 6 || !gun->mNozzleList[nozzle]) return nullptr;
+    return body ? *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun) + 0x1cd4)
+        : *reinterpret_cast<MActor **>(reinterpret_cast<u8 *>(gun->mNozzleList[nozzle]) + 0x380);
+}
+
+void animateFludd(J3DModelData *data, MActor *actor, bool body,
+                  const Ghost::VisualState &state) {
+    // Read the retail key table, but evaluate into private joints at an explicit
+    // frame. No MActor::setBck or live frame-controller writes are performed.
+    if (!actor || !actor->mAnmData) return;
+    const u8 *table = *reinterpret_cast<u8 *const *>(
+        reinterpret_cast<const u8 *>(actor->mAnmData) + 0x2c);
+    if (!table) return;
+    const u32 count = *reinterpret_cast<const u32 *>(table);
+    if (!count || count > 16) return;
+    const char *const *names = *reinterpret_cast<const char *const *const *>(table + 8);
+    const u8 *const *keys = *reinterpret_cast<const u8 *const *const *>(table + 12);
+    if (!names || !keys) return;
+    const bool firing = state.fludd.mode & SUSAMUNE_GHOST_FLUDD_SPRAYING;
+    u32 index = firing ? 2u : 3u;
+    if (body) {
+        const char *name = firing ? "wg_pump" : "wg_house";
+        for (index = 0; index < count; ++index)
+            if (names[index] && !strcmp(names[index], name)) break;
+    }
+    if (index >= count) return;
+    const u8 *animation = keys[index];
+    if (!animation || *reinterpret_cast<const u16 *>(animation + 0x22) != data->getJointNum()) return;
+    const s16 end = *reinterpret_cast<const s16 *>(animation + 2);
+    if (end <= 0) return;
+    const f32 frame = !firing ? end : body ? pumpFrame(state, end)
+        : (state.visualQf % (static_cast<u32>(end) * 4u)) * 0.25f;
+    for (u16 i = 0; i < data->getJointNum(); ++i)
+        ghostFluddTransform(animation, frame, i,
+            reinterpret_cast<J3DTransformInfo *>(reinterpret_cast<u8 *>(data->mJoints[i]) + 0x1c));
+}
+
 AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
                                   AttachmentKind kind, J3DModel *source) {
     memset(&attachment, 0, sizeof(attachment));
     attachment.data = source ? source->mModelData : nullptr;
+    attachment.sourceData = attachment.data;
     attachment.runner = runner;
     attachment.kind = kind;
     if (!sAttachmentHeap || !source || !source->mModelData) return nullptr;
     u32 estimate = 0;
-    if (!validAttachmentSource(source, &estimate) ||
-        sAttachmentHeap->getTotalFreeSize() < estimate) {
+    if (!validAttachmentSource(source, &estimate)) return nullptr;
+    const bool independent = kind == ATTACHMENT_FLUDD || kind == ATTACHMENT_NOZZLE;
+    const void *bmd = independent ? source->mModelData->_4 : nullptr;
+    if (independent) {
+        if (!bmd || memcmp(bmd, "J3D2bmd3", 8) ||
+            readBig32(static_cast<const u8 *>(bmd) + 8) > 0x9000u) return nullptr;
+        // Bounded retail FLUDD assets; includes loader objects and heap overhead.
+        estimate += kind == ATTACHMENT_FLUDD ? 0x5000u : 0x2000u;
+    }
+    if (sAttachmentHeap->getTotalFreeSize() < estimate) {
         return nullptr;
     }
 
@@ -547,8 +651,9 @@ AttachmentModel *createAttachment(AttachmentModel &attachment, int runner,
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     sAttachmentHeap->becomeCurrentHeap();
     const u32 before = sAttachmentHeap->getTotalFreeSize();
+    if (independent) attachment.data = J3DModelLoaderDataBase::load(bmd, 0x10040000u);
     void *storage = sAttachmentHeap->alloc(sizeof(J3DModel), 32);
-    if (storage) {
+    if (storage && attachment.data) {
         attachment.model =
             new (storage) J3DModel(attachment.data, 0, 1);
         attachment.model->makeDL();
@@ -587,28 +692,91 @@ AttachmentRequest desiredAttachment(const Ghost::VisualState &state) {
     return request;
 }
 
-bool attachmentSetMatches(const AttachmentRequest requests[2]) {
-    for (int runner = 0; runner < 2; ++runner) {
+#pragma clang section text=".foxtrot.text"
+ModelSlot &runnerSlot(int runner);
+void desiredFludd(const Ghost::VisualState &state, AttachmentRequest *out) {
+    if (state.yoshi || !(state.fludd.mode & SUSAMUNE_GHOST_FLUDD_PRESENT) ||
+        !gpMarioOriginal || !gpMarioOriginal->mFludd) return;
+    const u32 nozzle = state.fludd.mode & 7;
+    MActor *body = fluddActor(nozzle, true);
+    MActor *head = fluddActor(nozzle, false);
+    if (body && body->mModel) out[0] = {ATTACHMENT_FLUDD, body->mModel};
+    if (head && head->mModel) out[1] = {ATTACHMENT_NOZZLE, head->mModel};
+}
+
+bool prepareFludd(AttachmentModel &attachment, int runner,
+                  const Ghost::VisualState &state) {
+    ModelSlot &mario = runnerSlot(runner);
+    Mtx *base = attachment.model->getBaseTRMtx();
+    if (attachment.kind == ATTACHMENT_FLUDD) {
+        if (!mario.data->mJointNames) return false;
+        const s32 chest = mario.data->mJointNames->getIndex("jnt_chest");
+        if (chest < 0 || chest >= mario.data->getJointNum()) return false;
+        // Retail attaches to the chest joint, not its unrotated parent chain.
+        const Mtx &joint = *mario.model->getAnmMtx(chest);
+        Mtx tilt;
+        // Same default backpack tilt as retail setBaseTRMtx; no live writes.
+        MTXRotRad(tilt, 'z', (fabsf(joint[1][0]) - 1.0f) * 0.589048623f);
+        MTXConcat(joint, tilt, *base);
+    } else {
+        AttachmentModel &body = sAttachmentModels[runner * 3 + 1];
+        if (!body.model || !body.data->mJointNames) return false;
+        const s32 center = body.data->mJointNames->getIndex("nozzle_center");
+        if (center < 0 || center >= body.data->getJointNum()) return false;
+        MTXCopy(*body.model->getAnmMtx(center), *base);
+    }
+    // Private model data has no live-Mario callbacks or animation ownership.
+    const u8 nozzle = state.fludd.mode & 7u;
+    const bool body = attachment.kind == ATTACHMENT_FLUDD;
+    animateFludd(attachment.data, fluddActor(nozzle, body), body, state);
+    attachment.model->J3DModel::calc();
+    if (attachment.kind == ATTACHMENT_NOZZLE && (nozzle == 0 || nozzle == 5)) {
+        const s32 muzzle = attachment.data->mJointNames->getIndex("null_G_muzzle");
+        if (muzzle < 0 || muzzle >= attachment.data->getJointNum()) return true;
+        const Mtx &emitter = *attachment.model->getAnmMtx(muzzle);
+        TVec3f current, desired, axis;
+        current.set(emitter[0][0], emitter[1][0], emitter[2][0]);
+        GhostFludd::direction(state.fludd, desired);
+        axis.set(current.y * desired.z - current.z * desired.y,
+                 current.z * desired.x - current.x * desired.z,
+                 current.x * desired.y - current.y * desired.x);
+        const f32 length = ghostSquareRoot(axis.x * axis.x + axis.y * axis.y + axis.z * axis.z);
+        const f32 dot = current.x * desired.x + current.y * desired.y + current.z * desired.z;
+        if (length > 0.0001f) {
+            const TVec3f origin = {(*base)[0][3], (*base)[1][3], (*base)[2][3]};
+            Mtx rotation;
+            MTXRotAxisRad(rotation, reinterpret_cast<Vec *>(&axis), atan2f(length, dot));
+            MTXConcat(rotation, *base, *base);
+            (*base)[0][3] = origin.x; (*base)[1][3] = origin.y; (*base)[2][3] = origin.z;
+            attachment.model->J3DModel::calc();
+        }
+    }
+    return true;
+}
+#pragma clang section text=""
+
+bool attachmentSetMatches(const AttachmentRequest requests[kAttachments]) {
+    for (int runner = 0; runner < kAttachments; ++runner) {
         const J3DModelData *desired = requests[runner].source
             ? requests[runner].source->mModelData : nullptr;
         const AttachmentModel &current = sAttachmentModels[runner];
         if (current.kind != requests[runner].kind ||
-            current.data != desired) {
+            current.sourceData != desired) {
             return false;
         }
     }
     return true;
 }
 
-void rebuildAttachments(const AttachmentRequest requests[2]) {
+void rebuildAttachments(const AttachmentRequest requests[kAttachments]) {
     if (!sAttachmentHeap || attachmentSetMatches(requests)) return;
     // The previous frame may still reference these private display lists.
     GXDrawDone();
     sAttachmentHeap->freeAll();
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
-    for (int runner = 0; runner < 2; ++runner) {
+    for (int runner = 0; runner < kAttachments; ++runner) {
         if (requests[runner].kind != ATTACHMENT_NONE)
-            createAttachment(sAttachmentModels[runner], runner,
+            createAttachment(sAttachmentModels[runner], runner / 3,
                              requests[runner].kind,
                              requests[runner].source);
     }
@@ -619,10 +787,10 @@ void restoreHeap(JKRHeap *heap) {
     else JKRHeap::sCurrentHeap = nullptr;
 }
 
-void clearLiveModel(ModelSlot &slot) {
+__attribute__((noinline)) void clearLiveModel(ModelSlot &slot) {
     slot.data = nullptr;
     slot.model = nullptr;
-    slot.mtxCalc = nullptr;
+    slot.mtxCalc = slot.upperCalc = nullptr;
     slot.opaque = false;
     slot.opacityConfigured = false;
     slot.colorCallbacksInstalled = false;
@@ -641,18 +809,28 @@ bool modelStorageReady(const ModelSlot &slot) {
 }
 
 bool loadModel(Appearance appearance) {
-    ModelSlot &slot = sSlots[appearance];
+    ModelSlot &slot = sSlots[appearance == APPEARANCE_SHADOW ? 0 : 1];
     clearLiveModel(slot);
     if (!slot.heap) return false;
     slot.heap->freeAll();
     const u32 emptyFree = slot.heap->getTotalFreeSize();
-    if (emptyFree < kModelAllocationPreflight) return false;
+    const u32 preflight = appearance == APPEARANCE_MARIO
+        ? GhostMarioModel::kAllocationPreflight : kModelAllocationPreflight;
+    if (emptyFree < preflight) return false;
 
     const void *resource = appearance == APPEARANCE_SHADOW
         ? shadowResource()
-        : piantaResource();
+        : appearance == APPEARANCE_MARIO
+            ? JKRFileLoader::getGlbResource("/mario/bmd/ma_mdl1.bmd")
+            : piantaResource();
     if (!resource ||
         (appearance == APPEARANCE_SHADOW && !gpScreenTexture)) return false;
+    // Mario's retail pollution replacement edits TEX1 image headers in place.
+    // All allocation-driving sections precede those headers and stay immutable.
+    if (appearance == APPEARANCE_MARIO &&
+        (!validBmdHeader(resource, GhostMarioModel::kResourceSize) ||
+         Checksum::crc32(resource, GhostMarioModel::kImmutablePrefixSize) !=
+             GhostMarioModel::kImmutablePrefixChecksum)) return false;
 
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     slot.heap->becomeCurrentHeap();
@@ -660,6 +838,11 @@ bool loadModel(Appearance appearance) {
         ? kShadowLoadFlags
         : kPiantaLoadFlags;
     slot.data = J3DModelLoaderDataBase::load(resource, loadFlags);
+    if (slot.data && appearance == APPEARANCE_MARIO &&
+        !GhostMarioModel::prepare(slot.data,
+            SUSAMUNE_GHOST_SECONDARY_HEAP_PPC_BASE,
+            SUSAMUNE_GHOST_SECONDARY_HEAP_PPC_BASE +
+                SUSAMUNE_GHOST_SECONDARY_HEAP_SIZE)) slot.data = nullptr;
     if (slot.data && slot.data->getJointNum() == kExpectedJointCount) {
         void *storage = slot.heap->alloc(sizeof(J3DModel), 32);
         if (storage) slot.model = new (storage) J3DModel(slot.data, 0, 1);
@@ -675,8 +858,9 @@ bool loadModel(Appearance appearance) {
         if (!initial && initialId != 0) initial = marioAnimation(0, false);
         if (initial) {
             slot.mtxCalc = J3DNewMtxCalcAnm(slot.data->_C & 0xfu, initial);
+            slot.upperCalc = J3DNewMtxCalcAnm(slot.data->_C & 0xfu, initial);
         }
-        if (!slot.mtxCalc) slot.model = nullptr;
+        if (!slot.mtxCalc || !slot.upperCalc) slot.model = nullptr;
     }
     if (slot.model && appearance == APPEARANCE_SHADOW &&
         !gpScreenTexture->replace(slot.data, kShadowTextureName)) {
@@ -696,21 +880,44 @@ bool loadModel(Appearance appearance) {
     const u32 used = emptyFree >= free ? emptyFree - free : 0;
     restoreHeap(oldHeap);
 
-    if (!slot.model || used > kModelAllocationPreflight) {
+    if (!slot.model || used > preflight) {
         clearLiveModel(slot);
         return false;
     }
     return true;
 }
 
-Appearance selectedAppearance() {
-    return gSettings.get(SETTING_GHOST_APPEARANCE) == 1
-        ? APPEARANCE_PIANTA : APPEARANCE_SHADOW;
+Appearance selectedAlternative() {
+    return gSettings.get(SETTING_GHOST_APPEARANCE) == 2
+        ? APPEARANCE_MARIO : APPEARANCE_PIANTA;
 }
 
-ModelSlot &runnerSlot(int runner) {
-    const int selected = static_cast<int>(selectedAppearance());
+__attribute__((noinline)) ModelSlot &runnerSlot(int runner) {
+    const int selected = gSettings.get(SETTING_GHOST_APPEARANCE) != 0;
     return sSlots[selected ^ (runner != 0 ? 1 : 0)];
+}
+
+
+void *lightSetFor(const Ghost::VisualState &state) {
+    if (!gpLightManager || !gpMap) return nullptr;
+    void **sets = *reinterpret_cast<void ***>(
+        reinterpret_cast<u8 *>(gpLightManager) + 0x14);
+    if (!sets) return nullptr;
+    // Object lighting is already registered by stage actors. Player lighting
+    // is optional in retail stages; never allocate/enable a late draw group.
+    u8 *set = reinterpret_cast<u8 *>(sets[1]);
+    if (!set || !set[0x20] || !*reinterpret_cast<void **>(set + 0x10)) return nullptr;
+    const TVec3f position = {state.x, state.y, state.z};
+    const TBGCheckData *ground = nullptr;
+    const f32 floor = gpMap->checkGround(state.x, state.y + 25.0f, state.z, &ground);
+    int light = ground && (ground->mType & 0x4000u) && floor + 200.0f > state.y
+        ? ground->mValue : 0;
+    if (gpCubeShadow && gpCubeShadow->getInCubeNo(*reinterpret_cast<const Vec *>(&position)) != 0xffffffffu)
+        light = 1;
+    // Retail changeLightDrawBuffer accepts an out-of-range equality: bound it.
+    if (light < 0 || light >= *reinterpret_cast<int *>(set + 0x1c)) light = 0;
+    ghostLightEntry(set, light);
+    return set;
 }
 
 bool prepareRunner(int runner, const Ghost::VisualState &state) {
@@ -741,7 +948,23 @@ bool prepareRunner(int runner, const Ghost::VisualState &state) {
     *frame = static_cast<f32>(state.animationPhase) * frameMax /
              static_cast<f32>(SUSAMUNE_GHOST_ANIMATION_PHASE_MAX + 1u);
     *rootCalc = slot.mtxCalc;
+    J3DMtxCalc **upperSlot = nullptr;
+    J3DAnmTransform *upper = nullptr;
+    f32 savedUpperFrame = 0;
+    if (!state.yoshi && (state.fludd.mode & SUSAMUNE_GHOST_FLUDD_SPRAYING) &&
+        slot.data->mJointNames && (upper = marioAnimation(state.animationId, false, true))) {
+        const s32 chest = slot.data->mJointNames->getIndex("chn_chest");
+        if (chest > 0 && chest < slot.data->getJointNum()) {
+            upperSlot = reinterpret_cast<J3DMtxCalc **>(
+                reinterpret_cast<u8 *>(slot.data->mJoints[chest]) + 0x58);
+            *reinterpret_cast<J3DAnmTransform **>(reinterpret_cast<u8 *>(slot.upperCalc) - 0x10) = upper;
+            savedUpperFrame = *animationFrame(upper);
+            *animationFrame(upper) = pumpFrame(state, animationFrameMax(upper));
+            *upperSlot = slot.upperCalc;
+        }
+    }
     slot.model->J3DModel::calc();
+    if (upperSlot) { *upperSlot = nullptr; *animationFrame(upper) = savedUpperFrame; }
     *rootCalc = savedCalc;
     *frame = savedFrame;
     return true;
@@ -791,20 +1014,25 @@ void setAttachmentColor(AttachmentModel &attachment,
     attachment.packetState.tevColor.a = sGhostColor.a;
 }
 
-AttachmentModel *prepareAttachment(int runner,
+AttachmentModel *prepareAttachment(int index,
                                    const AttachmentRequest &request,
                                    const Ghost::VisualState &state) {
-    AttachmentModel *attachment = &sAttachmentModels[runner];
+    const int runner = index / 3;
+    AttachmentModel *attachment = &sAttachmentModels[index];
     J3DModel *source = request.source;
     if (!source || request.kind == ATTACHMENT_NONE ||
         attachment->kind != request.kind ||
-        attachment->data != source->mModelData || !attachment->model) {
+        attachment->sourceData != source->mModelData || !attachment->model) {
         return nullptr;
     }
     setAttachmentColor(*attachment, state);
     attachment->model->mBaseScale = source->mBaseScale;
 
-    if (request.kind == ATTACHMENT_YOSHI) {
+    if (request.kind == ATTACHMENT_FLUDD || request.kind == ATTACHMENT_NOZZLE) {
+        if (!prepareFludd(*attachment, runner, state)) return nullptr;
+        attachment->model->J3DModel::viewCalc();
+        return attachment;
+    } else if (request.kind == ATTACHMENT_YOSHI) {
         Mtx yaw;
         MTXRotRad(yaw, 'y', static_cast<f32>(state.yaw) * kAngleToRadians);
         yaw[0][3] = state.x;
@@ -828,7 +1056,7 @@ AttachmentModel *prepareAttachment(int runner,
 void entryAttachment(AttachmentModel &attachment) {
     if (!attachment.model || !attachment.data) return;
     u32 savedShapeFlags[kYoshiMaxShapeCount];
-    const u16 shapeCount = attachment.kind == ATTACHMENT_YOSHI
+    const u16 shapeCount = attachment.kind != ATTACHMENT_HELD
         ? attachment.data->mShapeNum : 0;
     for (u16 i = 0; i < shapeCount; ++i) {
         J3DShape *shape = attachment.data->mShapes[i];
@@ -875,11 +1103,8 @@ public:
         if (cue & kCueCalcView) {
             Ghost::prepareVisual();
             sGhostColor.a = ghostAlpha();
-            AttachmentRequest requests[2] = {
-                {ATTACHMENT_NONE, nullptr},
-                {ATTACHMENT_NONE, nullptr},
-            };
-            for (int appearance = 0; appearance < APPEARANCE_COUNT;
+            AttachmentRequest requests[kAttachments] = {};
+            for (int appearance = 0; appearance < MODEL_SLOT_COUNT;
                  ++appearance) {
                 ModelSlot &slot = sSlots[appearance];
                 if (slot.model &&
@@ -898,13 +1123,24 @@ public:
                 slot.model->J3DModel::viewCalc();
                 sPrepared[runner] = modelPacketsReady(slot);
                 if (!sPrepared[runner]) continue;
-                requests[runner] = desiredAttachment(sVisualStates[runner]);
+                if (gpBindShadowManager) {
+                    TCircleShadowRequest shadow = {};
+                    const Ghost::VisualState &state = sVisualStates[runner];
+                    shadow.mTranslation.set(state.x, state.y, state.z);
+                    shadow.mOffsetY = shadow.mOffsetY2 = 55.0f;
+                    shadow.mNeedsProjection = 1;
+                    // Retail projects and bounds this visual-only request;
+                    // no actor, collision response or gameplay input is added.
+                    gpBindShadowManager->request(shadow, 0);
+                }
+                requests[runner * 3] = desiredAttachment(sVisualStates[runner]);
+                desiredFludd(sVisualStates[runner], requests + runner * 3 + 1);
             }
             rebuildAttachments(requests);
-            for (int runner = 0; runner < 2; ++runner) {
-                sPreparedAttachments[runner] = sPrepared[runner]
-                    ? prepareAttachment(runner, requests[runner],
-                                        sVisualStates[runner])
+            for (int index = 0; index < kAttachments; ++index) {
+                sPreparedAttachments[index] = sPrepared[index / 3]
+                    ? prepareAttachment(index, requests[index],
+                                        sVisualStates[index / 3])
                     : nullptr;
             }
         }
@@ -912,10 +1148,13 @@ public:
             for (int runner = 0; runner < 2; ++runner) {
                 ModelSlot &slot = runnerSlot(runner);
                 if (!sPrepared[runner] || !modelPacketsReady(slot)) continue;
+                void *lighting = lightSetFor(sVisualStates[runner]);
                 slot.model->J3DModel::entry();
-                AttachmentModel *attachment = sPreparedAttachments[runner];
-                if (attachment && attachment->model)
-                    entryAttachment(*attachment);
+                for (int part = 0; part < 3; ++part) {
+                    AttachmentModel *attachment = sPreparedAttachments[runner * 3 + part];
+                    if (attachment && attachment->model) entryAttachment(*attachment);
+                }
+                if (lighting) ghostLightExit(lighting);
                 sSubmitted[runner] = true;
             }
         }
@@ -924,6 +1163,7 @@ public:
 
 alignas(32) u8 sViewStorage[sizeof(GhostView)];
 GhostView *sView;
+void **sViewWord;
 
 bool registerView(TMarDirector *director) {
     static const char kPlayerGroup[] =
@@ -935,14 +1175,21 @@ bool registerView(TMarDirector *director) {
         reinterpret_cast<JDrama::TViewObjPtrListT<JDrama::TViewObj> *>(ref);
     for (JGadget::TList_pointer_void::iterator it = group->mViewObjList.begin();
          it != group->mViewObjList.end(); ++it) {
-        if (*it == sView) return true;
+        if (*it == sView) {
+            sViewWord = &*it;
+            return true;
+        }
     }
     JKRHeap *nodeHeap = JKRHeap::sCurrentHeap;
     if (!nodeHeap || nodeHeap->getFreeSize() < kRegistrationMinFree)
         return false;
     const u32 oldSize = group->mViewObjList.size();
     group->mViewObjList.push_back(sView);
-    return group->mViewObjList.size() == oldSize + 1;
+    if (group->mViewObjList.size() != oldSize + 1) return false;
+    auto last = group->mViewObjList.end();
+    --last;
+    sViewWord = &*last;
+    return true;
 }
 
 bool retirePlayerDrawBuffers() {
@@ -953,6 +1200,43 @@ bool retirePlayerDrawBuffers() {
     gpMarioOriginal->mDrawBufferA->frameInit();
     gpMarioOriginal->mDrawBufferB->frameInit();
     return true;
+}
+
+__attribute__((noinline)) void clearPreparedPackets() {
+    sSubmitted[0] = sSubmitted[1] = false;
+    sPrepared[0] = sPrepared[1] = false;
+    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+}
+
+void rebuildPlayerDrawBuffers() {
+    if (!retirePlayerDrawBuffers()) return;
+    TMario *const mario = gpMarioOriginal;
+    // Match retail ENTRY visibility and testPerform gates, including Watch's
+    // invisible observer. The misleading mIsVisible bit is retail's UNK4
+    // suppression flag, so read its audited flags word explicitly.
+    const u32 flags = *reinterpret_cast<const u32 *>(&mario->mAttributes);
+    if (!(mario->_114 & 2u) || (flags & 0x200004u) ||
+        (mario->mPerformFlags & kCueEntry)) return;
+
+    J3DDrawBuffer **const buffers =
+        reinterpret_cast<J3DDrawBuffer **>(j3dSys + 0x44);
+    J3DDrawBuffer *const oldA = buffers[0], *const oldB = buffers[1];
+    buffers[0] = mario->mDrawBufferA;
+    buffers[1] = mario->mDrawBufferB;
+    // These ENTRY-only retail paths use restored matrices and do not read
+    // graphics. Do not perform Mario: that also repeats dirt/fog/shadow work;
+    // his begin-buffer cue advances tremble. Yoshi's separate queues survive.
+    if ((flags & 0x8000u) && mario->mFludd)
+        mario->mFludd->TWaterGun::perform(kCueEntry, nullptr);
+    // A ridden Blooper uses the shared object-light queues, which survived
+    // restore. Do not insert its packet twice. entryModels only reads status
+    // to select Blooper/cart entry; no gameplay or animation update runs here.
+    const u32 status = mario->mState;
+    mario->mState = status & ~0x10000u;
+    mario->entryModels(nullptr);
+    mario->mState = status;
+    buffers[0] = oldA;
+    buffers[1] = oldB;
 }
 
 void loadPendingStage() {
@@ -977,17 +1261,16 @@ void loadPendingStage() {
     }
     GXDrawDone();
     if (!retirePlayerDrawBuffers()) return;
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    clearPreparedPackets();
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
     if (sAttachmentHeap) sAttachmentHeap->freeAll();
     clearLiveModel(sSlots[APPEARANCE_SHADOW]);
     clearLiveModel(sSlots[APPEARANCE_PIANTA]);
     const bool shadow = loadModel(APPEARANCE_SHADOW);
-    const bool pianta = loadModel(APPEARANCE_PIANTA);
+    sLoadedAlternative = selectedAlternative();
+    const bool alternative = loadModel(sLoadedAlternative);
     const bool registered =
-        (shadow || pianta) && registerView(director) &&
+        (shadow || alternative) && registerView(director) &&
         generation == sPendingGeneration;
     if (!registered) {
         clearLiveModel(sSlots[APPEARANCE_SHADOW]);
@@ -1006,13 +1289,14 @@ void init() {
     memset(sAttachmentModels, 0, sizeof(sAttachmentModels));
     memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
     sRegistered = false;
-    sPrepared[0] = sPrepared[1] = false;
-    sSubmitted[0] = sSubmitted[1] = false;
+    clearPreparedPackets();
     sPendingDirector = nullptr;
     sPendingGeneration = 0;
     sQuiescedGeneration = 0;
     sLoadedGeneration = 0;
+    sLoadedAlternative = APPEARANCE_PIANTA;
     sView = new (sViewStorage) GhostView();
+    sViewWord = nullptr;
     JKRHeap *oldHeap = JKRHeap::sCurrentHeap;
     sSlots[APPEARANCE_SHADOW].heap = JKRExpHeap::create(
         reinterpret_cast<void *>(SUSAMUNE_GHOST_MODEL_HEAP_PPC_BASE),
@@ -1027,9 +1311,15 @@ void init() {
 }
 
 void beginFrame() {
-    sSubmitted[0] = sSubmitted[1] = false;
-    sPrepared[0] = sPrepared[1] = false;
-    memset(sPreparedAttachments, 0, sizeof(sPreparedAttachments));
+    clearPreparedPackets();
+    // Reuse the stage-change barrier when switching the second heap's model,
+    // including after a settings/state restore in the same stage.
+    if (sLoadedGeneration == sPendingGeneration &&
+        sPendingDirector == gpMarDirector &&
+        sLoadedAlternative != selectedAlternative()) {
+        u32 generation = sPendingGeneration + 1u;
+        sPendingGeneration = generation ? generation : 1;
+    }
     loadPendingStage();
 }
 
@@ -1054,5 +1344,34 @@ bool available() {
 bool submitted(bool secondary) {
     return sSubmitted[secondary ? 1 : 0];
 }
+
+bool emissionPoint(unsigned runner, unsigned nozzle, unsigned emitter, TVec3f &position) {
+    if (runner >= 2 || nozzle >= 6) return false;
+    const AttachmentModel &head = sAttachmentModels[runner * 3 + 2];
+    const u8 *row = nozzleBmdData[nozzle];
+    if (!head.model || !head.data || !row[0x14] || row[0x14] > 3) return false;
+    const unsigned joint = row[0x17 + (emitter % row[0x14]) * 2];
+    if (joint >= head.data->getJointNum()) return false;
+    const Mtx &matrix = *head.model->getAnmMtx(joint);
+    position.set(matrix[0][3], matrix[1][3], matrix[2][3]);
+    return true;
+}
+
+#pragma clang section text=".foxtrot.text"
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    const u32 address = reinterpret_cast<u32>(sViewWord);
+    if (!keep || !sRegistered || !gpMarDirector ||
+        sPendingDirector != gpMarDirector || !gpMarDirector->_260 ||
+        sLoadedGeneration != sPendingGeneration || !sView ||
+        (address & 3u) || address < 0x80000000u || address > 0x817ffffcu ||
+        *sViewWord != sView) return false;
+    return keep(sViewWord);
+}
+
+void onSavestateLoaded() {
+    rebuildPlayerDrawBuffers();
+    clearPreparedPackets();
+}
+#pragma clang section text=""
 
 }  // namespace GhostModel

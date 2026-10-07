@@ -185,6 +185,7 @@ Fastest	最速
 Never	なし
 Shadow Mario	ニセマリオ
 Piantissimo	モンテマン
+Mario	マリオ
 Ask	毎回確認
 Auto-Save	自動保存
 Don't ask	確認しない
@@ -1654,3 +1655,27 @@ When a buttslide jump is ready.	おしりすべり中にジャンプできるタ
 %s qf%u	%s qf%u
 %s %u%sf Y%.0f V%.1f	%s %u%sf Y%.0f V%.1f
 Ready	ジャンプ可能
+Stageloader	ステージローダー
+Streaking	連続成功チャレンジ
+Cosmetics	見た目
+PLAZA MOVEMENT	ドルピック移動
+PLAZA STATE	広場の状態
+Gelato Enter	マンマ入場
+System messages	システムメッセージ
+Savestate errors	ステートのエラーメッセージ
+Error messages	エラーメッセージ
+Failure banner	失敗バナー
+Failure: horizontal	失敗バナー：横位置
+Failure: vertical	失敗バナー：縦位置
+Failure: size	失敗バナー：サイズ
+Failure: duration	失敗バナー：表示時間
+Edit the Sunshine timer and QFT appearance.	サンシャインタイマーとQFTの見た目を編集。
+Move, resize and recolour this timer.	タイマーの位置・サイズ・色を変更。
+Show errors when a state cannot be saved or loaded.	ステートの保存・ロードができないときにメッセージを表示。
+Bianco plant	ビアンコのパックン
+Ricco / Gelato plants	リコとマンマのパックン
+Pinna unlock	ピンナ開放
+Yoshi unlock	ヨッシー開放
+{A} Keep  {B} Back  {C} Select Plaza state	{A} 決定  {B} 戻る  {C} プラザの状態を選択
+{A} Start  {Z} Plaza state  {Y} Stats  {X} Delete	{A} 開始  {Z} プラザの状態  {Y} 統計  {X} 削除
+Show system notices. PB and achievement popups keep their own settings.	システム通知を表示。PBと実績の通知は個別に設定。

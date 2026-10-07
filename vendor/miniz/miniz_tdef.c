@@ -892,6 +892,9 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
     {
         return (mz_uint16)MZ_READ_LE16(p);
     }
+#ifndef MINIZ_FAST_COPY
+#define MINIZ_FAST_COPY(dst, src, size) memcpy(dst, src, size)
+#endif
     static mz_bool tdefl_compress_fast(tdefl_compressor *d)
     {
         /* Faster, minimally featured LZRW1-style match+parse loop with better register utilization. Intended for applications where raw throughput is valued more highly than ratio. */
@@ -910,9 +913,9 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
             while (num_bytes_to_process)
             {
                 mz_uint32 n = MZ_MIN(TDEFL_LZ_DICT_SIZE - dst_pos, num_bytes_to_process);
-                memcpy(d->m_dict + dst_pos, d->m_pSrc, n);
+                MINIZ_FAST_COPY(d->m_dict + dst_pos, d->m_pSrc, n);
                 if (dst_pos < (TDEFL_MAX_MATCH_LEN - 1))
-                    memcpy(d->m_dict + TDEFL_LZ_DICT_SIZE + dst_pos, d->m_pSrc, MZ_MIN(n, (TDEFL_MAX_MATCH_LEN - 1) - dst_pos));
+                    MINIZ_FAST_COPY(d->m_dict + TDEFL_LZ_DICT_SIZE + dst_pos, d->m_pSrc, MZ_MIN(n, (TDEFL_MAX_MATCH_LEN - 1) - dst_pos));
                 d->m_pSrc += n;
                 dst_pos = (dst_pos + n) & TDEFL_LZ_DICT_SIZE_MASK;
                 num_bytes_to_process -= n;
@@ -984,6 +987,17 @@ static MZ_FORCEINLINE void tdefl_find_match(tdefl_compressor *d, mz_uint lookahe
                 {
                     num_flags_left = 8;
                     pLZ_flags = pLZ_code_buf++;
+                }
+
+                /* Keep the last complete trigram of a consumed match in the
+                   existing hash table. This modestly improves the fast path's
+                   density without probing chains or allocating another table. */
+                if (cur_match_len > 3)
+                {
+                    mz_uint tail_pos = lookahead_pos + cur_match_len - 3;
+                    mz_uint tail = TDEFL_READ_UNALIGNED_WORD32(d->m_dict + (tail_pos & TDEFL_LZ_DICT_SIZE_MASK)) & 0xFFFFFF;
+                    mz_uint tail_hash = (tail * 0x1E35A7BDu) >> (32 - TDEFL_LZ_HASH_BITS);
+                    d->m_hash[tail_hash] = (mz_uint16)tail_pos;
                 }
 
                 total_lz_bytes += cur_match_len;

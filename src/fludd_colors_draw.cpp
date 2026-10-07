@@ -1,6 +1,6 @@
 #include "susamune/fludd_colors.hxx"
 #include "susamune/fludd_color_texture.hxx"
-#include "susamune/retail_input.hxx"
+#include "susamune/model_color_draw.hxx"
 #include "Dolphin/GX.h"
 #include "Dolphin/mem.h"
 #include "JSystem/J3D/J3DModel.hxx"
@@ -40,26 +40,15 @@ static_assert(__builtin_offsetof(TMario, mFludd) == 0x3E4 &&
               __builtin_offsetof(MActor, mModel) == 4,
               "retail FLUDD model owners moved");
 
-bool mem1(const void *p, u32 size) {
-    const u32 address = reinterpret_cast<u32>(p);
-    return address >= 0x80000000u && address < 0x81800000u &&
-           size <= 0x81800000u - address;
-}
-bool live() {
-    return gpMarDirector && RetailInput::stageDirector() == gpMarDirector &&
-        gpMarDirector == sDraw.director && gpMarDirector->_260 &&
-        gpMarDirector->mCurState >= TMarDirector::STATE_GAME_STARTING &&
-        gpMarioAddress && gpMarioAddress == sDraw.mario;
-}
+using ModelColorDraw::mem1;
+bool live() { return ModelColorDraw::live(sDraw.director, sDraw.mario); }
 J3DModel *modelAt(const void *owner, u32 offset, u16 shapes) {
     if (!mem1(owner, offset + 4)) return nullptr;
     MActor *actor = *reinterpret_cast<MActor *const *>(
         reinterpret_cast<const u8 *>(owner) + offset);
     if (!mem1(actor, sizeof(MActor))) return nullptr;
     J3DModel *model = actor->mModel;
-    if (!mem1(model, sizeof(*model)) || !mem1(model->mModelData, sizeof(J3DModelData)) ||
-        model->mModelData->mShapeNum != shapes ||
-        !mem1(model->mShapePackets, shapes * 0x34u)) return nullptr;
+    if (!ModelColorDraw::supportedModel(model, shapes)) return nullptr;
     return model;
 }
 const ResTIMG *mainTexture(J3DModelData *data) {
@@ -74,12 +63,6 @@ const ResTIMG *mainTexture(J3DModelData *data) {
         image.mHeight != 128 || image.mMipMaps != 1 ||
         !mem1(reinterpret_cast<void *>(pixels), FluddColorTexture::kAtlasBytes)) return nullptr;
     return &image;
-}
-void initTexture(GXTexObj &object, const ResTIMG &image, void *pixels) {
-    GXInitTexObj(&object, pixels, 64, 128, GX_TF_CMPR,
-                 image.mWrapSMode, image.mWrapTMode, GX_FALSE);
-    GXInitTexObjLOD(&object, image.mFilterMinMode, image.mFilterMagMode,
-                    0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
 }
 PacketCallback &callback(J3DShapePacket *packet) {
     return *reinterpret_cast<PacketCallback *>(reinterpret_cast<u8 *>(packet) + 0x10);
@@ -137,6 +120,15 @@ void onStageSetup() {
     sDraw.director = gpMarDirector;
     sDraw.mario = gpMarioAddress;
 }
+bool preserveSavestateBindings(bool (*keep)(const void *word)) {
+    if (!keep || !live() || !sDraw.count || sDraw.count > 12) return false;
+    for (u32 i = 0; i < sDraw.count; ++i) {
+        J3DShapePacket *packet = sDraw.packets[i].packet;
+        if (!mem1(packet, 0x34) || callback(packet) != drawPacket ||
+            !keep(&callback(packet))) return false;
+    }
+    return true;
+}
 void update() {
     if (!live()) return;
     TWaterGun *gun = gpMarioAddress->mFludd;
@@ -158,11 +150,11 @@ void update() {
     sDraw.enabled = mask;
     if (changed && (mask & 0xFFu)) {
         const u32 pixels = reinterpret_cast<u32>(texture) + texture->mTextureOffset;
-        initTexture(sDraw.original, *texture, reinterpret_cast<void *>(pixels));
+        ModelColorDraw::initTexture(sDraw.original, *texture, reinterpret_cast<void *>(pixels), 64, 128);
         for (u32 i = 0; i < 5; ++i) {
             FluddColorTexture::recolor(reinterpret_cast<const u8 *>(pixels), sAtlases[i],
                 sDraw.colors, mask, kPaintParts[i]);
-            initTexture(sDraw.textures[i], *texture, sAtlases[i]);
+            ModelColorDraw::initTexture(sDraw.textures[i], *texture, sAtlases[i], 64, 128);
         }
         DCStoreRange(sAtlases, sizeof(sAtlases));
         GXInvalidateTexAll();

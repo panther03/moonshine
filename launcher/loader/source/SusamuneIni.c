@@ -22,10 +22,10 @@ output unchanged.
 #include "ff_utf8.h"
 #include "susamune/susamune_cfg.h"
 
-// Whole-file buffer. Same ceiling as the kernel's (SusamuneCfg.c): a file
+// Whole-file admission. Same ceiling as the kernel's (SusamuneCfg.c): a file
 // bigger than this is refused rather than truncated, since a partial
 // copy-through would silently drop a game version's settings.
-#define SUSA_INI_BUF_SIZE 32768
+#define SUSA_INI_BUF_SIZE MOONSHINE_INI_BUFFER_LIMIT
 
 #define SUSA_SECTION_NAME_MAX 24
 #define SUSA_INI_TRANSACTION_PATH_MAX 64
@@ -604,14 +604,14 @@ void SusamuneIniLoad(const char *device)
 		gprintf("Moonshine: %s is too large, settings disabled\n", path);
 		return;
 	}
-	buf = (char*)malloc(SUSA_INI_BUF_SIZE);
+	buf = (char*)malloc((u32)fileSize + 1);
 	if (buf == NULL)
 	{
 		(void)f_close(&f);
 		gprintf("Moonshine: no memory to read %s, settings disabled\n", path);
 		return;
 	}
-	ret = f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read);
+	ret = f_read(&f, buf, (u32)fileSize, &read);
 	closeRet = f_close(&f);
 	if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
 	{
@@ -632,7 +632,7 @@ int SusamuneIniSave(const char *device)
 	char  backupPath[SUSA_INI_TRANSACTION_PATH_MAX];
 	FIL   f;
 	FILINFO info;
-	char *buf;
+	char *buf = NULL;
 	char *line;
 	UINT  read = 0;
 	FSIZE_t fileSize = 0;
@@ -645,11 +645,6 @@ int SusamuneIniSave(const char *device)
 
 	if (!LoadSafe)
 		return FR_NOT_READY;
-
-	buf = (char*)malloc(SUSA_INI_BUF_SIZE);
-	if (buf == NULL)
-		return FR_NOT_ENOUGH_CORE;
-	buf[0] = '\0';
 
 	BuildPath(path, sizeof(path), device);
 	if (!BuildIniSiblingPath(tempPath, sizeof(tempPath), path, ".tmp") ||
@@ -687,7 +682,13 @@ int SusamuneIniSave(const char *device)
 			free(buf);
 			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
 		}
-		ret = f_read(&f, buf, SUSA_INI_BUF_SIZE - 1, &read);
+		buf = (char*)malloc((u32)fileSize + 1);
+		if (buf == NULL)
+		{
+			closeRet = f_close(&f);
+			return closeRet == FR_OK ? FR_NOT_ENOUGH_CORE : closeRet;
+		}
+		ret = f_read(&f, buf, (u32)fileSize, &read);
 		closeRet = f_close(&f);
 		if (ret != FR_OK || read != fileSize || closeRet != FR_OK)
 		{
@@ -702,6 +703,13 @@ int SusamuneIniSave(const char *device)
 	{
 		free(buf);
 		return ret;
+	}
+	else
+	{
+		buf = (char*)malloc(1);
+		if (buf == NULL)
+			return FR_NOT_ENOUGH_CORE;
+		buf[0] = '\0';
 	}
 
 	ret = f_open_char(&f, tempPath, FA_WRITE | FA_CREATE_ALWAYS);

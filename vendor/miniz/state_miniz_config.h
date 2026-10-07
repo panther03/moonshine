@@ -9,6 +9,7 @@
 #define USE_EXTERNAL_MZCRC
 #define MINIZ_USE_UNALIGNED_LOADS_AND_STORES 0
 #define MINIZ_PORTABLE_FAST_DEFLATE 1
+#define MINIZ_STATE_ADLER32 1
 #define NDEBUG
 
 // Retain the vendored fork's freestanding guard on both PPC and host tests.
@@ -24,3 +25,8 @@ typedef unsigned long long uint64_t;
 extern "C" void *memcpy(void *, const void *, size_t);
 extern "C" void *memset(void *, int, size_t);
 extern "C" int memcmp(const void *, const void *, size_t);
+
+// Fast-parser dictionary fills are disjoint, bounded copies. Share the same
+// word-copy implementation as compressed output and retained-state commits.
+void StateSlotPoolCopyForward(unsigned char *, const unsigned char *, unsigned int);
+#define MINIZ_FAST_COPY(dst, src, size) StateSlotPoolCopyForward(dst, src, size)

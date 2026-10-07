@@ -1,3 +1,4 @@
+#include "susamune/mem2_map.h"
 #include "susamune/creation.hxx"
 #include "susamune/creation_color.hxx"
 
@@ -45,9 +46,10 @@ enum ConfirmAction {
 // Only one Creation editor is active; keep its HSL choices through target changes.
 constexpr unsigned kHslSlots = 256;
 #if defined(__powerpc__)
-__attribute__((section(".foxtrot.bss")))
-#endif
+#define sHsl (*reinterpret_cast<CreationColor::Hsl (*)[kHslSlots + 1]>(SUSAMUNE_HSL_CACHE_PPC_BASE))
+#else
 CreationColor::Hsl sHsl[kHslSlots + 1];
+#endif
 
 constexpr u8 kStyleOffsets[] = {
     __builtin_offsetof(CreationStyle, textA),

@@ -33,7 +33,7 @@ namespace SplitStats { enum { ROUTE_COUNT=132 }; }
 namespace Ghost {
 struct Track { bool valid,completed; u8 sourceRegion,splitCount; u32 startQf,endQf;
  SusamuneGhostSplitSample splits[6]; u32 resultQf; int parentEpisode;
- u8 area,episode,routeParentArea,routeFlags;
+ u8 area,episode,routeParentArea,routeFlags; u16 formatVersion;
 } sPlayback;
 enum RaceSource {RACE_SOURCE_NONE,RACE_SOURCE_PERSONAL,RACE_SOURCE_IMPORTED};
 struct RaceContext {u32 attemptSerial,targetQf; s32 startingPbQf,routeVariant;

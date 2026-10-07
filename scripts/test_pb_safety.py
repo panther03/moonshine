@@ -47,9 +47,6 @@ class PbSafetyMetadataContracts(unittest.TestCase):
             [
                 ("SETTING_ILING_RECORDING", "1", "0"),
                 ("SETTING_STAGE_INTRO_SKIP", "0", "1"),
-                ("SETTING_KING_BOO_ALWAYS_FRUIT", "0", "1"),
-                ("SETTING_PETEY_NO_TORNADO", "0", "1"),
-                ("SETTING_PETEY_ROUTE", "0", "1"),
                 ("SETTING_PINNA_HIDDEN_ITEMS", "0", "1"),
                 ("SETTING_ENEMY_HURTBOXES", "0", "1"),
                 ("SETTING_RICCO_RACE_CHECKPOINTS", "0", "1"),
@@ -93,7 +90,7 @@ class PbSafetyMenuContracts(unittest.TestCase):
         )
         # There are several draw overrides, so inspect the nested-menu logic by
         # its unique alert-count block instead of depending on class order.
-        alert_at = self.menu.find("const int alertCount = available")
+        alert_at = self.menu.find("const int alertCount = mChildren[i]->rootAlertCount()")
         self.assertGreaterEqual(alert_at, 0)
         alert_render = self.menu[alert_at : alert_at + 900]
         self.assertIn("if (alertCount == 0)", alert_render)

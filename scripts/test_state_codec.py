@@ -95,6 +95,11 @@ class Result(C.Structure):
                 ("raw", C.c_uint), ("adler", C.c_uint)]
 
 
+class DirectPolicy(C.Structure):
+    _fields_ = [(name, C.c_size_t) for name in
+                ('copies', 'copied_bytes', 'queries', 'allowed', 'first', 'last')]
+
+
 class Guarded:
     def __init__(self, size):
         self.size = size
@@ -122,8 +127,14 @@ class StateCodecTests(unittest.TestCase):
         cls.addClassCleanup(cls.folder.cleanup)
         shim = Path(cls.folder.name) / "shim.cpp"
         shim.write_text(r'''
-#include "susamune/state_codec.hxx"
+#include "../src/state_codec.cpp"
 extern "C" {
+__declspec(dllexport) unsigned adler(unsigned seed,const unsigned char*p,unsigned size) {
+ return mz_adler32(seed,p,size);
+}
+__declspec(dllexport) int referenceQuick(void *w,const char *source,char *dest,int size,int capacity) {
+ return LZ4_compress_fast_extState(w,source,dest,size,capacity,1);
+}
 void *memcpy(void *d,const void *s,__SIZE_TYPE__ n) {
     unsigned char *o=(unsigned char*)d;const unsigned char *i=(const unsigned char*)s;
     while(n--)*o++=*i++;return d;
@@ -202,6 +213,24 @@ __declspec(dllexport) int unpackVerifiedPolicy(void *w,unsigned int ws,const Sta
  CopyPolicy *policy) {
  return StateCodec::decompressVerified(w,ws,s,n,d,dn,raw,adler,copyPolicy,policy);
 }
+struct DirectPolicy {__UINTPTR_TYPE__ copies,bytes,queries,allowed,first,last;};
+bool directPolicy(void *p,void *d,unsigned int n) {
+ DirectPolicy *policy=(DirectPolicy*)p;++policy->queries;
+ __UINTPTR_TYPE__ first=(__UINTPTR_TYPE__)d;
+ if(policy->last>first&&policy->first<first+n)return false;
+ ++policy->allowed;return true;
+}
+void selectiveCopy(void *p,void *d,const void *s,unsigned int n) {
+ DirectPolicy *policy=(DirectPolicy*)p;++policy->copies;policy->bytes+=n;
+ unsigned char *out=(unsigned char*)d;const unsigned char *in=(const unsigned char*)s;
+ for(unsigned int i=0;i<n;++i){__UINTPTR_TYPE__ address=(__UINTPTR_TYPE__)(out+i);
+  if(address<policy->first||address>=policy->last)out[i]=in[i];}
+}
+__declspec(dllexport) int unpackDirect(void *w,unsigned int ws,const StateCodec::ReadSpan *s,
+ unsigned int n,const StateCodec::WriteSpan *d,unsigned int dn,unsigned int raw,unsigned int adler,
+ DirectPolicy *policy) {
+ return StateCodec::decompressVerified(w,ws,s,n,d,dn,raw,adler,selectiveCopy,policy,directPolicy);
+}
 }
 ''', encoding="ascii")
         production = (ROOT / "src/state_codec.cpp").read_text()
@@ -222,10 +251,13 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
         subprocess.run([str(compiler), "--target=x86_64-pc-windows-msvc", "-shared",
                         "-nostdlib", "-fuse-ld=lld", "-Wl,/noentry", "-O2",
                         "-fno-builtin", "-mno-stack-arg-probe", "-I", str(ROOT / "include"),
-                        str(shim), str(ROOT / "src/state_codec.cpp"), "-o", str(library)], check=True)
+                        str(shim), "-o", str(library)], check=True)
         cls.lib = C.CDLL(str(library))
         cls.addClassCleanup(lambda: C.windll.kernel32.FreeLibrary(C.c_void_p(cls.lib._handle)))
         cls.lib.workspace.restype = C.c_uint
+        cls.lib.adler.argtypes = [C.c_uint, C.c_void_p, C.c_uint]
+        cls.lib.adler.restype = C.c_uint
+        cls.lib.referenceQuick.argtypes = [C.c_void_p,C.c_void_p,C.c_void_p,C.c_int,C.c_int]
         cls.lib.pack.argtypes = [C.c_void_p, C.c_uint, C.POINTER(Span), C.c_uint,
                                  C.POINTER(Span), C.POINTER(Result)]
         cls.lib.packMany.argtypes = [C.c_void_p, C.c_uint, C.POINTER(Span), C.c_uint,
@@ -242,6 +274,7 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
         cls.lib.unpackPolicy.argtypes = cls.lib.unpack.argtypes + [C.POINTER(C.c_uint)]
         cls.lib.unpackVerified.argtypes = cls.lib.unpack.argtypes
         cls.lib.unpackVerifiedPolicy.argtypes = cls.lib.unpackPolicy.argtypes
+        cls.lib.unpackDirect.argtypes = cls.lib.unpack.argtypes + [C.POINTER(DirectPolicy)]
         cls.lib.unpackRetained.argtypes = cls.lib.unpackPolicy.argtypes
         cls.lib.counterBoundary.argtypes = [C.c_uint, C.c_int, C.c_uint, C.POINTER(C.c_uint)]
         cls.lib.checkStream.argtypes = [C.c_void_p, C.c_uint, C.POINTER(StreamSource), C.c_uint, C.c_uint]
@@ -250,6 +283,50 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
     def setUp(self):
         self.work = Guarded(self.lib.workspace())
         self.assertLessEqual(self.work.size, 0x50000)
+
+    def test_packed_adler_matches_independent_checksum_at_lane_and_modulo_bounds(self):
+        rng = random.Random(0x41444C52)
+        lengths = [*range(130), 255, 256, 5551, 5552, 5553, 5554,
+                   11103, 11104, 11105, 32768, 131072, 1000003]
+        for length in lengths:
+            for raw in (bytes(length), bytes([255]) * length, rng.randbytes(length)):
+                for alignment in range(4):
+                    source = C.create_string_buffer(alignment + length + 8)
+                    pointer = C.addressof(source) + alignment
+                    C.memmove(pointer, raw, length)
+                    for seed in (0, 1, 0xFFFFFFFF, 0x12345678, rng.getrandbits(32)):
+                        expected = zlib.adler32(raw, seed) if length else seed
+                        self.assertEqual(self.lib.adler(seed, pointer, length), expected,
+                                         (length, alignment, seed))
+        self.assertEqual(self.lib.adler(0xFFFFFFFF, None, 123), 1)
+
+    def test_packed_adler_keeps_fragmented_seed_semantics(self):
+        raw = random.Random(317).randbytes(11107)
+        source = C.create_string_buffer(raw)
+        for fragment in (1, 3, 63, 64, 65, 5551, 5552, 5553):
+            adler = 1
+            for offset in range(0, len(raw), fragment):
+                adler = self.lib.adler(adler, C.addressof(source) + offset,
+                                       min(fragment, len(raw) - offset))
+            self.assertEqual(adler, zlib.adler32(raw))
+
+    def test_specialized_quick_compressor_matches_original_exactly(self):
+        rng = random.Random(73)
+        for size in (1, 12, 255, 65545, 65546, 65547, QUICK_BLOCK):
+            for kind in range(3):
+                with self.subTest(size=size,kind=kind):
+                    raw = (bytes(size) if kind == 0 else
+                           (b'Moonshine state 123'*((size+17)//18))[:size] if kind == 1 else
+                           rng.randbytes(size))
+                    source = C.create_string_buffer(raw)
+                    reference = Guarded(QUICK_BLOCK + QUICK_BLOCK//255 + 16)
+                    length = self.lib.referenceQuick(self.work.ptr,source,reference.ptr,size,reference.size)
+                    self.assertGreater(length,0)
+                    result,encoded = self.pack(self.source(raw),[len(raw)+32],quick=True)
+                    self.assertEqual(result.status,SUCCESS)
+                    block = raw if length >= size else C.string_at(reference.ptr,length)
+                    self.assertEqual(encoded[16:result.compressed],block)
+                    self.assertTrue(reference.guards())
 
     def streamed(self, encoded, window, fail_at=None, invalid=None):
         buffer = Guarded(window)
@@ -827,6 +904,65 @@ extern "C" __declspec(dllexport) int counterBoundary(unsigned int start,int leng
                            invalid_output, 2, C.byref(result))
         self.assertEqual(result.status, INVALID)
 
+    def test_direct_decode_keeps_protected_bytes_and_scattered_span_boundaries(self):
+        data = bytes(QUICK_BLOCK * 3 + 53)
+        measured, _ = self.pack(self.source(data), quick=True)
+        packed, encoded = self.pack(self.source(data), [measured.compressed], quick=True)
+        source = self.source(encoded, [7, 19, len(encoded)-1])
+        for sizes in ([len(data)], [0, QUICK_BLOCK, 0, QUICK_BLOCK, QUICK_BLOCK+53],
+                      [QUICK_BLOCK-1, 2, QUICK_BLOCK*2+52]):
+            with self.subTest(sizes=sizes):
+                buffers = [Guarded(n) for n in sizes]
+                out = (Span * len(buffers))(*[Span(b.ptr, b.size) for b in buffers])
+                kept = next(b for b in buffers if b.size >= QUICK_BLOCK)
+                policy = DirectPolicy(first=kept.ptr+17, last=kept.ptr+19)
+                self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                    out,len(out),len(data),packed.adler,C.byref(policy)), SUCCESS)
+                for b in buffers:
+                    expected = bytearray(b.size)
+                    if b is kept: expected[17:19] = b'\xa7\xa7'
+                    self.assertEqual(b.data(), expected)
+                    self.assertTrue(b.guards())
+                self.assertGreater(policy.copies, 0)
+                self.assertGreater(policy.allowed, 0)
+                self.assertLess(policy.copied_bytes, len(data))
+                self.assertGreaterEqual(policy.queries, policy.allowed)
+                if len(sizes) == 1: self.assertGreater(policy.queries, policy.allowed)
+        self.assertTrue(self.work.guards())
+
+    def test_direct_permission_follows_frame_and_output_bounds_and_does_not_apply_to_plain(self):
+        raw = random.Random(812).randbytes(QUICK_BLOCK)
+        for quick in (False, True):
+            measured, _ = self.pack(self.source(raw), quick=quick)
+            packed, encoded = self.pack(self.source(raw), [measured.compressed], quick=quick)
+            source = self.source(encoded)
+            out = Guarded(len(raw)); spans = (Span * 1)(Span(out.ptr,out.size)); policy = DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,len(raw),packed.adler,C.byref(policy)), SUCCESS)
+            self.assertEqual(policy.queries, 0)
+            self.assertEqual(policy.copied_bytes, len(raw))
+            self.assertEqual(out.data(), raw); self.assertTrue(out.guards())
+        raw = bytes(QUICK_BLOCK)
+        measured, _ = self.pack(self.source(raw), quick=True)
+        packed, encoded = self.pack(self.source(raw), [measured.compressed], quick=True)
+        for offset, value in ((4,1),(8,QUICK_BLOCK+1),(12,0),(12,0x7FFFFFFF)):
+            damaged = bytearray(encoded); struct.pack_into('>I',damaged,offset,value)
+            source = self.source(bytes(damaged)); out = Guarded(len(raw)); spans=(Span*1)(Span(out.ptr,out.size))
+            policy = DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,len(raw),packed.adler,C.byref(policy)), COMMIT)
+            self.assertEqual((policy.queries,policy.copies), (0,0))
+            self.assertEqual(out.data(), b'\xa7'*len(raw));self.assertTrue(out.guards())
+        for payload in (b'\x10A\x00\x00', b'\x10A\x02\x00', b'\xf0\xff', b'\x1fA\x01\x00\xff'):
+            # A violated verified-stream promise may have written destination
+            # bytes, but must remain bounded and report fatal commit failure.
+            encoded = struct.pack('>IIII',0x4D534C34,QUICK_BLOCK,100,len(payload))+payload
+            source=self.source(encoded);out=Guarded(100);spans=(Span*1)(Span(out.ptr,out.size))
+            policy=DirectPolicy()
+            self.assertEqual(self.lib.unpackDirect(self.work.ptr,self.work.size,source,len(source),
+                spans,1,100,1,C.byref(policy)), COMMIT)
+            self.assertEqual((policy.queries,policy.allowed,policy.copies),(1,1,0))
+            self.assertTrue(out.guards());self.assertTrue(self.work.guards())
     def test_quick_header_and_payload_counters_refuse_uint32_wrap(self):
         for start, length, word, expected, final in (
                 (0xFFFFFFFB, 0, 1, 1, 0xFFFFFFFF),

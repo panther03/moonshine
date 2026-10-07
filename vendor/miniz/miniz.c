@@ -39,6 +39,57 @@ extern "C"
 
     mz_ulong mz_adler32(mz_ulong adler, const unsigned char *ptr, size_t buf_len)
     {
+#ifdef MINIZ_STATE_ADLER32
+        typedef mz_uint32 Word __attribute__((__may_alias__));
+        mz_uint32 s1 = (mz_uint32)(adler & 65535), s2 = (mz_uint32)(adler >> 16);
+        if (!ptr)
+            return MZ_ADLER32_INIT;
+        while (buf_len)
+        {
+            /* The ordinary Adler bound also covers the packed-byte loop. */
+            size_t block = buf_len < 5552 ? buf_len : 5552;
+            size_t left = block;
+            while (left && ((__UINTPTR_TYPE__)ptr & 3))
+                s1 += *ptr++, s2 += s1, --left;
+            while (left >= 64)
+            {
+                mz_uint32 even = 0, odd = 0, even_sum = 0, odd_sum = 0;
+                const Word *words = (const Word *)ptr;
+                /* Sixteen words leave each sum <= 4080 and each sum of
+                 * partial sums <= 34680: no carry crosses a 16-bit lane. */
+#define MZ_ADLER_WORD(N)                                      \
+                {                                           \
+                    mz_uint32 word = words[N];              \
+                    if (__BYTE_ORDER__ != __ORDER_BIG_ENDIAN__) \
+                        word = __builtin_bswap32(word);     \
+                    even += (word >> 8) & 0x00ff00ffu;       \
+                    odd += word & 0x00ff00ffu;               \
+                    even_sum += even; odd_sum += odd;       \
+                }
+                for (unsigned j = 0; j < 16; j += 4)
+                {
+                    MZ_ADLER_WORD(j) MZ_ADLER_WORD(j + 1)
+                    MZ_ADLER_WORD(j + 2) MZ_ADLER_WORD(j + 3)
+                }
+#undef MZ_ADLER_WORD
+                mz_uint32 a = even >> 16, c = even & 65535;
+                mz_uint32 b = odd >> 16, d = odd & 65535;
+                mz_uint32 total = (even_sum >> 16) + (even_sum & 65535) +
+                                  (odd_sum >> 16) + (odd_sum & 65535);
+                /* Weights within each word are 4a + 3b + 2c + d. */
+                s2 += (s1 << 6) + (total << 2) - b - (c << 1) - 3 * d;
+                s1 += a + b + c + d;
+                ptr += 64;
+                left -= 64;
+            }
+            while (left)
+                s1 += *ptr++, s2 += s1, --left;
+            s1 %= 65521u;
+            s2 %= 65521u;
+            buf_len -= block;
+        }
+        return (s2 << 16) + s1;
+#else
         mz_uint32 i, s1 = (mz_uint32)(adler & 0xffff), s2 = (mz_uint32)(adler >> 16);
         size_t block_len = buf_len % 5552;
         if (!ptr)
@@ -63,6 +114,7 @@ extern "C"
             block_len = 5552;
         }
         return (s2 << 16) + s1;
+#endif
     }
 
 /* Karl Malbrain's compact CRC-32. See "A compact CCITT crc16 and crc32 C implementation that balances processor cache usage against speed": http://www.geocities.com/malbrain/ */

@@ -194,7 +194,7 @@ class StageTargetSourceContractTests(unittest.TestCase):
     def test_ui_loads_only_committed_routes_and_saves_only_edits(self) -> None:
         self.assertIn("mStreakEntry = entry;", self.menu)
         self.assertGreaterEqual(
-            self.menu.count("mTargetQf = StageTargets::get(mStreakEntry);"), 3
+            self.menu.count("mTargetQf = StageTargets::get(mStreakEntry);"), 2
         )
         self.assertEqual(
             self.menu.count("StageTargets::set(mStreakEntry, mTargetQf);"), 2

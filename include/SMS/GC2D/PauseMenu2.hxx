@@ -7,6 +7,7 @@ class J2DSetScreen;
 class TPauseMenu2 : public JDrama::TViewObj {
 public:
     u8 getNextState();
+    void setDrawEnd();
 
     enum State {
         MENU_APPEARING    = 0,

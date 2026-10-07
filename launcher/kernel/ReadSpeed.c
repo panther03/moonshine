@@ -37,10 +37,14 @@ static u32 CMDBaseBlock = UINT_MAX;
 static u32 CMDLastBlock = UINT_MAX;
 
 extern u32 TITLE_ID;
+u32 UseReadLimit = 1;
 
 void ReadSpeed_Init()
 {
-	if(ConfigGetConfig(NIN_CFG_REMLIMIT))
+	/* Honor the launch setting before the apploader's first reads too.
+	 * DoPatches later adds its ordinary per-title exceptions. */
+	UseReadLimit = ConfigGetConfig(NIN_CFG_REMLIMIT) ? 0 : 1;
+	if(UseReadLimit == 0)
 		dbgprintf("ReadSpeed:Disabled\r\n");
 	CMDStartTime = 0;
 	CMDLastFinish = 0;
@@ -56,7 +60,6 @@ void ReadSpeed_Init()
 	}*/
 }
 
-u32 UseReadLimit = 1;
 extern vu32 TRIGame;
 extern u32 RealDiscCMD;
 void ReadSpeed_Start()

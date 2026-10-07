@@ -17,6 +17,7 @@ class TasProjectTests(unittest.TestCase):
 #include "susamune/savestate.hxx"
 #include "susamune/practice_session.hxx"
 #include "susamune/state_storage.hxx"
+#include "susamune/state_compatibility.h"
 extern "C" void *memcpy(void*d,const void*s,size_t n){for(size_t i=0;i<n;++i)((volatile u8*)d)[i]=((const u8*)s)[i];return d;}
 extern "C" void *memset(void*d,u32 v,size_t n){for(size_t i=0;i<n;++i)((volatile u8*)d)[i]=(u8)v;return d;}
 struct SavedFile {PracticeSession::SavestateData data;SusamuneStateArchiveHeader header;};
@@ -32,12 +33,19 @@ static SavestateManager::SlotInfo memory[3];
 static PracticeSession::SavestateData stateData[3];
 static SavestateManager::TransferResult transfer;
 static StateStorage::Result response;
-static SusamuneTasManifest published;
+static SusamuneTasManifest published,projects[32];
+static u32 nextProjectId,beginCount;
+static bool failBegin,failCommit;
 static SusamuneStateCatalog catalogData;
 static bool transferReady,responseReady,tapeAttached,tapeRecord,tapePause,saveFails,compatible,canStart,readyCheckpoint;
 static u32 nextGeneration,exportCount,commitCount,importCount,loadCount,clearCount,failExport,liveFrames,liveKey[2],liveRevision,lastLoaded;
 static u32 ordinarySave=2,ordinaryLoad=1;
 static const char*runtimeStatus="fixture practice status";
+static bool exportContextValid(const SusamuneTasRequest*request){
+ if(!SusamuneTasRequestValid(request)||!request->projectId||request->projectId>=32)return false;
+ const auto&prior=projects[request->projectId];
+ return request->projectGeneration==prior.generation&&request->expectedProjectCrc==prior.checksum;
+}
 SavestateManager::SavestateManager(){}
 static SavestateManager manager;
 SavestateManager*gSavestateMgr=&manager;
@@ -57,10 +65,10 @@ bool SavestateManager::saveSlotExplicit(u32 slot,bool rng,bool omit){
 }
 bool SavestateManager::clearSlot(u32 slot,u32 gen){if(slot>=3||memory[slot].generation!=gen)return false;memory[slot].valid=false;memory[slot].generation=++nextGeneration;++clearCount;return true;}
 bool SavestateManager::exportSlotExplicit(u32 slot,u32 gen,const SusamuneTasRequest*request){
- if(!SusamuneTasRequestValid(request)||!memory[slot].valid||memory[slot].generation!=gen)return false;
+ if(!exportContextValid(request)||!memory[slot].valid||memory[slot].generation!=gen)return false;
  const u32 id=++nextFileId;++exportCount;transfer={};transfer.command=SUSAMUNE_STATE_CMD_EXPORT;transfer.id=id;transfer.slot=slot;transfer.generation=gen;
  transfer.status=exportCount==failExport?SUSAMUNE_STATE_IO_ERROR:SUSAMUNE_STATE_OK;
- transfer.header.gameId=0x474D5350;transfer.header.buildCrc=10;transfer.header.configId=20;transfer.header.sceneKey=slotScenes[slot];
+ transfer.header.gameId=0x474D5350;transfer.header.buildCrc=SUSAMUNE_STATE_COMPATIBILITY_ID;transfer.header.configId=20;transfer.header.sceneKey=slotScenes[slot];
  transfer.header.headerCrc=id*11;transfer.header.packedSize=memory[slot].packedBytes;
  fileData[id]={stateData[slot],transfer.header};transferReady=true;return true;
 }
@@ -123,7 +131,7 @@ namespace StateStorage {
 bool available(){return true;}bool busy(){return false;}
 bool startTapeExport(const SusamuneStateArchiveHeader&identity,const SusamuneTasTakeData&data,
                      const void*frames,const void*transitions,const SusamuneTasRequest&request){
- if(!SusamuneTasRequestValid(&request)||request.role!=SUSAMUNE_TAS_TAPE_ROLE||!SusamuneTasTakeValid(&data))return false;
+ if(!exportContextValid(&request)||request.role!=SUSAMUNE_TAS_TAPE_ROLE||!SusamuneTasTakeValid(&data))return false;
  const u32 id=++nextFileId;++tapeExportCount;auto&file=tapeData[id];file.data=data;file.header=identity;
  memcpy(file.frames,frames,data.frames*16);memcpy(file.transitions,transitions,data.transitionCount*16);
  auto&h=file.header;h.magic=SUSAMUNE_STATE_ARCHIVE_MAGIC;h.version=SUSAMUNE_STATE_ARCHIVE_VERSION;
@@ -144,22 +152,31 @@ bool tapePayload(const Result&result,SusamuneTasTakeData&data,const void*&frames
  data=tapeData[result.id].data;frames=tapeData[result.id].frames;transitions=tapeData[result.id].transitions;return true;
 }
 bool takeResult(Result&out){if(!responseReady||response.command>=SUSAMUNE_STATE_CMD_TAS_BEGIN)return false;out=response;responseReady=false;return true;}
-bool projectBegin(const char*){response={};response.command=SUSAMUNE_STATE_CMD_TAS_BEGIN;response.id=7;responseReady=true;return true;}
+bool projectBegin(const char*){++beginCount;if(failBegin)return false;
+ response={};response.command=SUSAMUNE_STATE_CMD_TAS_BEGIN;response.id=++nextProjectId;responseReady=true;return true;}
 bool projectRead(u32 id,u32 crc){response={};response.command=SUSAMUNE_STATE_CMD_TAS_READ;response.project=published;
  if(id!=published.projectId||crc!=published.checksum)response.status=SUSAMUNE_STATE_STALE;responseReady=true;return true;}
 bool projectCommit(const SusamuneTasManifest&value,u32 old){
- if(!SusamuneTasManifestValid(&value)||old!=published.checksum)return false;
- ++commitCount;published=value;response={};response.command=SUSAMUNE_STATE_CMD_TAS_COMMIT;responseReady=true;return true;
+ if(failCommit||!SusamuneTasManifestValid(&value)||value.projectId>=32)return false;
+ const auto&prior=projects[value.projectId];
+ if(old!=prior.checksum||value.generation!=prior.generation+1)return false;
+ if(prior.projectId&&(value.buildCrc!=prior.buildCrc||value.configId!=prior.configId||value.gameId!=prior.gameId))return false;
+ for(u32 i=0;i<3;i++)if(value.components[i].componentId){
+  const auto&h=fileData[value.components[i].componentId].header;
+  if(h.buildCrc!=value.buildCrc||h.configId!=value.configId||h.gameId!=value.gameId||h.headerCrc!=value.components[i].headerCrc)return false;
+ }
+ if(tapeData[value.tape.componentId].header.buildCrc!=value.buildCrc)return false;
+ ++commitCount;projects[value.projectId]=published=value;response={};response.command=SUSAMUNE_STATE_CMD_TAS_COMMIT;responseReady=true;return true;
 }
 bool projectRename(u32 id,u32 crc,const char*name){
  response={};response.command=SUSAMUNE_STATE_CMD_TAS_RENAME;response.id=id;
  if(id!=published.projectId||crc!=published.checksum)response.status=SUSAMUNE_STATE_STALE;
  else {++published.generation;memset(published.name,0,32);for(u32 i=0;name[i]&&i<31;++i)published.name[i]=name[i];
- published.checksum=SusamuneTasManifestCrc(&published);response.project=published;}
+ published.checksum=SusamuneTasManifestCrc(&published);projects[id]=published;response.project=published;}
  responseReady=true;return true;}
 bool projectDelete(u32 id,u32 crc){response={};response.command=SUSAMUNE_STATE_CMD_TAS_DELETE;response.id=id;
  if(id!=published.projectId||crc!=published.checksum)response.status=SUSAMUNE_STATE_STALE;
- else memset(&published,0,sizeof(published));responseReady=true;return true;}
+ else {memset(&projects[id],0,sizeof(projects[id]));memset(&published,0,sizeof(published));}responseReady=true;return true;}
 bool projectCatalog(u32){response={};response.command=SUSAMUNE_STATE_CMD_TAS_CATALOG;responseReady=true;return true;}
 bool takeProjectResult(Result&out){if(!responseReady||response.command<SUSAMUNE_STATE_CMD_TAS_BEGIN)return false;out=response;responseReady=false;return true;}
 bool catalogReady(){return true;}const SusamuneStateCatalog&catalog(){return catalogData;}
@@ -168,7 +185,8 @@ bool catalogReady(){return true;}const SusamuneStateCatalog&catalog(){return cat
 extern "C" __declspec(dllexport) void reset(){
  memset(memory,0,sizeof(memory));memset(stateData,0,sizeof(stateData));memset(fileData,0,sizeof(fileData));
  memset(tapeData,0,sizeof(tapeData));memset(liveFrameWords,0,sizeof(liveFrameWords));memset(liveTransitions,0,sizeof(liveTransitions));memset(slotScenes,0,sizeof(slotScenes));
- memset(&published,0,sizeof(published));memset(&catalogData,0,sizeof(catalogData));
+ memset(&published,0,sizeof(published));memset(projects,0,sizeof(projects));memset(&catalogData,0,sizeof(catalogData));
+ nextProjectId=6;beginCount=0;failBegin=failCommit=false;
  transferReady=responseReady=tapeAttached=tapeRecord=tapePause=saveFails=false;
  compatible=canStart=readyCheckpoint=recordedScene=true;nextGeneration=100;
  takePresent=tapePayloadFails=restoreCheckpointFails=worldLoadFails=false;worldLoadAttempts=continueCalls=0;
@@ -199,11 +217,30 @@ extern "C" __declspec(dllexport) void option(u32 code,u32 value){switch(code){ca
  case 17:tapeData[published.tape.componentId].data.originKey[1]=value;break;
  case 18:tapeData[published.tape.componentId].data.frames=value;break;
  case 19:worldLoadFails=value;break;case 20:recordedScene=value;break;
+ case 21:failBegin=value;break;case 22:failCommit=value;break;
  }}
 extern "C" __declspec(dllexport) u32 value(u32 code){switch(code){case 0:return TasProject::active();case 1:return TasProject::busy();case 2:return TasProject::replacementNeeded();case 3:return exportCount;case 4:return commitCount;case 5:return importCount;case 6:return loadCount;case 7:return clearCount;case 8:return published.generation;case 9:return published.componentCount;case 10:return published.currentRole;case 11:return TasProject::dirty();case 12:return liveFrames;case 13:return ordinarySave;case 14:return ordinaryLoad;case 15:return lastLoaded;case 16:return TasProject::named();case 17:return TasProject::checkpointOverwritePending();
  case 18:return tapeExportCount;case 19:return tapeImportCount;case 20:return saveCount;case 21:return livePosition;case 22:return tapeAttached;
  case 23:return takePresent;case 24:return published.tapeFrames;case 25:return published.checksum;case 26:return restoreTakeCount;
- case 27:return liveTransitionCount;case 28:return currentScene;case 29:return worldLoadAttempts;case 30:return continueCalls;default:return 0;}}
+ case 27:return liveTransitionCount;case 28:return currentScene;case 29:return worldLoadAttempts;case 30:return continueCalls;
+ case 31:return beginCount;case 32:return TasProject::sSaved.projectId;case 33:return published.projectId;case 34:return published.buildCrc;default:return 0;}}
+extern "C" __declspec(dllexport) void legacy(u32 build){
+ published.buildCrc=build;
+ for(u32 role=0;role<3;++role)if(published.components[role].componentId){
+  auto&h=fileData[published.components[role].componentId].header;h.buildCrc=build;
+  published.components[role].headerCrc=h.headerCrc=SusamuneStateHeaderCrc(&h);
+ }
+ auto&h=tapeData[published.tape.componentId].header;h.buildCrc=build;
+ published.tape.headerCrc=h.headerCrc=SusamuneStateHeaderCrc(&h);
+ published.checksum=SusamuneTasManifestCrc(&published);projects[published.projectId]=published;
+}
+extern "C" __declspec(dllexport) u32 projectHash(u32 id){
+ if(id>=32)return 0;const auto&p=projects[id];u32 hash=SusamuneStateCrcUpdate(0xffffffffu,&p,sizeof(p));
+ for(u32 role=0;role<3;++role)if(p.components[role].componentId)
+  hash=SusamuneStateCrcUpdate(hash,&fileData[p.components[role].componentId],sizeof(SavedFile));
+ if(p.tape.componentId)hash=SusamuneStateCrcUpdate(hash,&tapeData[p.tape.componentId],sizeof(SavedTape));
+ return ~hash;
+}
 extern "C" __declspec(dllexport) u32 frameWord(u32 frame){return liveFrameWords[frame*4];}
 extern "C" __declspec(dllexport) u32 loadable(u32 role){return TasProject::checkpoint(role).loadableHere;}
 extern "C" __declspec(dllexport) u32 present(u32 role){return TasProject::checkpoint(role).present;}
@@ -311,6 +348,82 @@ extern "C" __declspec(dllexport) const char*status(){return TasProject::status()
     def test_repeated_save_reuses_unchanged_beginning(self):
         self.new();self.lib.append();self.save();self.save()
         self.assertEqual(self.lib.value(3),1);self.assertEqual(self.lib.value(18),2);self.assertEqual(self.lib.value(8),2)
+
+    def open_legacy_project(self, build):
+        self.new()
+        self.lib.append()
+        self.assertTrue(self.lib.action(1, 1))
+        self.finish()
+        self.save()
+        self.save()  # A migrated project must not inherit this generation.
+        self.lib.legacy(build)
+        self.assertTrue(self.lib.action(3, 0))
+        self.finish()
+        self.assertTrue(self.lib.value(0))
+        self.assertEqual(self.lib.value(8), 2)
+
+    def test_legacy_open_edit_and_checkpoint_save_exports_every_component_to_new_project(self):
+        for build in (0xEA3C3DFD, 0x96DD313A):
+            with self.subTest(build=hex(build)):
+                self.lib.reset()
+                self.open_legacy_project(build)
+                old_id = self.lib.value(33)
+                old_hash = self.lib.projectHash(old_id)
+                self.lib.append()
+                self.assertTrue(self.lib.action(1, 2))
+                self.finish()
+                state_exports, tape_exports = self.lib.value(3), self.lib.value(18)
+                generations = [self.lib.generation(i) for i in range(3)]
+                self.assertTrue(self.lib.action(2, 0))
+                self.assertEqual(self.lib.value(32), old_id)
+                self.finish()
+                self.assertEqual(self.lib.projectHash(old_id), old_hash)
+                self.assertNotEqual(self.lib.value(33), old_id)
+                self.assertEqual(self.lib.value(32), self.lib.value(33))
+                self.assertEqual(self.lib.value(34), 0x4D530011)
+                self.assertEqual(self.lib.value(8), 1)
+                self.assertEqual(self.lib.value(9), 3)
+                self.assertEqual(self.lib.value(24), 2)
+                self.assertEqual(self.lib.value(3), state_exports + 3)
+                self.assertEqual(self.lib.value(18), tape_exports + 1)
+                self.assertEqual([self.lib.generation(i) for i in range(3)], generations)
+                self.assertFalse(self.lib.value(11))
+                # The next save uses ordinary stable-project reuse and generation 2.
+                new_id, begins, exports = self.lib.value(33), self.lib.value(31), self.lib.value(3)
+                self.save()
+                self.assertEqual((self.lib.value(33), self.lib.value(31), self.lib.value(3)),
+                                 (new_id, begins, exports))
+                self.assertEqual(self.lib.value(8), 2)
+
+    def test_legacy_save_failure_at_each_phase_keeps_original_project_and_can_retry(self):
+        for failure in ("begin", "beginning", "checkpoint", "tape", "commit"):
+            with self.subTest(failure=failure):
+                self.lib.reset()
+                self.open_legacy_project(0xEA3C3DFD)
+                self.lib.append()
+                old_id, old_hash = self.lib.value(33), self.lib.projectHash(self.lib.value(33))
+                commits = self.lib.value(4)
+                generations = [self.lib.generation(i) for i in range(3)]
+                if failure == "begin": self.lib.option(21, 1)
+                elif failure == "beginning": self.lib.option(1, self.lib.value(3) + 1)
+                elif failure == "checkpoint": self.lib.option(1, self.lib.value(3) + 2)
+                elif failure == "tape": self.lib.option(11, self.lib.value(18) + 1)
+                else: self.lib.option(22, 1)
+                self.lib.action(2, 0)
+                self.finish()
+                self.assertEqual((self.lib.value(32), self.lib.value(33)), (old_id, old_id))
+                self.assertEqual(self.lib.projectHash(old_id), old_hash)
+                self.assertEqual(self.lib.value(4), commits)
+                self.assertEqual(self.lib.value(8), 2)
+                self.assertEqual(self.lib.value(12), 2)
+                self.assertTrue(self.lib.value(11))
+                self.assertEqual([self.lib.generation(i) for i in range(3)], generations)
+                for option in (1, 11, 21, 22): self.lib.option(option, 0)
+                self.save()
+                self.assertNotEqual(self.lib.value(33), old_id)
+                self.assertEqual(self.lib.value(8), 1)
+                self.assertEqual(self.lib.projectHash(old_id), old_hash)
+
     def test_repacked_smaller_beginning_is_exported_to_keep_capacity(self):
         self.new();self.lib.append();self.save();self.lib.option(6,3000);self.save()
         self.assertEqual(self.lib.value(3),2)

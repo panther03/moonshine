@@ -32,7 +32,7 @@ def function(source: str, signature: str) -> str:
 
 
 class NestedMenuContracts(unittest.TestCase):
-    def test_records_is_a_root_and_reuses_the_runs_shortcut(self) -> None:
+    def test_records_is_a_root_and_runs_has_separate_practice_modes(self) -> None:
         menu = text("src/menu.cpp")
         constructor = menu[menu.index("Menu::Menu()") : menu.index("bool Menu::openGhostPBSave(")]
         release = re.sub(r"#if ENABLE_DEBUG_WARPS.*?#endif", "", constructor, flags=re.S)
@@ -44,7 +44,7 @@ class NestedMenuContracts(unittest.TestCase):
             else:
                 titles.append({"starred": "Quick", "records": "Records", "ghosts": "Ghosts"}[root.strip()])
         self.assertEqual(titles, ["Quick", "Practice", "Runs", "Records", "Ghosts", "Display", "System"])
-        self.assertIn("{ iling, stageLoader, records, pbSafety, timer }", constructor)
+        self.assertIn("{ iling, stageLoader, streaking, pbSafety, timer }", constructor)
         self.assertEqual(constructor.count("new (sRecordsBuf) RecordsTab()"), 1)
         capacity = int(re.search(r"kMaxTabs = (\d+)", text("include/susamune/menu.hxx")).group(1))
         self.assertLessEqual(len(roots) + 2, capacity, "Debug roots must fit the existing fixed menu storage")
@@ -338,9 +338,9 @@ class MovementStylePersistenceContracts(unittest.TestCase):
         self.assertIn("gCreationExtras.stageMovementInto(&cfg->movementStyle)", settings)
         self.assertIn("DCStoreRange((void *)&cfg->movementStyle", settings)
 
-    def test_dolphin_v5_migrates_to_v11(self) -> None:
+    def test_dolphin_v5_migrates_to_v12(self) -> None:
         emulator = text("src/emulator_persistence.cpp")
-        self.assertIn("constexpr u16 kRecordVersion = 11;", emulator)
+        self.assertIn("constexpr u16 kRecordVersion = 12;", emulator)
         self.assertIn("const bool v10 = !current && validV10(record);", emulator)
         self.assertIn("const bool v9 = !current && validV9(record);", emulator)
         self.assertIn("initILEpisodes(&sState->ilEpisodes);", emulator)

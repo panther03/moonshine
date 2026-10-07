@@ -7,7 +7,7 @@ import struct
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
-MAX_SIZE = 0x1B000
+MAX_SIZE = 0x19000
 MAGIC = 0x4D4A5549
 VERSION = 1
 TOKENS = dict(zip('A B X Y L R Z C AMP SLASH LEFT UP RIGHT DOWN SHINE'.split(),

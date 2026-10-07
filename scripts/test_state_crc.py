@@ -9,9 +9,11 @@ import unittest
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
+WORK_BYTES = 4096
 
 
 class StateCrcTests(unittest.TestCase):
+    big_endian = False
     @classmethod
     def setUpClass(cls):
         compiler = ROOT / "toolchain/clang++.exe"
@@ -31,9 +33,20 @@ __declspec(dllexport) unsigned original(unsigned crc,const void*p,unsigned n){re
 }
 ''', encoding="ascii")
         dll = work / "crc.dll"
+        implementation = ROOT / "src/state_crc.cpp"
+        if cls.big_endian:
+            # Run the PPC arithmetic branch on the host. Only native word
+            # loads need emulating; byte accesses, tables and CRC code stay
+            # exactly as written in production.
+            text = implementation.read_text().replace(
+                "#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__", "#if 1")
+            text = text.replace("words[0]", "__builtin_bswap32(words[0])")
+            text = text.replace("words[1]", "__builtin_bswap32(words[1])")
+            implementation = work / "crc_big.cpp"
+            implementation.write_text(text)
         subprocess.run([str(compiler), "--target=x86_64-pc-windows-msvc", "-shared", "-Oz",
             "-nostdlib", "-fno-builtin", "-fuse-ld=lld", "-Wl,/noentry", "-I", str(ROOT / "include"),
-            str(source), str(ROOT / "src/state_crc.cpp"), "-o", str(dll)], check=True)
+            str(source), str(implementation), "-o", str(dll)], check=True)
         cls.lib = C.CDLL(str(dll))
         from _ctypes import FreeLibrary
         cls.addClassCleanup(FreeLibrary, cls.lib._handle)
@@ -43,14 +56,14 @@ __declspec(dllexport) unsigned original(unsigned crc,const void*p,unsigned n){re
         cls.lib.update.restype = cls.lib.original.restype = C.c_uint
 
     def workspace(self):
-        storage = C.create_string_buffer(bytes([0xA7]) * (4096 + 64))
+        storage = C.create_string_buffer(bytes([0xA7]) * (WORK_BYTES + 64))
         pointer = (C.addressof(storage) + 31) & ~3
-        self.assertTrue(self.lib.init(pointer, 4096))
+        self.assertTrue(self.lib.init(pointer, WORK_BYTES))
         self.assertEqual(C.string_at(C.addressof(storage), pointer-C.addressof(storage)),
                          bytes([0xA7]) * (pointer-C.addressof(storage)))
-        end = pointer + 4096
-        self.assertEqual(C.string_at(end, C.addressof(storage) + 4160-end),
-                         bytes([0xA7]) * (C.addressof(storage) + 4160-end))
+        end = pointer + WORK_BYTES
+        self.assertEqual(C.string_at(end, C.addressof(storage) + WORK_BYTES + 64-end),
+                         bytes([0xA7]) * (C.addressof(storage) + WORK_BYTES + 64-end))
         return storage, pointer
 
     def test_standard_vectors_all_alignments_and_seed_semantics(self):
@@ -82,28 +95,34 @@ __declspec(dllexport) unsigned original(unsigned crc,const void*p,unsigned n){re
             self.assertEqual((~crc) & 0xFFFFFFFF, zlib.crc32(data))
 
     def test_init_rejects_small_misaligned_and_wrapping_workspaces_without_writes(self):
-        storage = C.create_string_buffer(bytes([0xA7]) * 4160)
+        storage = C.create_string_buffer(bytes([0xA7]) * (WORK_BYTES + 64))
         pointer = (C.addressof(storage) + 31) & ~3
         before = storage.raw
-        for address, size in ((None, 4096), (pointer, 4095), (pointer + 1, 4096),
-                              (pointer + 2, 4096), (pointer + 3, 4096),
-                              ((1 << (C.sizeof(C.c_void_p)*8))-4096, 4096)):
+        for address, size in ((None, WORK_BYTES), (pointer, WORK_BYTES - 1),
+                              (pointer + 1, WORK_BYTES), (pointer + 2, WORK_BYTES),
+                              (pointer + 3, WORK_BYTES),
+                              ((1 << (C.sizeof(C.c_void_p)*8))-WORK_BYTES, WORK_BYTES)):
             self.assertFalse(self.lib.init(address, size))
             self.assertEqual(storage.raw, before)
 
     def test_tables_can_be_regenerated_after_the_codec_overwrites_workspace(self):
         storage, workspace = self.workspace()
-        tables = C.string_at(workspace, 4096)
-        C.memset(workspace, 0x5B, 4096)
-        self.assertTrue(self.lib.init(workspace, 4096))
-        self.assertEqual(C.string_at(workspace, 4096), tables)
-        words = (C.c_uint * 1024).from_address(workspace)
+        tables = C.string_at(workspace, WORK_BYTES)
+        C.memset(workspace, 0x5B, WORK_BYTES)
+        self.assertTrue(self.lib.init(workspace, WORK_BYTES))
+        self.assertEqual(C.string_at(workspace, WORK_BYTES), tables)
+        words = (C.c_uint * (WORK_BYTES // 4)).from_address(workspace)
         for byte in range(256):
             value = byte
             for slice in range(4):
                 for _ in range(8):
                     value = (value >> 1) ^ (0xEDB88320 if value & 1 else 0)
-                self.assertEqual(words[slice*256 + byte], value)
+                expected = int.from_bytes(value.to_bytes(4, "little"), "big") if self.big_endian else value
+                self.assertEqual(words[slice*256 + byte], expected)
+
+
+class BigEndianStateCrcTests(StateCrcTests):
+    big_endian = True
 
 
 if __name__ == "__main__":

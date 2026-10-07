@@ -80,7 +80,7 @@ constexpr char kMenuText[] =
     "Word 2 text\0Word 2 style\0Word 2 visible\0"
     "Word 3 text\0Word 3 style\0Word 3 visible\0"
     "MOD MENU\0Menu background\0Achievement popup\0"
-    "System notifications\0IL PB popup\0Stage session counter";
+    "System notifications\0IL PB popup\0Stage session counter\0Streak failure banner";
 
 const u32 kPreviewRootTags[] = {
     '\0t_0', '\0c_0', '\0r_0', '\0d_0', '\0m_0', '\0s_0',
@@ -290,7 +290,13 @@ void drawCreationKeyboard(Menu *menu, const char *title, const char *text,
 bool updateCreationKeyboardText(TMarioGamePad *pad, char *text, u8 &length,
                                 u8 capacity, u8 &pageIndex, bool &uppercase,
                                 u8 &cursor) {
-    const u32 pressed = pad->mButtons.mRapidInput;
+    return updateCreationKeyboardButtons(pad->mButtons.mRapidInput, text, length,
+                                         capacity, pageIndex, uppercase, cursor);
+}
+
+bool updateCreationKeyboardButtons(u32 pressed, char *text, u8 &length,
+                                   u8 capacity, u8 &pageIndex, bool &uppercase,
+                                   u8 &cursor) {
     bool changed = false;
     const int count = pageIndex ? (int)sizeof(gCreationSymbols) - 1 : 32;
     if (pressed & TMarioGamePad::DPAD_LEFT)
@@ -391,7 +397,7 @@ const CreationStyle &CreationExtras::defaultPracticeStyle(unsigned display) {
     return styles[display];
 }
 
-void CreationExtras::resetDefaults() {
+__attribute__((section(".foxtrot.text"))) void CreationExtras::resetDefaults() {
     Creation::fillWhite(mColors, SUSAMUNE_CREATION_COLOR_COUNT);
     Creation::fillWhite(mDefaultColors, SUSAMUNE_CREATION_COLOR_COUNT);
     const u8 menuBg[] = {24, 28, 40};
@@ -424,6 +430,7 @@ void CreationExtras::resetDefaults() {
     mToastStyle = defaultToastStyle();
     mPbBannerStyle = defaultPbBannerStyle();
     mStageSessionStyle = defaultStageSessionStyle();
+    MoonshineFailureStyleInit(&mFailureBanner);
     mNativeTimerStyle = defaultNativeTimerStyle();
     mNativeTimerCustomMask = 0;
     memcpy(mHealthRgb, kHealthDefaults, sizeof(mHealthRgb));
@@ -585,10 +592,12 @@ void CreationExtras::stageInto(volatile SusamuneCreationCfg *dst) const {
 
 void CreationExtras::adoptWallkick(
     const volatile SusamuneWallkickStyleCfg *src) {
+    mFailureBanner.magic = 0;
     if (!src || src->magic != SUSAMUNE_WALLKICK_STYLE_MAGIC ||
         src->version == 0 || src->version > SUSAMUNE_WALLKICK_STYLE_VERSION)
         return;
     loadStyle(mWallkickStyle, &src->x);
+    memcpy(&mFailureBanner, (const void *)src->reserved1, 8);
     memcpy(mWallkickRgb, (const void *)src->rgb, sizeof(mWallkickRgb));
     if (src->version >= 2 &&
         src->nativeTimerModesMagic == SUSAMUNE_NATIVE_TIMER_MODES_MAGIC &&
@@ -626,7 +635,7 @@ void CreationExtras::stageWallkickInto(
     dst->nativeTimerModesMagic = SUSAMUNE_NATIVE_TIMER_MODES_MAGIC;
     dst->nativeTimerCustomMask[0] = (u8)(mNativeTimerCustomMask >> 8);
     dst->nativeTimerCustomMask[1] = (u8)mNativeTimerCustomMask;
-    memset((void *)dst->reserved1, 0, sizeof(dst->reserved1));
+    memcpy((void *)dst->reserved1, &mFailureBanner, 8);
 }
 
 void CreationExtras::adoptMovement(
@@ -653,10 +662,23 @@ void CreationExtras::stageMovementInto(
 
 void CreationExtras::adoptPracticeDisplays(
     const volatile SusamunePracticeDisplayStyleCfg *src) {
-    if (!src || src->magic != SUSAMUNE_PRACTICE_DISPLAY_STYLE_MAGIC ||
-        src->version != SUSAMUNE_PRACTICE_DISPLAY_STYLE_VERSION ||
-        src->count != SUSAMUNE_PRACTICE_DISPLAY_COUNT) return;
-    memcpy(mPracticeDisplays, (const void *)src->entries, sizeof(mPracticeDisplays));
+    const bool valid = src && src->magic == SUSAMUNE_PRACTICE_DISPLAY_STYLE_MAGIC &&
+        src->version == SUSAMUNE_PRACTICE_DISPLAY_STYLE_VERSION &&
+        src->count == SUSAMUNE_PRACTICE_DISPLAY_COUNT;
+    if (valid) {
+        memcpy(mPracticeDisplays, (const void *)src->entries, sizeof(mPracticeDisplays));
+        memcpy(reinterpret_cast<u8 *>(&mFailureBanner) + 8, (const void *)src->reserved, 12);
+    } else {
+        mFailureBanner.magic = 0;
+    }
+    if (!MoonshineFailureStyleValid(&mFailureBanner)) {
+        MoonshineFailureStyleInit(&mFailureBanner);
+        mFailureBanner.x = gSettings.get(SETTING_STREAK_FAILURE_X) * 20 + 12;
+        mFailureBanner.y = gSettings.get(SETTING_STREAK_FAILURE_Y) * 20 + 7;
+        mFailureBanner.scale = 50 + gSettings.get(SETTING_STREAK_FAILURE_SIZE) * 10;
+    }
+    clampStyle(*reinterpret_cast<CreationStyle *>(&mFailureBanner.x));
+    if (!valid) return;
     static const SusamunePracticeDisplayStyle inherited = {
         300, 106, 90, 255, 0, 0, 0, 185, 100, 5,
         {{255, 255, 255}, {255, 255, 255}, {255, 255, 255}, {255, 255, 255},
@@ -678,6 +700,7 @@ void CreationExtras::stagePracticeDisplaysInto(
     dst->version = SUSAMUNE_PRACTICE_DISPLAY_STYLE_VERSION;
     dst->count = SUSAMUNE_PRACTICE_DISPLAY_COUNT;
     memcpy((void *)dst->entries, mPracticeDisplays, sizeof(mPracticeDisplays));
+    memcpy((void *)dst->reserved, reinterpret_cast<const u8 *>(&mFailureBanner) + 8, 12);
 }
 
 void CreationExtras::adoptNativeTimer(
@@ -1106,7 +1129,7 @@ void CreationExtras::restoreHudDefaults() {
         mHudPictures[HUD_PANE_COUNT - 1]->mIsVisible = true;
 }
 
-void CreationExtras::beginOverlayEditor(EditMode mode, unsigned display) {
+__attribute__((section(".foxtrot.text"))) void CreationExtras::beginOverlayEditor(EditMode mode, unsigned display) {
     if (editing() || display >= SUSAMUNE_PRACTICE_DISPLAY_COUNT) return;
     struct Target { u16 style, rgb; u8 colors; };
 #define OVERLAY_TARGET(style, rgb, count) {__builtin_offsetof(CreationExtras, style), __builtin_offsetof(CreationExtras, rgb), count}
@@ -1128,7 +1151,12 @@ void CreationExtras::beginOverlayEditor(EditMode mode, unsigned display) {
     CreationStyle *style;
     u8 (*rgb)[3];
     const char *names = nullptr;
-    if (mode == EDIT_PRACTICE_DISPLAY) {
+    if (mode == EDIT_FAILURE_BANNER) {
+        style = reinterpret_cast<CreationStyle *>(&mFailureBanner.x);
+        rgb = mFailureBanner.rgb;
+        mEditCount = 1;
+        mEditTitle = "Streak failure banner";
+    } else if (mode == EDIT_PRACTICE_DISPLAY) {
         SusamunePracticeDisplayStyle &cfg = mPracticeDisplays[display];
         style = reinterpret_cast<CreationStyle *>(&cfg.x);
         rgb = cfg.rgb;
@@ -1163,7 +1191,33 @@ void CreationExtras::beginPracticeDisplayEditor(unsigned display) { beginOverlay
 void CreationExtras::beginAchievementBannerEditor() { beginOverlayEditor(EDIT_ACHIEVEMENT_BANNER); }
 void CreationExtras::beginToastEditor() { beginOverlayEditor(EDIT_TOAST); }
 void CreationExtras::beginPbBannerEditor() { beginOverlayEditor(EDIT_PB_BANNER); }
+void CreationExtras::beginFailureBannerEditor() { beginOverlayEditor(EDIT_FAILURE_BANNER); }
 void CreationExtras::beginStageSessionEditor() { beginOverlayEditor(EDIT_STAGE_SESSION); }
+
+#pragma clang section text=".foxtrot.text"
+void CreationExtras::drawFailureBanner(Menu *menu, const char *name, const char *status) const {
+    const CreationStyle &style = *reinterpret_cast<const CreationStyle *>(&mFailureBanner.x);
+    int titleSize = 15 * style.scale / 100;
+    int statusSize = 13 * style.scale / 100;
+    const int pad = style.padding == 0xff ? 0 : style.padding;
+    while (titleSize > 8 && Creation::textWidth(name, titleSize) > 616 - pad * 2) --titleSize;
+    while (statusSize > 8 && Creation::textWidth(status, statusSize) > 616 - pad * 2) --statusSize;
+    const int titleWidth = Creation::textWidth(name, titleSize);
+    const int statusWidth = Creation::textWidth(status, statusSize);
+    const int width = titleWidth > statusWidth ? titleWidth : statusWidth;
+    const int gap = 6;
+    const int height = titleSize + gap + statusSize;
+    const int x = clampi(style.x, pad + 4, 636 - pad - width);
+    const int y = clampi(style.y, pad + 4, 440 - pad - height);
+    if (style.padding != 0xff)
+        menu->fillBox(x - pad, y - pad, width + pad * 2, height + pad * 2,
+                      Color(style.bgR, style.bgG, style.bgB, style.bgA));
+    Creation::drawTextLine(menu, style, mFailureBanner.rgb, 1, name,
+                           x, y, titleSize, 0, false);
+    Creation::drawTextLine(menu, style, mFailureBanner.rgb, 1, status,
+                           x, y + titleSize + gap, statusSize, 0, false);
+}
+#pragma clang section text=""
 
 void CreationExtras::drawSavestateFeedback(Menu *menu,
                                            const char *message) const {
@@ -1297,6 +1351,8 @@ void CreationExtras::adjustMenuRow(int row, int direction) {
         beginPbBannerEditor();
     } else if (row == 23) {
         beginStageSessionEditor();
+    } else if (row == 24) {
+        beginFailureBannerEditor();
     }
 }
 
@@ -1347,7 +1403,7 @@ void CreationExtras::updateEditor(TMarioGamePad *pad) {
     }
     static const u8 kOverlayDefaults[1][3] = {{255, 255, 255}};
     const bool overlayStyle = (mEditMode >= EDIT_RECENT_ILS && mEditMode <= EDIT_STAGE_SESSION) ||
-                              mEditMode == EDIT_PRACTICE_DISPLAY;
+                              mEditMode == EDIT_PRACTICE_DISPLAY || mEditMode == EDIT_FAILURE_BANNER;
     const u8 (*defaults)[3] = mEditMode == EDIT_WORD_STYLE
                                   ? mDefaultColors
         : overlayStyle ? kOverlayDefaults : mDefaultColors + mEditFirst;
@@ -1363,6 +1419,7 @@ void CreationExtras::updateEditor(TMarioGamePad *pad) {
         : mEditMode == EDIT_TOAST ? defaultToastStyle()
         : mEditMode == EDIT_PB_BANNER ? defaultPbBannerStyle()
         : mEditMode == EDIT_STAGE_SESSION ? defaultStageSessionStyle()
+        : mEditMode == EDIT_FAILURE_BANNER ? CreationStyle{162, 357, 100, 255, 8, 12, 20, 210, 100, 10}
                                           : mColorStyle;
     const u8 result = mEditor.update(
         pad, defaultStyle, defaults,
@@ -1459,12 +1516,17 @@ void CreationExtras::drawKeyboard(Menu *menu) const {
     }
 }
 
-void CreationExtras::drawEditor(Menu *menu) const {
+__attribute__((section(".foxtrot.text"))) void CreationExtras::drawEditor(Menu *menu) const {
     if (mKeyboard) {
         drawKeyboard(menu);
         return;
     }
     if (!mEditor.editing()) return;
+    if (mEditMode == EDIT_FAILURE_BANNER) {
+        drawFailureBanner(menu, "Noki 6 Full Reds", "Target missed - streak 0" SUSAMUNE_GLYPH_SLASH "3");
+        mEditor.draw(menu, mEditTitle, "Target missed - streak 0" SUSAMUNE_GLYPH_SLASH "3");
+        return;
+    }
     if (mEditMode == EDIT_WORD_STYLE) {
         const int word = mEditWord;
         const u16 selected = mEditor.target() ? mEditor.target() - 1 : 0xffff;

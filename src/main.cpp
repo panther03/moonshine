@@ -309,6 +309,17 @@ extern "C" void onSetup(TMarDirector* director) {
 
 extern "C" s32 onUpdate(JDrama::TDirector* director) {
     CrashReport::observeContext(gpApplication.mContext);
+    // Retail soft reset returns through APP_STATE_DONE (4), also used by
+    // Intro Skip to construct file select. Movies and level/death reloads
+    // use other contexts and must retain the live practice session.
+    // Cancel on entry only: the file-select menu can start a new session.
+    static bool wasResetContext = false;
+    const bool resetContext = gpApplication.mContext == TApplication::CONTEXT_GAME_INTRO;
+    if (resetContext && !wasResetContext &&
+        StageLoader::active()) {
+        StageLoader::cancel();
+    }
+    wasResetContext = resetContext;
     static bool recordsStageContext = false;
     TMarDirector *const stageDirector = RetailInput::stageDirector();
     const bool stageContext = stageDirector != nullptr;
@@ -457,9 +468,14 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     // one whose own branch does nothing while the fader is up. Any app state it
     // did produce would be a state change we never asked for, so drop it.
     const bool freeze = stageDirector && stageDirector->_260 &&
-                        stageDirector->mCurState == TMarDirector::STATE_NORMAL &&
-                        (menuOwnsRetailPad || WarpWheel::shown() ||
-                         sessionModalBeforeDirect || PracticeSession::freezeRequested() || stateDiskBusy);
+                        ((stageDirector->mCurState == TMarDirector::STATE_NORMAL &&
+                          (menuOwnsRetailPad || WarpWheel::shown() ||
+                           sessionModalBeforeDirect || PracticeSession::freezeRequested() || stateDiskBusy)) ||
+                         (stateDiskBusy && SavestateManager::saveDialogOpen()));
+    // A direct SD load may start from a save box. Keep that box from advancing
+    // into the next area while its state is read, then return to its exact
+    // state if the read fails. The CARD worker remains live throughout.
+    const u8 heldDirectorState = stageDirector ? stageDirector->mCurState : 0;
     const bool marioActive = gpMarDirector &&
                              gpMarDirector->mCurState == TMarDirector::STATE_NORMAL &&
                              !freeze;
@@ -485,7 +501,7 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     if (suppressPad && retailPad)
         restoreRetailPad(retailPad, retailInput);
     if (freeze) {
-        gpMarDirector->mCurState = TMarDirector::STATE_NORMAL;
+        gpMarDirector->mCurState = heldDirectorState;
         state = 0;
     }
     PracticeSession::afterDirect(state, !freeze && !menuOwnsRetailPad && !stateDiskBusy);
@@ -536,13 +552,17 @@ extern "C" s32 onUpdate(JDrama::TDirector* director) {
     // Runs every frame like the gecko handler; no-ops when nothing changed.
     featuresApply();
 
+    // State shortcuts accept held gameplay buttons. Keep the entire opening,
+    // editing and dismissal frame owned by modals, and let a paused Step win.
+    // Dispatch before ordinary action binds so a state shortcut can silence
+    // a larger overlapping combo without consuming the held Mario buttons.
+    if (gSavestateMgr && !observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy &&
+        !practiceModal && !practiceStepConsumed) {
+        gSavestateMgr->updateHook();
+    }
     actionsApply(!observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy &&
                  !PracticeSession::ownsGameplayInput());
     gCreationExtras.update();
-
-    if (gSavestateMgr && !observerFrame && !creationEditing && !sessionOwnsInput && !stateDiskBusy) {
-        gSavestateMgr->updateHook();
-    }
     const bool allowExistingMenuToClose =
         StageLoader::resultOwnsInput() && !StageLoader::modal() &&
         menuOpenBeforeDirect;
@@ -616,7 +636,5 @@ extern "C" void afterDraw() {
         if (!sessionModal &&
             (!gSettings.getBool(SETTING_DISABLE_WARPS) || WarpWheel::shown()))
             WarpWheel::draw();
-        if (gMenu)
-            gMenu->drawInvalidIlWarning();
     }
 }

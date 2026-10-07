@@ -40,6 +40,10 @@ static_assert(SUSAMUNE_STATE_LIVE_PROFILE_SIZE==5920u,"exact profile size");
 static_assert(SUSAMUNE_CONSOLE_STATE_METADATA_PPC_BASE+SUSAMUNE_STATE_LIVE_PROFILE_OFFSET==0x91C18F00u,"console profile address");
 static_assert(SUSAMUNE_DOLPHIN_STATE_METADATA_PPC_BASE+SUSAMUNE_STATE_LIVE_PROFILE_OFFSET==0x712D9F00u,"emulator profile address");
 static_assert(SUSAMUNE_STATE_METADATA_OFFSET==SUSAMUNE_GHOST_INPUT_MAX_COUNT*sizeof(SusamuneGhostInputSample),"full inputs preserved");
+static_assert(SUSAMUNE_GHOST_V6_INPUT_MAX_COUNT*24u==SUSAMUNE_STATE_METADATA_OFFSET,"V6 payload uses the same bound");
+static_assert(SUSAMUNE_PRESENTATION_PPC_BASE==(IS_EMULATOR ? 0x713B3000u : 0x91CF2000u),"physical playback tail remains distinct from metadata");
+static_assert(SUSAMUNE_HSL_CACHE_PPC_BASE+257u*6u<=SUSAMUNE_GHOST_WATER_PPC_BASE,"display scratch slices cannot overlap");
+static_assert(SUSAMUNE_GHOST_WATER_PPC_BASE+SUSAMUNE_GHOST_WATER_SIZE<=SUSAMUNE_PRESENTATION_PPC_BASE+SUSAMUNE_PRESENTATION_SIZE,"display scratch cannot reach file transfers");
 static SusamuneCfg testCfg;
 static SusamuneGhostStorageMailbox testMailbox;
 alignas(32) static u8 memory[SUSAMUNE_STATE_METADATA_RUNTIME_SIZE+64];
@@ -171,9 +175,9 @@ __declspec(dllexport) void changeMailbox(){testCfg.magic=0;testMailbox.response.
         self.assertIn('target >= 0x81800000u',regions)
         ghost=ROOT/'src/ghost.cpp'
         decode=function_source(ghost,'bool decodeSavedPrefix(')
-        self.assertIn('track.inputCount > SUSAMUNE_GHOST_INPUT_MAX_COUNT',decode)
+        self.assertIn('track.inputCount > SusamuneGhostInputLimit(track.formatVersion)',decode)
         restore=function_source(ghost,'bool savestateRestoreSpans(')
-        self.assertIn('saved.track.inputCount * static_cast<u32>(sizeof(SusamuneGhostInputSample))',restore)
+        self.assertIn('saved.track.inputCount * SusamuneGhostInputStride(saved.track.formatVersion)',restore)
 
 
 if __name__=='__main__':unittest.main()
