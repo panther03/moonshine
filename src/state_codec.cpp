@@ -348,13 +348,15 @@ Status quickPass(void *workspace, const ReadSpan *source, unsigned int sourceCou
                 return CORRUPT_STREAM;
             bytes = direct ? direct : work->raw;
         }
-        adler = mz_adler32(adler, bytes, raw);
+        // Repacking validates the same complete raw Adler in the destination
+        // encoder. Avoid hashing each decoded Quick block twice on that path.
+        if (!emit) adler = mz_adler32(adler, bytes, raw);
         if (emit && !emit(emitContext, bytes, raw)) return CODEC_ERROR;
         if (output && !direct && !sink.put(bytes, raw)) return CODEC_ERROR;
         consumed += packed;
         decoded += raw;
     }
-    return consumed == compressedBytes && adler == expectedAdler ? SUCCESS : CORRUPT_STREAM;
+    return consumed == compressedBytes && (emit || adler == expectedAdler) ? SUCCESS : CORRUPT_STREAM;
 }
 
 Status inflatePass(void *workspace, const ReadSpan *source,
@@ -485,9 +487,12 @@ Result repack(void *workspace, unsigned int workspaceBytes,
     result.status = inflatePass(workspace, source, sourceCount, packedBytes, NULL, 0,
                                 expectedRaw, expectedAdler, NULL, NULL, NULL, deflateBytes, state);
     if (result.status != SUCCESS) return result;
-    if (tdefl_compress_buffer(state, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE ||
-        tdefl_get_adler32(state) != expectedAdler) {
+    if (tdefl_compress_buffer(state, NULL, 0, TDEFL_FINISH) != TDEFL_STATUS_DONE) {
         result.status = CODEC_ERROR;
+        return result;
+    }
+    if (tdefl_get_adler32(state) != expectedAdler) {
+        result.status = CORRUPT_STREAM;
         return result;
     }
     result.compressedBytes = sink.written;
