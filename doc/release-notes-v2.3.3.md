@@ -1,61 +1,54 @@
 # Moonshine V2.3.3 Frame By Frame
 
-## Ghosts with FLUDD
+FLUDD ghosts, a regular Mario ghost appearance, smoother streak practice and faster savestates. Ordinary QFT timing is unchanged.
 
-- Fixed the ghost library staying on **Not scanned** after saving a new ghost. Existing saved files do not need replacing.
-- Faster ghost-list loading and page changes: file headers are read together, and nearby pages reuse the checked list. Refresh still reads the SD again.
-- New ghosts record the selected nozzle, spray direction and when water actually fires. Ghosts show FLUDD and visual spray, with droplets and ground splashes that cannot affect gameplay.
-- Corrected FLUDD's attachment to the ghost's chest and replaced the diamond-shaped water with Sunshine's own water textures. Individual droplet paths and splashes are still visual approximations; they do not reproduce every original particle or collision.
-- Restored FLUDD's closed tank and resting pump shape. Spray is larger and uses separate water and highlight passes, and ghosts now cast ground shadows.
-- Fixed slow, undersized ghost spray: water now uses retail quarter-frame motion, nozzle sizes, stretched droplets and both hover outlets. Floor splashes remain visual approximations, without persistent puddles or gameplay effects.
-- Corrected ghost lighting selection and Mario's missing native lighting stages, including the dark band over its cap and body.
-- Ghosts now animate their upper body and FLUDD while using a nozzle. Pump movement is reconstructed from the recorded timeline; older files without FLUDD data keep their previous behavior.
-- Watching one ghost can activate platforms that start when Mario stands still on them. Fast recorded landings now also activate the final Sirena 4 secret platform. Racing remains visual only; Watch 2 does not simulate two separate riders.
-- Single Ghost Watch also recognizes ledge-hanging animations for platform contact; this still needs a suitable recorded ledge-grab check.
-- Added **Mario** as a ghost appearance alongside Shadow Mario and Piantissimo, using the existing model memory.
-- New recordings last up to **10 minutes**. Existing ghosts remain readable, including older recordings over 10 minutes. Older files keep their recorded movement and inputs; missing FLUDD data is not guessed.
+## Choose your download
 
-## Streaks and routes
+| Download | Supported games | Moonshine menu language |
+| --- | --- | --- |
+| **ENGLISH-MENUS Launcher** | US, PAL and JP | English throughout |
+| **JAPANESE-MENUS Launcher** | US, PAL and JP | Japanese launcher; Japanese in-game menus on JP, English on US/PAL |
+| **ENGLISH-MENUS Dolphin** | US, PAL and JP | English throughout |
+| **JAPANESE-MENUS Dolphin** | JP only | Japanese |
 
-- **Stageloader** and **Streaking** now have separate entries under Runs.
-- RNG controls no longer disqualify streaks. Petey and King Boo controls also allow ordinary PBs and no longer turn the HUD red. Other RNG controls retain their individual PB restrictions.
-- Savestates work during streak practice. Loading a state lets you practise the attempt without adding to, or breaking, the streak; restart normally to resume counting clean attempts.
-- Added **Gelato Enter (GE)** under Plaza movement: start at the Noki Bay exit and finish when entering Gelato Beach. Choose the Plaza state using its State selector, including the Yoshi Plaza introduction. Fast Any% keeps its own route.
-- Warps, level selection and RAM/SD state loads are available while the save box is open. An actual memory-card write still has to finish first.
-- Fixed IL launches remaining stuck in native pause/save screens. Save/load shortcuts also accept other held gameplay buttons, including A+B during frame advance.
-- Gelato Enter shows its chosen Plaza state by name, such as **Peaceful** or **Yoshi unlock**, instead of an ambiguous episode number.
-- Rejected streak finishes now explain the reason, such as intro skip, frame advance or restarting inside a full-level route. The reported Full Reds streak misses have not been reproduced yet; these messages should help identify the cause.
-- Fixed manual death restarts waiting for the death animation during streaks.
-- Console soft reset ends the active streak or stageloader session.
+The Launcher ZIP is for the Homebrew Channel and works with your own disc or game image. Dolphin ZIPs contain BPS patches for your own clean ISO. Sunshine's own language is unchanged. Some Japanese status messages and the built-in Guide body remain English.
+
+## Ghosts
+
+- New recordings show **FLUDD**, nozzle changes, upper-body animation, spray, droplets, floor splashes and ground shadows. Water is a visual approximation and cannot affect gameplay.
+- Added **Mario** alongside Shadow Mario and Piantissimo. Corrected ghost lighting, FLUDD attachment and resting shapes, spray speed and hover outlets.
+- **Watch one ghost** now activates standing platforms, including the final Sirena 4 secret platform. Racing remains visual only; Watch 2 does not simulate two separate riders.
+- Fixed the ghost library staying on **Not scanned** after a save, and made list loading and page changes faster.
+- New ghosts record up to **10 minutes**. Older ghosts remain readable, including longer recordings; files without FLUDD data keep their previous behavior.
+
+## Streaks and practice
+
+- **Stageloader** and **Streaking** have separate entries under Runs. The duplicate Records shortcut is removed.
+- RNG controls now allow streaks. Petey and King Boo controls also allow ordinary PBs; other RNG controls keep their individual PB restrictions.
+- Loading a savestate during a streak lets you practise without adding to or breaking the streak. Restart normally to resume counting clean attempts.
+- Added **Gelato Enter (GE)** under Plaza movement, from the Noki Bay exit to Gelato Beach. Its selector uses Plaza-state names such as **Peaceful** and **Yoshi unlock**.
+- Fixed IL launches from native pause/save screens. Warps and RAM/SD state loads work while the save box is open, after any active memory-card write finishes.
+- Save/load shortcuts accept other held gameplay buttons, including A+B during frame advance, without repeating while held.
+- Fixed manual streak death restarts waiting for the death animation. Console soft reset ends the active streak or stageloader session.
+- Rejected streak finishes now explain the reason. Reports of missed **Sandbird/Noki 6 Full Reds** streak finishes remain unconfirmed; please include the displayed reason and practice settings if one fails.
+
+## Savestates and loading
+
+- Faster state checks and less copying reduce savestate work. Saving a third state avoids repeated compression/checksum work while retaining all existing slots and integrity checks.
+- In user Wii testing, Plaza's third save fell from **6.674 to 1.435 seconds** during this update's development. The final change saved a further reported **1.6 seconds** on third saves in both **Pinna 3 and Bianco 5**. Results depend on the scene and occupied slots.
+- Fixed Mario and FLUDD disappearing for the first restored frame after loading a state.
+- More efficient disc/ISO reads and caching reduce storage work. User Wii testing found shorter Sirena 4 resets and transitions; gains vary by setup.
+- The launcher caches ghost model assets in **Moonshine data/cache**, avoiding repeat extraction on later launches, including after power-off.
+- Fixed settings files above 32 KB being rejected; launcher and game now share a 64 KB limit.
 
 ## Displays and menus
 
-- Freecam Hide all HUD also hides the coin-counter sparkle pass while keeping its animation running.
-- Fixed PAL Fast Text showing the missing-message error; its short text is `!!!`.
-
-- Position loads mark the attempt **TAS**. If QFT is hidden, the TAS label now sits farther inside the bottom-left corner so it stays visible.
-- Fixed the overlapping QFT text beneath a level split.
-- The failure banner uses the usual Creation editor for position, size, colour and background. Visibility and duration remain separate controls.
-- **Timer and splits > Cosmetics** gives quick access to Sunshine timer and QFT appearance.
-- Removed the duplicate Records entry inside Runs; use the Records tab.
-- Savestates has an error-message toggle. System messages can also be disabled separately from PB and achievement popups.
-- Fixed Visible goop's appearance after loading a state made with a different setting. The code review found no change to Sirena 6's gameplay goop when the option is Off.
-
-## Loading and memory
-
-- Fixed the launcher rejecting `moonshine.ini` above 32 KB. Launcher and game now share a 64 KB limit and allocate only the current file’s size while preserving other regions’ settings.
-- Combined adjacent, verified ISO clusters into reads of up to 64 KB. A captured PAL load sequence makes 31% fewer device requests with identical data; this is not a measured Wii loading-time improvement.
-- Sector-aligned cache fills and reuse of cached prefixes reduce that sequence further, from 2,210 to 1,725 device requests. User Wii testing of Sirena 4 full measured shorter resets and transitions; the complete-build results are recorded in the feedback 5 notes.
-- ISO cache destinations stay aligned for direct device reads, avoiding unnecessary temporary-buffer copying.
-- Reduced savestate load copying and repeated compression work when saving a third state. All slots are retained. User Wii testing in Plaza measured a 1.435-second third save, down from 6.674 seconds.
-- Faster savestate checksum calculations preserve the same integrity checks and file compatibility. The final Dolphin Quick-load routine measured about 0.228 seconds versus 0.254 seconds before; this is not the complete visible freeze on Wii.
-
-- Read-speed unlocking now applies to the early boot reads too. The disc cache retains unaffected data when it wraps instead of discarding everything; console loading-time gains still need measurement.
-- The launcher caches checked ghost assets in **Moonshine data/cache**. After the first successful extraction, later launches, including after power-off, avoid decoding the same two level archives again. This targets the wait after Launch Game; it does not establish faster level loads or resets.
-- Removed unused compression paths without changing savestate output or reducing the space available for states.
+- The failure banner now uses the **Creation editor** for position, size, colour and background.
+- **Timer and splits > Cosmetics** provides quick access to both timer appearances. Fixed overlapping QFT text beneath a level split.
+- Position loads mark the attempt **TAS**, with a visible bottom-left label when QFT is hidden.
+- Savestate errors and system messages have separate visibility controls from PB and achievement popups.
+- Fixed PAL Fast Text's missing-message error, freecam Hide all HUD leaving coin sparkles visible, and Visible goop's appearance after state loads.
 
 ## Updating
 
-Use the launcher and mod files from the same ZIP. Keep your settings, layouts, records, ghosts and saved states. Public V2.3.1/V2.3.2 state compatibility remains, subject to the existing region, episode and state checks.
-
-The **English-Menus** launcher supports **US, PAL and JP** games. **Japanese-Menus** is the separate Japanese-language download; its in-game translation applies to JP Sunshine.
+Use the launcher and mod files from the same ZIP. Keep your settings, layouts, records, ghosts, saved states and TAS projects. **Public V2.3.1/V2.3.2 states and TAS projects remain compatible**, subject to the existing region, episode and state checks. Older development builds still require their matching release. Standalone Dolphin keeps its three RAM state slots; SD file storage requires the launcher.
